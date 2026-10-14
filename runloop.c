@@ -7994,6 +7994,11 @@ static enum runloop_state_enum runloop_check_state(
             if (rarch_is_initialized && !core_type_is_dummy && core_is_running)
                retroarch_menu_running_finished(false);
          }
+#ifdef HAVE_OVERLAY
+         /* Back finishes the overlay layout editor instead */
+         else if (input_overlay_edit_active())
+            input_overlay_edit_end();
+#endif
          else
             retroarch_menu_running();
       }

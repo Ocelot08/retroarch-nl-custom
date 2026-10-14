@@ -50,6 +50,10 @@
 #endif
 #include "common/input_device_pins.h"
 #ifdef HAVE_OVERLAY
+#include <file/config_file.h>
+#include <file/file_path.h>
+#include <streams/file_stream.h>
+#include "../file_path_special.h"
 #include "../led/led_defines.h"
 #endif
 #include "../gfx/gfx_instrument.h"
@@ -6064,7 +6068,9 @@ static void input_overlay_scale(struct overlay *ol,
       float adj_center_y;
 
       /* Apply 'x separation' factor */
-      if (desc->x < (0.5f - 0.0001f))
+      if (desc->flags & OVERLAY_DESC_LAYOUT_PLACED)
+         x_shift_offset = 0.0f;
+      else if (desc->x < (0.5f - 0.0001f))
          x_shift_offset = layout->x_separation * -1.0f;
       else if (desc->x > (0.5f + 0.0001f))
          x_shift_offset = layout->x_separation;
@@ -6072,7 +6078,9 @@ static void input_overlay_scale(struct overlay *ol,
       desc->x_shift     = desc->x + x_shift_offset;
 
       /* Apply 'y separation' factor */
-      if (desc->y < (0.5f - 0.0001f))
+      if (desc->flags & OVERLAY_DESC_LAYOUT_PLACED)
+         y_shift_offset = 0.0f;
+      else if (desc->y < (0.5f - 0.0001f))
          y_shift_offset = layout->y_separation * -1.0f;
       else if (desc->y > (0.5f + 0.0001f))
          y_shift_offset = layout->y_separation;
@@ -6461,10 +6469,14 @@ void input_overlay_free_overlay(struct overlay *overlay)
  *
  * Frees overlay handle.
  **/
+static void input_overlay_edit_detach(input_overlay_t *ol);
+
 static void input_overlay_free(input_overlay_t *ol)
 {
    if (!ol)
       return;
+
+   input_overlay_edit_detach(ol);
 
    /* The driver's page refers to the pack's textures: it lets go of
     * them first, before they are unloaded - under threaded video a
@@ -6961,6 +6973,483 @@ static void input_overlay_update_pointer_coords(
          BIT256_SET((state)->buttons, down); \
    } while (0)
 
+/* Layout editor. A touch grabs the descs under it, together with every
+ * desc joined to them by overlapping (a D-pad is a dozen of them), and
+ * drags them; the same descs on the other pages of the same shape move
+ * along. Positions are saved to the overlay's layout file
+ * (input_overlay_layout_path). */
+typedef struct
+{
+   unsigned page;
+   unsigned desc;
+   float x;
+   float y;
+} input_overlay_edit_item_t;
+
+enum input_overlay_edit_flags
+{
+   OVERLAY_EDIT_ACTIVE   = (1 << 0),
+   /* The editor paused the core, and resumes it */
+   OVERLAY_EDIT_PAUSED   = (1 << 1),
+   /* A finger is down, whether or not it grabbed anything */
+   OVERLAY_EDIT_HELD     = (1 << 2),
+   OVERLAY_EDIT_DRAGGING = (1 << 3),
+   OVERLAY_EDIT_MOVED    = (1 << 4),
+   /* Moves not yet saved */
+   OVERLAY_EDIT_CHANGED  = (1 << 5),
+   /* The grabbed group holds menu_toggle: a tap on it finishes */
+   OVERLAY_EDIT_TAP_DONE = (1 << 6),
+   /* The grabbed group holds overlay_next: a tap on it turns the page,
+    * so that every page can be edited */
+   OVERLAY_EDIT_TAP_NEXT = (1 << 7)
+};
+
+static struct
+{
+   input_overlay_edit_item_t *items;
+   const input_overlay_t *ol;
+   size_t count;
+   size_t cap;
+   float start_x;
+   float start_y;
+   unsigned page;
+   unsigned next_index;
+   uint8_t flags;
+} input_overlay_edit;
+
+void input_overlay_layout_path(char *s, size_t len,
+      const char *overlay_path)
+{
+   char dir[DIR_MAX_LENGTH];
+   const char *name = overlay_path ? path_basename(overlay_path) : NULL;
+
+   *s = '\0';
+   if (!name || !*name)
+      return;
+
+   fill_pathname_application_special(dir, sizeof(dir),
+         APPLICATION_SPECIAL_DIRECTORY_CONFIG);
+   if (!*dir)
+      return;
+
+   fill_pathname_join_special(dir, dir, "overlay_layouts", sizeof(dir));
+   fill_pathname_join_special(s, dir, name, len);
+}
+
+static bool input_overlay_layout_save(const input_overlay_t *ol)
+{
+   size_t i, j;
+   char key[64];
+   char val[32];
+   char path[PATH_MAX_LENGTH];
+   char dir[DIR_MAX_LENGTH];
+   config_file_t *conf = NULL;
+   bool ret            = false;
+
+   input_overlay_layout_path(path, sizeof(path), ol->path);
+   if (!*path)
+      return false;
+
+   /* Keep what earlier sessions saved */
+   if (     !path_is_valid(path)
+         || !(conf = config_file_new_from_path_to_string(path)))
+      conf = config_file_new_alloc();
+   if (!conf)
+      return false;
+
+   for (i = 0; i < ol->size; i++)
+   {
+      const struct overlay *page = &ol->overlays[i];
+      for (j = 0; j < page->size; j++)
+      {
+         const struct overlay_desc *desc = &page->descs[j];
+         if (!(desc->flags & OVERLAY_DESC_LAYOUT_EDITED))
+            continue;
+         snprintf(key, sizeof(key), "overlay%u_desc%u_layout_x",
+               (unsigned)i, (unsigned)j);
+         snprintf(val, sizeof(val), "%.6f", desc->x);
+         config_set_string(conf, key, val);
+         snprintf(key, sizeof(key), "overlay%u_desc%u_layout_y",
+               (unsigned)i, (unsigned)j);
+         snprintf(val, sizeof(val), "%.6f", desc->y);
+         config_set_string(conf, key, val);
+      }
+   }
+
+   fill_pathname_basedir(dir, path, sizeof(dir));
+   if (!path_is_directory(dir))
+      path_mkdir(dir);
+
+   if ((ret = config_file_write(conf, path, true)))
+   {
+      for (i = 0; i < ol->size; i++)
+         for (j = 0; j < ol->overlays[i].size; j++)
+            ol->overlays[i].descs[j].flags &= ~OVERLAY_DESC_LAYOUT_EDITED;
+      RARCH_LOG("[Overlay] Saved layout: \"%s\".\n", path);
+   }
+   else
+      RARCH_ERR("[Overlay] Failed to save layout: \"%s\".\n", path);
+
+   config_file_free(conf);
+   return ret;
+}
+
+static void input_overlay_edit_drop(input_overlay_t *ol)
+{
+   size_t i;
+   if (ol && ol->active)
+      for (i = 0; i < ol->active->size; i++)
+         ol->active->descs[i].touch_mask = 0;
+   input_overlay_edit.count  = 0;
+   input_overlay_edit.flags &= ~(OVERLAY_EDIT_DRAGGING
+         | OVERLAY_EDIT_MOVED | OVERLAY_EDIT_TAP_DONE | OVERLAY_EDIT_TAP_NEXT);
+}
+
+static void input_overlay_edit_finish(input_overlay_t *ol, bool save)
+{
+   uint8_t flags = input_overlay_edit.flags;
+
+   if (!(flags & OVERLAY_EDIT_ACTIVE))
+      return;
+
+   input_overlay_edit_drop(ol);
+   free(input_overlay_edit.items);
+   memset(&input_overlay_edit, 0, sizeof(input_overlay_edit));
+
+   if (save && ol && (flags & OVERLAY_EDIT_CHANGED))
+   {
+      bool saved       = input_overlay_layout_save(ol);
+      const char *_msg = msg_hash_to_str(saved
+            ? MSG_OVERLAY_LAYOUT_SAVED : MSG_OVERLAY_LAYOUT_SAVE_FAILED);
+      runloop_msg_queue_push(_msg, strlen(_msg), 1, 120, true, NULL,
+            MESSAGE_QUEUE_ICON_DEFAULT, saved
+            ? MESSAGE_QUEUE_CATEGORY_INFO : MESSAGE_QUEUE_CATEGORY_ERROR);
+   }
+
+   /* The finger that finished must not press anything */
+   if (ol)
+      ol->flags |= INPUT_OVERLAY_BLOCKED;
+
+   if (flags & OVERLAY_EDIT_PAUSED)
+      command_event(CMD_EVENT_UNPAUSE, NULL);
+}
+
+static bool input_overlay_edit_push(unsigned page, unsigned desc,
+      const struct overlay_desc *d)
+{
+   input_overlay_edit_item_t *item;
+
+   if (input_overlay_edit.count == input_overlay_edit.cap)
+   {
+      size_t cap = input_overlay_edit.cap ? input_overlay_edit.cap * 2 : 64;
+      input_overlay_edit_item_t *items = (input_overlay_edit_item_t*)
+         realloc(input_overlay_edit.items, cap * sizeof(*items));
+      if (!items)
+         return false;
+      input_overlay_edit.items = items;
+      input_overlay_edit.cap   = cap;
+   }
+
+   item       = &input_overlay_edit.items[input_overlay_edit.count++];
+   item->page = page;
+   item->desc = desc;
+   item->x    = d->x_shift;
+   item->y    = d->y_shift;
+   return true;
+}
+
+static bool input_overlay_edit_overlap(const struct overlay_desc *a,
+      const struct overlay_desc *b)
+{
+   return   fabs(a->x_shift - b->x_shift) < a->range_x + b->range_x
+         && fabs(a->y_shift - b->y_shift) < a->range_y + b->range_y;
+}
+
+/* The same control on another page: what input_overlay_next_move_touch_masks
+ * matches, held to the binds as well. */
+static bool input_overlay_edit_same(const struct overlay_desc *a,
+      const struct overlay_desc *b)
+{
+   return   a->type          == b->type
+         && a->retro_key_idx == b->retro_key_idx
+         && fabs(a->x - b->x) < 0.001f
+         && fabs(a->y - b->y) < 0.001f
+         && !memcmp(&a->button_mask, &b->button_mask,
+               sizeof(a->button_mask));
+}
+
+static void input_overlay_edit_grab(input_overlay_t *ol, float x, float y)
+{
+   size_t i, j, k;
+   uint8_t *in_group;
+   bool grew;
+   const struct overlay *active = ol->active;
+   size_t first                 = active->size;
+   float first_area             = 0.0f;
+
+   /* The smallest drawn desc under the finger */
+   for (i = 0; i < active->size; i++)
+   {
+      const struct overlay_desc *desc = &active->descs[i];
+      float area = desc->range_x * desc->range_y;
+      if (     !OVERLAY_HAS_IMAGE(&desc->image)
+            || fabs(x - desc->x_shift) > desc->range_x
+            || fabs(y - desc->y_shift) > desc->range_y)
+         continue;
+      if (first == active->size || area < first_area)
+      {
+         first      = i;
+         first_area = area;
+      }
+   }
+
+   if (     first == active->size
+         || !(in_group = (uint8_t*)calloc(active->size, sizeof(*in_group))))
+      return;
+
+   in_group[first] = 1;
+   do
+   {
+      grew = false;
+      for (i = 0; i < active->size; i++)
+      {
+         if (in_group[i])
+            continue;
+         for (j = 0; j < active->size; j++)
+         {
+            if (     in_group[j]
+                  && input_overlay_edit_overlap(
+                     &active->descs[i], &active->descs[j]))
+            {
+               in_group[i] = 1;
+               grew        = true;
+               break;
+            }
+         }
+      }
+   } while (grew);
+
+   input_overlay_edit.count = 0;
+   for (i = 0; i < active->size; i++)
+   {
+      struct overlay_desc *desc = &active->descs[i];
+
+      if (!in_group[i])
+         continue;
+      if (!input_overlay_edit_push((unsigned)ol->index, (unsigned)i, desc))
+         break;
+      /* Lit as pressed while dragged */
+      desc->touch_mask = 1;
+      if (BIT256_GET(desc->button_mask, RARCH_MENU_TOGGLE))
+         input_overlay_edit.flags |= OVERLAY_EDIT_TAP_DONE;
+      if (BIT256_GET(desc->button_mask, RARCH_OVERLAY_NEXT))
+      {
+         input_overlay_edit.next_index = desc->next_index;
+         input_overlay_edit.flags     |= OVERLAY_EDIT_TAP_NEXT;
+      }
+
+      for (j = 0; j < ol->size; j++)
+      {
+         const struct overlay *page = &ol->overlays[j];
+         if (     j == ol->index
+               || fabs(page->aspect_ratio - active->aspect_ratio) > 0.01f)
+            continue;
+         for (k = 0; k < page->size; k++)
+            if (input_overlay_edit_same(&page->descs[k], desc))
+               input_overlay_edit_push((unsigned)j, (unsigned)k,
+                     &page->descs[k]);
+      }
+   }
+   free(in_group);
+
+   input_overlay_edit.page     = (unsigned)ol->index;
+   input_overlay_edit.start_x  = x;
+   input_overlay_edit.start_y  = y;
+   input_overlay_edit.flags   |= OVERLAY_EDIT_DRAGGING;
+}
+
+static void input_overlay_edit_move(input_overlay_t *ol, float x, float y)
+{
+   size_t i;
+   float dx = x - input_overlay_edit.start_x;
+   float dy = y - input_overlay_edit.start_y;
+
+   /* Short of this, a press is a tap */
+   if (     !(input_overlay_edit.flags & OVERLAY_EDIT_MOVED)
+         && fabs(dx) < 0.015f && fabs(dy) < 0.015f)
+      return;
+   input_overlay_edit.flags |= OVERLAY_EDIT_MOVED | OVERLAY_EDIT_CHANGED;
+
+   for (i = 0; i < input_overlay_edit.count; i++)
+   {
+      const input_overlay_edit_item_t *item = &input_overlay_edit.items[i];
+      struct overlay *page;
+      struct overlay_desc *desc;
+
+      if (item->page >= ol->size)
+         continue;
+      page = &ol->overlays[item->page];
+      if (item->desc >= page->size || page->mod_w <= 0.0f || page->mod_h <= 0.0f)
+         continue;
+      desc = &page->descs[item->desc];
+
+      /* Where it is shown, separation and all, and from now on put
+       * there as is: anywhere on screen, which a scaled page may not
+       * cover */
+      desc->x      = clamp_float(item->x + dx,
+            -page->mod_x / page->mod_w, (1.0f - page->mod_x) / page->mod_w);
+      desc->y      = clamp_float(item->y + dy,
+            -page->mod_y / page->mod_h, (1.0f - page->mod_y) / page->mod_h);
+      desc->flags |= OVERLAY_DESC_LAYOUT_EDITED | OVERLAY_DESC_LAYOUT_PLACED;
+   }
+
+   command_event(CMD_EVENT_OVERLAY_SET_SCALE_FACTOR, NULL);
+}
+
+static void input_overlay_edit_poll(input_overlay_t *ol, float opacity)
+{
+   input_driver_state_t *input_st    = &input_driver_st;
+   input_driver_t *input             = (input_driver_t*)input_st->current_driver;
+   void *input_data                  = input_st->current_data;
+   const video_views_layout_t *views = video_driver_get_views_layout();
+   bool pressed                      = false;
+   float x                           = 0.0f;
+   float y                           = 0.0f;
+   float base                        = (opacity < 0.5f) ? 0.5f : opacity;
+
+   /* The pack was replaced under the drag */
+   if (     input_overlay_edit.ol != ol
+         || input_overlay_edit.page != ol->index)
+   {
+      input_overlay_edit_drop(ol);
+      input_overlay_edit.ol   = ol;
+      input_overlay_edit.page = (unsigned)ol->index;
+   }
+
+   input_st->flags |= INP_FLAG_BLOCK_POINTER_INPUT;
+
+   if (     input->input_state
+         && input_data
+         && ol->active->mod_w > 0.0f
+         && ol->active->mod_h > 0.0f)
+   {
+      rarch_joypad_info_t joypad_info;
+      unsigned device = ((ol->active->flags & OVERLAY_FULL_SCREEN) || views)
+         ? RARCH_DEVICE_POINTER_SCREEN
+         : RETRO_DEVICE_POINTER;
+
+      joypad_info.joy_idx        = 0;
+      joypad_info.auto_binds     = NULL;
+      joypad_info.axis_threshold = 0.0f;
+
+      if (input_frame_or_driver(input, input_data, input_st->primary_joypad,
+               &joypad_info, NULL, true, 0, device, 0,
+               RETRO_DEVICE_ID_POINTER_PRESSED))
+      {
+         int16_t px = input_frame_or_driver(input, input_data,
+               input_st->primary_joypad, &joypad_info, NULL, true, 0,
+               device, 0, RETRO_DEVICE_ID_POINTER_X);
+         int16_t py = input_frame_or_driver(input, input_data,
+               input_st->primary_joypad, &joypad_info, NULL, true, 0,
+               device, 0, RETRO_DEVICE_ID_POINTER_Y);
+         pressed    = true;
+         x          = ((float)(px + 0x7fff) / 0xffff - ol->active->mod_x)
+            / ol->active->mod_w;
+         y          = ((float)(py + 0x7fff) / 0xffff - ol->active->mod_y)
+            / ol->active->mod_h;
+      }
+   }
+
+   if (pressed)
+   {
+      if (!(input_overlay_edit.flags & OVERLAY_EDIT_HELD))
+      {
+         input_overlay_edit.flags |= OVERLAY_EDIT_HELD;
+         input_overlay_edit_grab(ol, x, y);
+      }
+      else if (input_overlay_edit.flags & OVERLAY_EDIT_DRAGGING)
+         input_overlay_edit_move(ol, x, y);
+   }
+   else if (input_overlay_edit.flags & OVERLAY_EDIT_HELD)
+   {
+      uint8_t flags = input_overlay_edit.flags;
+      bool tap      = (flags & (OVERLAY_EDIT_DRAGGING | OVERLAY_EDIT_MOVED))
+            == OVERLAY_EDIT_DRAGGING;
+
+      input_overlay_edit_drop(ol);
+      input_overlay_edit.flags &= ~OVERLAY_EDIT_HELD;
+
+      if (tap && (flags & OVERLAY_EDIT_TAP_DONE))
+      {
+         input_overlay_edit_finish(ol, true);
+         input_overlay_alpha_pass(ol, opacity, false, opacity,
+               input_st->overlay_leds_lit, input_overlay_led_map());
+         return;
+      }
+
+      if (     tap
+            && (flags & OVERLAY_EDIT_TAP_NEXT)
+            && input_overlay_edit.next_index < ol->size)
+      {
+         bool check_rotation = true;
+         ol->next_index      = input_overlay_edit.next_index;
+         command_event(CMD_EVENT_OVERLAY_NEXT, &check_rotation);
+      }
+   }
+
+   /* While dragging, the rest dims and the group lights up */
+   if (input_overlay_edit.flags & OVERLAY_EDIT_DRAGGING)
+      input_overlay_alpha_pass(ol, base * 0.5f, true, 1.0f,
+            input_st->overlay_leds_lit, input_overlay_led_map());
+   else
+      input_overlay_alpha_pass(ol, base, false, 1.0f,
+            input_st->overlay_leds_lit, input_overlay_led_map());
+}
+
+void input_overlay_edit_begin(void)
+{
+   const char *_msg;
+   runloop_state_t *runloop_st = runloop_state_get_ptr();
+
+   if (input_overlay_edit.flags & OVERLAY_EDIT_ACTIVE)
+      return;
+
+   memset(&input_overlay_edit, 0, sizeof(input_overlay_edit));
+   /* Held: a finger still down from the menu grabs nothing */
+   input_overlay_edit.flags = OVERLAY_EDIT_ACTIVE | OVERLAY_EDIT_HELD;
+
+   if (!(runloop_st->flags & RUNLOOP_FLAG_PAUSED))
+   {
+      command_event(CMD_EVENT_PAUSE, NULL);
+      if (runloop_st->flags & RUNLOOP_FLAG_PAUSED)
+         input_overlay_edit.flags |= OVERLAY_EDIT_PAUSED;
+   }
+
+   _msg = msg_hash_to_str(MSG_OVERLAY_EDIT_LAYOUT_START);
+   runloop_msg_queue_push(_msg, strlen(_msg), 2, 300, true, NULL,
+         MESSAGE_QUEUE_ICON_DEFAULT, MESSAGE_QUEUE_CATEGORY_INFO);
+}
+
+/* @ol is going away or out of sight: its edits are saved and the
+ * editor stops, if it was @ol being edited. */
+static void input_overlay_edit_detach(input_overlay_t *ol)
+{
+   if (     (input_overlay_edit.flags & OVERLAY_EDIT_ACTIVE)
+         && (     input_overlay_edit.ol == ol
+              || (!input_overlay_edit.ol && ol == input_driver_st.overlay_ptr)))
+      input_overlay_edit_finish(ol, true);
+}
+
+bool input_overlay_edit_active(void)
+{
+   return (input_overlay_edit.flags & OVERLAY_EDIT_ACTIVE) != 0;
+}
+
+void input_overlay_edit_end(void)
+{
+   input_overlay_edit_finish(input_driver_st.overlay_ptr, true);
+}
+
 /*
  * input_poll_overlay:
  *
@@ -7012,6 +7501,18 @@ INPUT_NOINLINE static void input_poll_overlay(
    {
       old_ptr_count    = ptr_state->count;
       ptr_state->count = 0;
+   }
+
+   /* The layout editor takes every touch; nothing reaches the core */
+   if (     (input_overlay_edit.flags & OVERLAY_EDIT_ACTIVE)
+         && !(ol->flags & INPUT_OVERLAY_IS_OSK))
+   {
+      input_overlay_edit_poll(ol, opacity);
+      old_blocked_touch_idx  = -1;
+      old_ptrdev_touch_mask  = 0;
+      old_hitbox_touch_mask  = 0;
+      ptr_state->device_mask = 0;
+      return;
    }
 
    /* input_data is dereferenced by the driver's pointer paths, so a
@@ -10667,6 +11168,8 @@ static void input_overlay_enable_(bool enable)
    }
    else
    {
+      input_overlay_edit_detach(ol);
+
       /* Disable and clear input state */
       ol->flags       &= ~INPUT_OVERLAY_ENABLE;
       input_st->flags &= ~INP_FLAG_BLOCK_POINTER_INPUT;
@@ -11254,6 +11757,25 @@ void input_overlay_init(void)
    /* Start task */
    task_push_overlay_load_default(
          input_overlay_loaded, path_overlay, want_osk, NULL);
+}
+
+void input_overlay_layout_reset(void)
+{
+   char path[PATH_MAX_LENGTH];
+   const char *_msg = msg_hash_to_str(MSG_OVERLAY_LAYOUT_RESET);
+
+   input_overlay_edit_finish(input_driver_st.overlay_ptr, false);
+
+   input_overlay_layout_path(path, sizeof(path), input_overlay_path(false));
+   if (*path && path_is_valid(path))
+      filestream_delete(path);
+
+   /* Loaded again, with the pack's own positions */
+   input_overlay_deinit();
+   input_overlay_init();
+
+   runloop_msg_queue_push(_msg, strlen(_msg), 1, 120, true, NULL,
+         MESSAGE_QUEUE_ICON_DEFAULT, MESSAGE_QUEUE_CATEGORY_INFO);
 }
 #endif
 

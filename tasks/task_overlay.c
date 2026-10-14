@@ -901,6 +901,21 @@ static bool task_overlay_load_desc(
 
    desc->x       = (float)rstrtod(elems[1], NULL) * width_mod;
    desc->y       = (float)rstrtod(elems[2], NULL) * height_mod;
+
+   /* A user layout position, normalized whatever the desc uses */
+   strlcpy_lit(overlay_key + _len, "_layout_x", sizeof(overlay_key) - _len);
+   if (config_get_float(conf, overlay_key, &tmp_float))
+   {
+      desc->x      = tmp_float;
+      desc->flags |= OVERLAY_DESC_LAYOUT_PLACED;
+   }
+   strlcpy_lit(overlay_key + _len, "_layout_y", sizeof(overlay_key) - _len);
+   if (config_get_float(conf, overlay_key, &tmp_float))
+   {
+      desc->y      = tmp_float;
+      desc->flags |= OVERLAY_DESC_LAYOUT_PLACED;
+   }
+
    desc->x_shift = desc->x;
    desc->y_shift = desc->y;
 
@@ -1664,6 +1679,27 @@ static bool task_overlay_finder(retro_task_t *task, void *user_data)
    return string_is_equal(loader->overlay_path, (const char*)user_data);
 }
 
+#ifdef RARCH_INTERNAL
+/* The user layout's entries take the place of the overlay's own. */
+static void task_overlay_append_layout(config_file_t *conf,
+      const char *overlay_path)
+{
+   char layout_path[PATH_MAX_LENGTH];
+   config_file_t *layout = NULL;
+
+   input_overlay_layout_path(layout_path, sizeof(layout_path),
+         overlay_path);
+
+   if (     !*layout_path
+         || !path_is_valid(layout_path)
+         || !(layout = config_file_new_from_path_to_string(layout_path)))
+      return;
+
+   RARCH_LOG("[Overlay] Applying layout: \"%s\".\n", layout_path);
+   config_file_append_conf(conf, layout);
+}
+#endif
+
 bool task_push_overlay_load_default(
       retro_task_callback_t cb,
       const char *overlay_path,
@@ -1782,6 +1818,11 @@ bool task_push_overlay_load_default(
       string_list_free(image_list);
       return false;
    }
+
+#ifdef RARCH_INTERNAL
+   if (!is_osk)
+      task_overlay_append_layout(conf, overlay_path);
+#endif
 
    if (!config_get_uint(conf, "overlays", &loader->size))
    {

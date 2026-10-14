@@ -6409,6 +6409,23 @@ STATIC_DEFAULT_ACTION_OK_CMD_FUNC(action_ok_shader_apply_changes,     CMD_EVENT_
 #endif
 STATIC_DEFAULT_ACTION_OK_CMD_FUNC(action_ok_show_wimp,                CMD_EVENT_UI_COMPANION_TOGGLE)
 
+#ifdef HAVE_OVERLAY
+/* Out of the menu, onto the overlay being edited */
+static int action_ok_overlay_edit_layout(const char *path,
+      const char *label, unsigned type, size_t idx, size_t entry_idx)
+{
+   input_overlay_edit_begin();
+   return generic_action_ok_command(CMD_EVENT_RESUME);
+}
+
+static int action_ok_overlay_reset_layout(const char *path,
+      const char *label, unsigned type, size_t idx, size_t entry_idx)
+{
+   input_overlay_layout_reset();
+   return 0;
+}
+#endif
+
 static int action_ok_set_core_association(const char *path,
       const char *label, unsigned type, size_t idx, size_t entry_idx)
 {
@@ -9789,6 +9806,10 @@ static int menu_cbs_init_bind_ok_compare_label(menu_file_list_cbs_t *cbs,
          {MENU_ENUM_LABEL_PLAY_REPLAY,                         action_ok_play_replay},
          {MENU_ENUM_LABEL_HALT_REPLAY,                         action_ok_halt_replay},
          {MENU_ENUM_LABEL_RESUME_CONTENT,                      action_ok_resume_content},
+#ifdef HAVE_OVERLAY
+         {MENU_ENUM_LABEL_OVERLAY_EDIT_LAYOUT,                 action_ok_overlay_edit_layout},
+         {MENU_ENUM_LABEL_OVERLAY_RESET_LAYOUT,                action_ok_overlay_reset_layout},
+#endif
          {MENU_ENUM_LABEL_ADD_TO_FAVORITES_PLAYLIST,           action_ok_add_to_favorites_playlist},
          {MENU_ENUM_LABEL_ADD_ENTRY_TO_PLAYLIST,               action_ok_add_entry_to_playlist},
          {MENU_ENUM_LABEL_ADD_ENTRY_TO_PLAYLIST_QUICKMENU,     action_ok_add_entry_to_playlist_quickmenu},

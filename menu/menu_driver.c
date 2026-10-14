@@ -7333,6 +7333,11 @@ void retroarch_menu_running(void)
 
    menu_event_starts_afresh = true;
 
+#ifdef HAVE_OVERLAY
+   /* The menu's touches are its own */
+   input_overlay_edit_end();
+#endif
+
    if (menu)
    {
 #ifdef HAVE_NETWORKING

@@ -15181,6 +15181,22 @@ MSG_HASH(
    "Analog stick input will be relative to first touch if pressed within this zone."
    )
 MSG_HASH(
+   MENU_ENUM_LABEL_VALUE_OVERLAY_EDIT_LAYOUT,
+   "Edit Layout"
+   )
+MSG_HASH(
+   MENU_ENUM_SUBLABEL_OVERLAY_EDIT_LAYOUT,
+   "Pause the content and drag the overlay's controls to new positions. Tapping a page button turns the page. Press Back when done."
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_VALUE_OVERLAY_RESET_LAYOUT,
+   "Reset Layout"
+   )
+MSG_HASH(
+   MENU_ENUM_SUBLABEL_OVERLAY_RESET_LAYOUT,
+   "Discard the edited layout of the current overlay and restore its original positions."
+   )
+MSG_HASH(
    MENU_ENUM_LABEL_VALUE_OVERLAY,
    "Overlay"
    )
@@ -32486,6 +32502,22 @@ MSG_HASH(
 MSG_HASH(
    MSG_OSK_OVERLAY_NOT_SET,
    "Keyboard overlay is not set."
+   )
+MSG_HASH(
+   MSG_OVERLAY_EDIT_LAYOUT_START,
+   "Drag controls to move them. Press Back when done."
+   )
+MSG_HASH(
+   MSG_OVERLAY_LAYOUT_SAVED,
+   "Overlay layout saved."
+   )
+MSG_HASH(
+   MSG_OVERLAY_LAYOUT_SAVE_FAILED,
+   "Failed to save overlay layout."
+   )
+MSG_HASH(
+   MSG_OVERLAY_LAYOUT_RESET,
+   "Overlay layout reset."
    )
 MSG_HASH(
    MSG_FAILED_TO_LOAD_STATE,

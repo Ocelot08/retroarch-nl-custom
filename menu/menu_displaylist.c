@@ -12791,6 +12791,27 @@ unsigned menu_displaylist_build_list(
                         build_list[i].enum_idx,  build_list[i].parse_type,
                         false) == 0)
                   count++;
+
+               /* The layout of the preset follows it. Editing needs
+                * running content to show the overlay over. */
+               if (build_list[i].enum_idx != MENU_ENUM_LABEL_OVERLAY_PRESET)
+                  continue;
+
+               if (     (flags & RUNLOOP_FLAG_CORE_RUNNING)
+                     && !retroarch_ctl(RARCH_CTL_IS_DUMMY_CORE, NULL)
+                     && menu_entries_append(list,
+                        msg_hash_to_str(MENU_ENUM_LABEL_VALUE_OVERLAY_EDIT_LAYOUT),
+                        MENU_ENUM_LABEL_OVERLAY_EDIT_LAYOUT_STR,
+                        MENU_ENUM_LABEL_OVERLAY_EDIT_LAYOUT,
+                        MENU_SETTING_ACTION, 0, 0, NULL))
+                  count++;
+
+               if (menu_entries_append(list,
+                        msg_hash_to_str(MENU_ENUM_LABEL_VALUE_OVERLAY_RESET_LAYOUT),
+                        MENU_ENUM_LABEL_OVERLAY_RESET_LAYOUT_STR,
+                        MENU_ENUM_LABEL_OVERLAY_RESET_LAYOUT,
+                        MENU_SETTING_ACTION, 0, 0, NULL))
+                  count++;
             }
          }
          break;

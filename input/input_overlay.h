@@ -152,7 +152,11 @@ enum OVERLAY_DESC_FLAGS
    /* If true, blocks input from overlapped hitboxes */
    OVERLAY_DESC_EXCLUSIVE           = (1 << 1),
    /* Similar, but only applies after range_mod takes effect */
-   OVERLAY_DESC_RANGE_MOD_EXCLUSIVE = (1 << 2)
+   OVERLAY_DESC_RANGE_MOD_EXCLUSIVE = (1 << 2),
+   /* Moved in the layout editor and not yet saved */
+   OVERLAY_DESC_LAYOUT_EDITED       = (1 << 3),
+   /* Where the user layout put it: no separation moves it */
+   OVERLAY_DESC_LAYOUT_PLACED       = (1 << 4)
 };
 
 enum overlay_lightgun_action
@@ -527,6 +531,13 @@ typedef struct
 } overlay_task_data_t;
 
 void input_overlay_free_overlay(struct overlay *overlay);
+
+/* Where the user layout of the overlay at @overlay_path is kept: a
+ * config of overlayN_descM_layout_x/_y entries (positions on the page
+ * with no separation applied), merged over the overlay's own config
+ * when it loads. */
+void input_overlay_layout_path(char *s, size_t len,
+      const char *overlay_path);
 
 /* The overlay LED driver's entry points: whether it is the LED
  * driver, and a core's LED going on or off. */

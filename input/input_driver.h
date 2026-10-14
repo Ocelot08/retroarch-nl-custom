@@ -2151,6 +2151,15 @@ void input_overlay_unload(void);
 void input_overlay_init(void);
 
 void input_overlay_check_mouse_cursor(void);
+
+/* Layout editor: drag the overlay's controls, the core paused. Ended
+ * by input_overlay_edit_end(), which saves the layout. */
+void input_overlay_edit_begin(void);
+bool input_overlay_edit_active(void);
+void input_overlay_edit_end(void);
+
+/* Forgets the saved layout of the current overlay and reloads it. */
+void input_overlay_layout_reset(void);
 #endif
 
 #ifdef HAVE_BSV_MOVIE
