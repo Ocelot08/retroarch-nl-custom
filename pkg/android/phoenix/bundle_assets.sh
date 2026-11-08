@@ -34,5 +34,13 @@ cp -R "$src/retroarch-joypad-autoconfig/android" "$dst/autoconfig/"
 cp "$src/libretro-core-info/"*.info "$dst/info/"
 # RGUI theme presets of this build; Highlighter is the default
 cp "$here/rgui_themes/"*.cfg "$dst/assets/rgui/"
+# This build's DS overlay, the DS layout with the neo-retropad buttons
+# (made by ds_overlay/make_ds_overlay.py), in place of common-overlays'
+mkdir -p "$dst/overlays/gamepads/neo-ds/img"
+cp "$here/ds_overlay/img/"*.png "$dst/overlays/gamepads/neo-ds/img/"
+for name in "Nintendo - Nintendo DS" "Nintendo - Nintendo DSi"; do
+   cp "$here/ds_overlay/Nintendo - Nintendo DS.cfg" \
+      "$dst/overlays/gamepads/Named_Overlays/$name.cfg"
+done
 
 du -sh "$dst"/*

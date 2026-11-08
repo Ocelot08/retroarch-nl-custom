@@ -81,6 +81,9 @@ not lose them. Profiles are in
 - RGUI is the default menu, with the bundled **Highlighter** theme
   (**My Theme** is also included), without the menu border.
 - The touch controls stay shown over the menu.
+- Nintendo DS (and DSi) content gets this build's DS controls: the
+  layout of RetroArch's own DS overlay, drawn with the same buttons as
+  the rest, and laid out with the touch layout editor like them.
 - Menu assets, overlays, controller profiles and core info files are
   bundled in the APK.
 
