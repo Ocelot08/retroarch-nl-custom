@@ -36,8 +36,7 @@ away from what is being sized, with Reset and Done. Built together.
 - The game keeps its own shape inside the box. A Stretch option to
   fill it can come later.
 - Shared by the D-pad and analog pages.
-- Saved with Layout For (all content, core or game) and with gamepads,
-  like the controls. It is written as the overlay page's own viewport
+- Saved in the gamepad, like the controls. It is written as the overlay page's own viewport
   setting (`overlayN_viewport`) in the layout file.
 - Reset keeps the width and fits the height to the game's shape.
 - The box is placed from the top on OpenGL as on Vulkan: RetroArch's
@@ -73,7 +72,7 @@ away from what is being sized, with Reset and Done. Built together.
 - Hotkeys (menu, fast-forward, hide, save state, swap screens, ...)
   keep their icons.
 - Touch Layout > Drawn Buttons switches between drawn buttons and the
-  images, per Layout For.
+  images, per gamepad.
 - Made through the overlay's own images, so every video driver, the
   press highlight, hiding and sizing work as before.
 
@@ -81,8 +80,8 @@ away from what is being sized, with Reset and Done. Built together.
 
 *Needs first: 3. Effort: Small. Built.*
 
-- Touch Layout > Button Style, for all buttons at once, per Layout
-  For: Style (Outline or Filled), Drawn Buttons (on or off) and Stroke
+- Touch Layout > Button Style, for all buttons at once, per
+  gamepad: Style (Outline or Filled), Drawn Buttons (on or off) and Stroke
   Width (the same outline on every drawn button, whatever its size).
 - Filled applies to drawn buttons; images, hotkeys included, stay as
   they are.
@@ -125,8 +124,8 @@ right first.
   OpenGL (Settings > Drivers > Video).
 - Turn the phone, and tick Analog: sizes and the screen box carry to
   the analog page, and landscape keeps its own.
-- Save for a core and for a game (Layout For); Save as Gamepad,
-  load it elsewhere: sizes and the screen come with it.
+- Save as Gamepad, load it elsewhere: sizes and the screen come with
+  it.
 - DS and 3DS: the same, on their own controls; the swap screens
   button still swaps.
 - Restart the app: everything is where it was saved.

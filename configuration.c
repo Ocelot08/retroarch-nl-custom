@@ -6982,7 +6982,10 @@ static bool config_load_file(const char *path, settings_t *settings)
 #ifdef HAVE_OVERLAY
       config_get_path(conf, "input_overlay", new_overlay_path, sizeof(new_overlay_path));
       if (!string_is_equal(old_overlay_path, new_overlay_path))
+      {
          retroarch_override_setting_set(RARCH_OVERRIDE_SETTING_OVERLAY_PRESET, NULL);
+         input_overlay_gamepad_override(new_overlay_path);
+      }
 #endif
    }
 

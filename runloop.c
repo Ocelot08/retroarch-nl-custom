@@ -5506,6 +5506,9 @@ void runloop_event_deinit_core(void)
 
    audio_driver_set_core_float(false);
    audio_driver_set_core_multi(false);
+#ifdef HAVE_OVERLAY
+   input_overlay_gamepad_session_end();
+#endif
 
 #ifdef HAVE_THREADS
    /* Defensive: ensure the autosave worker thread is joined

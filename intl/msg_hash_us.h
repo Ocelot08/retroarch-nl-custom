@@ -15218,7 +15218,7 @@ MSG_HASH(
    )
 MSG_HASH(
    MENU_ENUM_SUBLABEL_OVERLAY_LAYOUT_STYLE,
-   "How the buttons are drawn, for all of them, kept in the layout chosen in 'Layout For'."
+   "How the buttons are drawn, for all of them, kept in the gamepad."
    )
 MSG_HASH(
    MENU_ENUM_LABEL_VALUE_OVERLAY_LAYOUT_FILL,
@@ -15242,7 +15242,7 @@ MSG_HASH(
    )
 MSG_HASH(
    MENU_ENUM_SUBLABEL_OVERLAY_LAYOUT_DRAWN,
-   "Draw the main buttons, D-pad and sticks, sharp at any size and shape, in place of the overlay's images. Kept in the layout chosen in 'Layout For'."
+   "Draw the main buttons, D-pad and sticks, sharp at any size and shape, in place of the overlay's images. Kept in the gamepad."
    )
 MSG_HASH(
    MENU_ENUM_LABEL_VALUE_OVERLAY_LAYOUT_PROFILE_SAVE,
@@ -15258,7 +15258,7 @@ MSG_HASH(
    )
 MSG_HASH(
    MENU_ENUM_SUBLABEL_OVERLAY_LAYOUT_PROFILE_LOAD,
-   "Use a gamepad for what 'Layout For' chooses. A gamepad is an overlay preset of its own, which any RetroArch can load: Main, Nintendo DS, Nintendo 3DS, or one you saved."
+   "Switch gamepads, like the overlay preset: for the running content until it closes, kept by saving a core or game override; with no content, for all content. Nintendo DS and 3DS cores start on their own gamepads. Any RetroArch can load a gamepad as an overlay preset."
    )
 MSG_HASH(
    MENU_ENUM_LABEL_VALUE_OVERLAY_LAYOUT_PROFILE_DELETE,
@@ -32621,7 +32621,11 @@ MSG_HASH(
    )
 MSG_HASH(
    MSG_OVERLAY_LAYOUT_PROFILE_LOADED,
-   "Using gamepad %s for %s"
+   "Using gamepad %s until the content closes. Save a core or game override to keep it."
+   )
+MSG_HASH(
+   MSG_OVERLAY_LAYOUT_PROFILE_LOADED_ALL,
+   "Using gamepad %s"
    )
 MSG_HASH(
    MSG_OVERLAY_LAYOUT_PROFILE_DELETED,

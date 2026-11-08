@@ -43,7 +43,7 @@ Layout**, or **Quick Menu → On-Screen Overlay → Touch Layout** in a game.
   - **Half grid**: snap to half cells.
   - **Analog**: switch to the overlay's analog-stick page, or back to
     the D-pad page, so either one can be laid out.
-- **Button Style**, for all the buttons at once, per Layout For:
+- **Button Style**, for all the buttons of the gamepad shown:
   - **Style**: Outline (dark buttons, light outline and labels) or
     Filled (light buttons, dark labels).
   - **Drawn Buttons** (on by default): the face buttons, shoulder
@@ -55,8 +55,6 @@ Layout**, or **Quick Menu → On-Screen Overlay → Touch Layout** in a game.
     state, ...) keep their icons, in either style. Off shows the images.
   - **Stroke Width**: the outline of every drawn button, the same
     whatever its size.
-- **Layout For**: what Load Gamepad picks a gamepad for: all content,
-  one core, or one game.
 - **Controls**: every control in one list, each on or off. First the
   controls of the page shown, then those the overlay has on its other
   pages (an analog stick, save/load state, turbo, the keyboard, ...),
@@ -70,8 +68,14 @@ Layout**, or **Quick Menu → On-Screen Overlay → Touch Layout** in a game.
   - **Edit Layout** changes the gamepad shown, for everything using it.
   - **Save as Gamepad**: a copy of the gamepad shown, as laid out, to
     lay out apart, say for one game.
-  - **Load Gamepad**: use a gamepad for what Layout For chooses (all
-    content, a core or a game).
+  - **Load Gamepad**: switch gamepads, the way RetroArch's Overlay
+    Preset works. While a game runs, the change lasts until it closes;
+    to keep it, save an override (Quick Menu > Overrides > Save Core
+    Overrides or Save Game Overrides). With no game running, it is the
+    gamepad for all content, apart from DS and 3DS cores, which start
+    on their own unless an override says otherwise. Picking a gamepad
+    file as Overlay Preset (Settings > On-Screen Display > On-Screen
+    Overlay) does the same; the files are in `overlays/gamepads/custom`.
   - **Delete Gamepad**: delete one you saved.
 - **Reset Gamepad**: put a built-in gamepad back as it comes.
 

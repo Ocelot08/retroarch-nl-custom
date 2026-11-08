@@ -2200,6 +2200,11 @@ bool input_overlay_layout_stroke_step(int dir);
  * chosen in place of its layout. The list holds the names, sorted. */
 bool input_overlay_layout_profile_save(const char *name);
 bool input_overlay_layout_profile_load(const char *name);
+/* An overlay preset picked while content runs, an override's, and the
+ * content closing: a gamepad among them is used for that content */
+void input_overlay_gamepad_preset(const char *path);
+void input_overlay_gamepad_override(const char *path);
+void input_overlay_gamepad_session_end(void);
 bool input_overlay_layout_profile_delete(const char *name);
 struct string_list *input_overlay_layout_profile_list(bool builtin);
 

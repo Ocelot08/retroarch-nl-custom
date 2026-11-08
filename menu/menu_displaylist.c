@@ -12832,8 +12832,6 @@ unsigned menu_displaylist_build_list(
       case DISPLAYLIST_OVERLAY_TOUCH_LAYOUT_LIST:
          {
             static const enum msg_hash_enums rows[][2] = {
-               { MENU_ENUM_LABEL_OVERLAY_LAYOUT_SCOPE,
-                  MENU_ENUM_LABEL_VALUE_OVERLAY_LAYOUT_SCOPE },
                { MENU_ENUM_LABEL_OVERLAY_LAYOUT_STYLE,
                   MENU_ENUM_LABEL_VALUE_OVERLAY_LAYOUT_STYLE },
                { MENU_ENUM_LABEL_OVERLAY_EDIT_LAYOUT,

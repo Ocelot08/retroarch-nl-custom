@@ -2716,6 +2716,9 @@ static int generic_action_ok(const char *path,
       case ACTION_OK_SET_PATH_OVERLAY:
          flush_char = MENU_ENUM_LABEL_DEFERRED_ONSCREEN_OVERLAY_SETTINGS_LIST_STR;
          retroarch_override_setting_set(RARCH_OVERRIDE_SETTING_OVERLAY_PRESET, NULL);
+#ifdef HAVE_OVERLAY
+         input_overlay_gamepad_preset(action_path);
+#endif
          ret        = set_path_generic(menu_label, action_path);
          break;
       case ACTION_OK_SET_PATH_OSK_OVERLAY:
@@ -6515,8 +6518,6 @@ static int action_ok_overlay_layout_profile_save(const char *path,
 static int action_ok_overlay_layout_profile_load_item(const char *path,
       const char *label, unsigned type, size_t idx, size_t entry_idx)
 {
-   char scope[128];
-   input_overlay_layout_scope_name(scope, sizeof(scope));
    if (!input_overlay_layout_profile_load(path))
    {
       action_ok_overlay_layout_profile_msg(
@@ -6524,7 +6525,9 @@ static int action_ok_overlay_layout_profile_load_item(const char *path,
       return -1;
    }
    action_ok_overlay_layout_profile_msg(
-         MSG_OVERLAY_LAYOUT_PROFILE_LOADED, path, scope);
+         runloop_state_get_ptr()->current_core_type != CORE_TYPE_DUMMY
+         ? MSG_OVERLAY_LAYOUT_PROFILE_LOADED
+         : MSG_OVERLAY_LAYOUT_PROFILE_LOADED_ALL, path, NULL);
    return 0;
 }
 

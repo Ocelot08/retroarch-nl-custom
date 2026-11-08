@@ -7251,6 +7251,8 @@ static void input_overlay_layout_file(char *s, size_t len,
 static bool input_overlay_profile_normalize_file(const char *path);
 static const char *input_overlay_profile_for(const char *pack);
 static int input_overlay_builtin_profile_find(const char *name);
+static void input_overlay_profile_file(char *s, size_t len, const char *name);
+static void input_overlay_profiles_ensure(void);
 static bool input_overlay_builtin_profile_reset(unsigned i);
 
 static bool input_overlay_layout_save(const input_overlay_t *ol)
@@ -13371,32 +13373,117 @@ static void input_overlay_loaded(retro_task_t *task,
 
 static const char *input_overlay_pack_path(void);
 
-/* The overlay to show: the on-screen keyboard's, the profile a layout
- * profile choice names, or the overlay RetroArch would pick as its
- * built-in profile, if it has one */
+/* The gamepad the running content uses, from Load Gamepad or an
+ * override, and the overlay preset to put back when it closes */
+static char input_overlay_gamepad_chosen[PATH_MAX_LENGTH];
+static char input_overlay_gamepad_prev[PATH_MAX_LENGTH];
+static bool input_overlay_gamepad_temp;
+
+void input_overlay_gamepad_override(const char *path)
+{
+   if (path && *path && input_overlay_is_profile(path))
+      strlcpy(input_overlay_gamepad_chosen, path,
+            sizeof(input_overlay_gamepad_chosen));
+}
+
+void input_overlay_gamepad_preset(const char *path)
+{
+   settings_t *settings = config_get_ptr();
+   if (     runloop_state_get_ptr()->current_core_type == CORE_TYPE_DUMMY
+         || !path || !input_overlay_is_profile(path))
+      return;
+   if (!input_overlay_gamepad_temp)
+      strlcpy(input_overlay_gamepad_prev, settings->paths.path_overlay,
+            sizeof(input_overlay_gamepad_prev));
+   input_overlay_gamepad_temp = true;
+   strlcpy(input_overlay_gamepad_chosen, path,
+         sizeof(input_overlay_gamepad_chosen));
+}
+
+void input_overlay_gamepad_session_end(void)
+{
+   settings_t *settings = config_get_ptr();
+   if (     input_overlay_gamepad_temp
+         && string_is_equal(settings->paths.path_overlay,
+            input_overlay_gamepad_chosen))
+      configuration_set_string(settings, settings->paths.path_overlay,
+            input_overlay_gamepad_prev);
+   input_overlay_gamepad_temp      = false;
+   *input_overlay_gamepad_chosen   = '\0';
+}
+
+/* The overlay to show: the on-screen keyboard's, the gamepad chosen for
+ * the content, the one for the core's system, or the gamepad made from
+ * the overlay RetroArch would pick */
 static const char *input_overlay_path(bool want_osk)
 {
    static char choice_path[PATH_MAX_LENGTH];
-   int scope;
 
    if (want_osk)
       return config_get_ptr()->paths.path_osk_overlay;
 
-   /* The most specific choice there is */
-   for (scope = OVERLAY_LAYOUT_SCOPE_LAST - 1; scope >= 0; scope--)
+   if (*input_overlay_gamepad_chosen
+         && path_is_valid(input_overlay_gamepad_chosen))
+      return input_overlay_gamepad_chosen;
+   /* The built-in gamepad of the running core's system, by what its
+    * info file says it runs, rather than by playlist, folder or setting */
+   if (runloop_state_get_ptr()->current_core_type != CORE_TYPE_DUMMY)
    {
+      static const char *systems[][2] = {
+         { "Nintendo - Nintendo 3DS", "Nintendo 3DS" },
+         { "Nintendo - Nintendo DS",  "Nintendo DS"  } };
+      char name[NAME_MAX_LENGTH];
+      char info[PATH_MAX_LENGTH];
+      char databases[1024];
       config_file_t *conf;
-      char choice[PATH_MAX_LENGTH];
-      input_overlay_layout_path(choice, sizeof(choice), "controller.cfg",
-            (enum overlay_layout_scope)scope);
-      if (     !*choice || !path_is_valid(choice)
-            || !(conf = config_file_new_from_path_to_string(choice)))
-         continue;
-      *choice_path = '\0';
-      config_get_path(conf, "overlay", choice_path, sizeof(choice_path));
-      config_file_free(conf);
-      if (*choice_path && path_is_valid(choice_path))
-         return choice_path;
+      const char *core = path_get(RARCH_PATH_CORE);
+      size_t _len;
+
+      *databases = '\0';
+      if (core && *core)
+      {
+         /* melonds_libretro_android.so: melonds_libretro.info */
+         strlcpy(name, path_basename(core), sizeof(name));
+         path_remove_extension(name);
+         _len = strlen(name);
+         if (     _len > STRLEN_CONST("_android")
+               && string_is_equal(name + _len - STRLEN_CONST("_android"),
+                  "_android"))
+            name[_len - STRLEN_CONST("_android")] = '\0';
+         strlcat(name, ".info", sizeof(name));
+         fill_pathname_join_special(info,
+               config_get_ptr()->paths.path_libretro_info, name, sizeof(info));
+         if (     path_is_valid(info)
+               && (conf = config_file_new_from_path_to_string(info)))
+         {
+            config_get_array(conf, "database", databases, sizeof(databases));
+            config_file_free(conf);
+         }
+      }
+      if (*databases)
+      {
+         size_t i;
+         for (i = 0; i < ARRAY_SIZE(systems); i++)
+         {
+            /* One of its '|' separated names, whole */
+            const char *at = databases;
+            size_t nlen    = strlen(systems[i][0]);
+            bool found     = false;
+            while (!found && (at = strstr(at, systems[i][0])))
+            {
+               found = (at == databases || at[-1] == '|')
+                  && (at[nlen] == '\0' || at[nlen] == '|');
+               at   += nlen;
+            }
+            if (!found)
+               continue;
+            input_overlay_profiles_ensure();
+            input_overlay_profile_file(choice_path, sizeof(choice_path),
+                  systems[i][1]);
+            if (path_is_valid(choice_path))
+               return choice_path;
+         }
+      }
    }
    return input_overlay_profile_for(input_overlay_pack_path());
 }
@@ -14179,44 +14266,22 @@ bool input_overlay_layout_profile_save(const char *name)
    }
 }
 
-/* @value written to @path, or @path taken away when @value is NULL */
-static bool input_overlay_layout_write(const char *path, const void *value,
-      int64_t len)
-{
-   char dir[DIR_MAX_LENGTH];
-   if (!value)
-      return !path_is_valid(path) || filestream_delete(path) == 0;
-   fill_pathname_basedir(dir, path, sizeof(dir));
-   if (!path_is_directory(dir))
-      path_mkdir(dir);
-   return filestream_write_file(path, value, len);
-}
-
-/* Profile @name for what Layout For chooses */
+/* Like the overlay preset: for the running content until it closes,
+ * kept by an override; with none running, for all content */
 bool input_overlay_layout_profile_load(const char *name)
 {
    char profile[PATH_MAX_LENGTH];
-   char choice[PATH_MAX_LENGTH];
-   char line[PATH_MAX_LENGTH + 32];
-   bool ret;
-   enum overlay_layout_scope scope = input_overlay_layout_scope();
+   settings_t *settings = config_get_ptr();
 
    input_overlay_profiles_ensure();
    input_overlay_profile_file(profile, sizeof(profile), name);
-   input_overlay_layout_path(choice, sizeof(choice), "controller.cfg", scope);
-   if (!*profile || !path_is_valid(profile) || !*choice)
+   if (!*profile || !path_is_valid(profile))
       return false;
 
    input_overlay_edit_finish(input_driver_st.overlay_ptr, false);
-   snprintf(line, sizeof(line), "overlay = \"%s\"\n", profile);
-   /* Main for all content is no choice, so that DS and 3DS content
-    * still starts on its own */
-   ret = input_overlay_layout_write(choice,
-         (input_overlay_builtin_profile_find(name) == 0
-          && scope == OVERLAY_LAYOUT_SCOPE_ALL) ? NULL : line,
-         strlen(line));
-   if (ret)
-      RARCH_LOG("[Overlay] Using layout profile \"%s\".\n", profile);
+   input_overlay_gamepad_preset(profile);
+   configuration_set_string(settings, settings->paths.path_overlay, profile);
+   RARCH_LOG("[Overlay] Using gamepad \"%s\".\n", profile);
 
    input_overlay_layout_reload_page = -1;
    input_overlay_deinit();
@@ -14224,7 +14289,7 @@ bool input_overlay_layout_profile_load(const char *name)
 #ifdef HAVE_MENU
    menu_state_get_ptr()->flags |= MENU_ST_FLAG_ENTRIES_NEED_REFRESH;
 #endif
-   return ret;
+   return true;
 }
 
 bool input_overlay_layout_profile_delete(const char *name)
