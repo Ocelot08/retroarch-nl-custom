@@ -4506,6 +4506,10 @@ void video_driver_update_viewport(
                      ol_y);
             }
          }
+         /* The override is from the top; GL's viewport from the bottom */
+         if (!y_down)
+            VIDEO_POS_PUT_Y(vp->pos, (int)VIDEO_SCALE_H(vp->full_dims)
+                  - VIDEO_POS_Y(vp->pos) - (int)VIDEO_SCALE_H(vp->dims));
          return;  /* Skip all other viewport calculations */
       }
    }
