@@ -354,15 +354,6 @@ static int action_left_shader_filter_default(unsigned type, const char *label,
 #endif
 
 #if defined(HAVE_CG) || defined(HAVE_GLSL) || defined(HAVE_SLANG) || defined(HAVE_HLSL)
-#ifdef HAVE_OVERLAY
-static int action_left_overlay_layout_scope(unsigned type, const char *label,
-      bool wraparound)
-{
-   input_overlay_layout_scope_step(-1);
-   return 0;
-}
-#endif
-
 static int action_left_shader_num_passes(unsigned type, const char *label,
       bool wraparound)
 {
@@ -1211,6 +1202,15 @@ static int bind_left_generic(unsigned type, const char *label,
 {
    return menu_setting_set(type, MENU_ACTION_LEFT, wraparound);
 }
+
+#ifdef HAVE_OVERLAY
+static int action_left_overlay_layout_scope(unsigned type, const char *label,
+      bool wraparound)
+{
+   input_overlay_layout_scope_step(-1);
+   return 0;
+}
+#endif
 
 static int menu_cbs_init_bind_left_compare_label(menu_file_list_cbs_t *cbs,
       const char *label, size_t label_len, const char *menu_lbl, size_t menu_lbl_len)
