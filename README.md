@@ -27,19 +27,21 @@ Layout**, or **Quick Menu → On-Screen Overlay → Touch Layout** in a game.
 - **Editor bar**, movable by its grip:
   - **Save**: keep the changes and go to the menu.
   - **Cancel**: go back to the last saved layout and go to the menu.
-  - **Controls**: a scrolling list to show or hide controls, as part of
-    the same edit. Drag the list to scroll it; tap a row to toggle it.
+  - **Controls**: the same list as the menu's, as part of the same
+    edit (Cancel undoes what was added too). Drag the list to scroll
+    it; tap a row to toggle it.
   - **Half grid**: snap to half cells.
   - **Analog**: switch to the overlay's analog-stick page, or back to
     the D-pad page, so either one can be laid out.
 - **Layout For**: save a layout for all content, for one core, or for
   one game. A game's layout applies over its core's, which applies over
   the one for all content.
-- **Controls**: show or hide each control from the menu.
-- **Add Control**: add a control the overlay has on its other pages,
-  such as an analog stick, save/load state, turbo or the keyboard. Each
-  button of a cluster (A, B, X, Y, the D-pad arrows) can also be added
-  on its own, next to the cluster.
+- **Controls**: every control in one list, each on or off. First the
+  controls of the page shown, then those the overlay has on its other
+  pages (an analog stick, save/load state, turbo, the keyboard, ...),
+  then each D-pad arrow and face button on its own, next to the
+  cluster. Switching on one the page doesn't have yet adds it in the
+  middle of the screen, to be dragged into place.
 - **Save Layout as Profile**: save the layout shown under a name.
 - **Load Profile**: put a saved profile in place of the layout chosen in
   Layout For, so one profile can be used for any number of cores or
@@ -61,7 +63,7 @@ theme.
   </tr>
   <tr>
     <td align="center"><img src="docs/touch-layout/editor-analog.png" width="200" alt="Editor on the analog page"><br>Analog page</td>
-    <td align="center"><img src="docs/touch-layout/add-control.png" width="200" alt="Add Control menu"><br>Add Control</td>
+    <td align="center"><img src="docs/touch-layout/controls-menu.png" width="200" alt="Controls menu"><br>Controls menu</td>
     <td></td>
   </tr>
 </table>
