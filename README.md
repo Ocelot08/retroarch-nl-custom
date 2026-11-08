@@ -2,9 +2,8 @@
 
 > **Disclaimer:** this fork was made with [Claude Code](https://claude.com/claude-code),
 > Anthropic's AI coding tool. Its changes to RetroArch were written by
-> Claude Code at the repository owner's direction, and tested on Linux,
-> and on the owner's phone. It is not affiliated with or supported by
-> the RetroArch/libretro project.
+> Claude Code at the repository owner's direction. It is not affiliated
+> with or supported by the RetroArch/libretro project.
 
 A fork of [RetroArch](https://github.com/libretro/RetroArch) for Android
 phones, built around editing the on-screen touch controls. Everything
