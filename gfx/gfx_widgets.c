@@ -2007,6 +2007,37 @@ bool gfx_widgets_visible(void *data)
    return false;
 }
 
+void gfx_widgets_set_overlay_grid(unsigned cells)
+{
+   retro_atomic_store_release_int(&dispwidget_st.overlay_grid, (int)cells);
+}
+
+/* 1px white lines at 30%, where the editor snaps controls to */
+static void gfx_widgets_draw_overlay_grid(gfx_display_t *p_disp,
+      gfx_display_ctx_driver_t *dispctx, void *userdata,
+      unsigned video_dims, unsigned cells)
+{
+   float color[16] = COLOR_HEX_TO_FLOAT(0xFFFFFF, 0.3f);
+   unsigned w      = VIDEO_SCALE_W(video_dims);
+   unsigned h      = VIDEO_SCALE_H(video_dims);
+   float cell      = (float)MAX(w, h) / (float)cells;
+   float pos;
+
+   if (cell < 1.0f)
+      return;
+
+   gfx_display_blend_begin(dispctx, userdata);
+   for (pos = cell; pos < (float)w; pos += cell)
+      gfx_display_draw_quad(p_disp, userdata, video_dims,
+            (int)(pos + 0.5f), 0, VIDEO_SCALE_PACK(1, h),
+            video_dims, color, NULL);
+   for (pos = cell; pos < (float)h; pos += cell)
+      gfx_display_draw_quad(p_disp, userdata, video_dims,
+            0, (int)(pos + 0.5f), VIDEO_SCALE_PACK(w, 1),
+            video_dims, color, NULL);
+   gfx_display_blend_end(dispctx, userdata);
+}
+
 static void gfx_widgets_frame_state(void *data)
 {
    size_t i;
@@ -2070,6 +2101,13 @@ static void gfx_widgets_frame_state(void *data)
    if (video_st->current_video && video_st->current_video->set_viewport)
       video_st->current_video->set_viewport(
             video_st->data, video_info->dims, true, false);
+
+   {
+      int grid = retro_atomic_load_acquire_int(&p_dispwidget->overlay_grid);
+      if (grid > 0)
+         gfx_widgets_draw_overlay_grid(p_disp, dispctx, userdata,
+               video_info->dims, (unsigned)grid);
+   }
 
    /* Font setup */
    font_driver_bind_block(p_dispwidget->gfx_widget_fonts.regular.font,

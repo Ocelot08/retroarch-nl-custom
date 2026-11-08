@@ -250,6 +250,9 @@ typedef struct dispgfx_widget
    void *task_cmds;
 #endif
    retro_atomic_int_t task_cmds_count;
+   /* Cells along the longer side of the grid the overlay layout
+    * editor shows, 0 for none: set by the main thread. */
+   retro_atomic_int_t overlay_grid;
    /* The owner's: task widgets waiting for room on screen. */
    disp_widget_msg_t* task_pending[MSG_QUEUE_PENDING_MAX];
    unsigned task_pending_size;
@@ -497,6 +500,10 @@ void gfx_widgets_ai_service_overlay_unload(void);
 int  gfx_widgets_ai_service_overlay_get_state(void);
 void gfx_widgets_ai_service_overlay_set_state(int state);
 #endif
+
+/* Shows the overlay layout editor's grid, @cells to the longer side of
+ * the screen, square; 0 hides it. */
+void gfx_widgets_set_overlay_grid(unsigned cells);
 
 #ifdef HAVE_CHEEVOS
 void gfx_widgets_update_cheevos_appearance(void);

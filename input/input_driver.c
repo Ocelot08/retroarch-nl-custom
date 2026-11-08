@@ -55,6 +55,9 @@
 #include <streams/file_stream.h>
 #include "../file_path_special.h"
 #include "../led/led_defines.h"
+#ifdef HAVE_GFX_WIDGETS
+#include "../gfx/gfx_widgets.h"
+#endif
 #endif
 #include "../gfx/gfx_instrument.h"
 #include "../gfx/gfx_surface.h"
@@ -7005,6 +7008,10 @@ enum input_overlay_edit_flags
    OVERLAY_EDIT_BACK_NEW = (1 << 7)
 };
 
+/* Grid cells to the longer side of the screen, square, that the left
+ * and top edges of what is dragged snap to */
+#define OVERLAY_EDIT_GRID 50
+
 static struct
 {
    input_overlay_edit_item_t *items;
@@ -7013,6 +7020,10 @@ static struct
    size_t cap;
    float start_x;
    float start_y;
+   /* Left and top edges of what is drawn of the grabbed control, as
+    * fractions of the screen */
+   float left;
+   float top;
    unsigned page;
    uint8_t flags;
 } input_overlay_edit;
@@ -7391,6 +7402,9 @@ static void input_overlay_edit_finish(input_overlay_t *ol, bool save)
    input_overlay_edit_drop(ol);
    free(input_overlay_edit.items);
    memset(&input_overlay_edit, 0, sizeof(input_overlay_edit));
+#ifdef HAVE_GFX_WIDGETS
+   gfx_widgets_set_overlay_grid(0);
+#endif
 
    if (save && ol && (flags & OVERLAY_EDIT_CHANGED))
    {
@@ -7508,6 +7522,19 @@ static void input_overlay_edit_grab(input_overlay_t *ol, float x, float y)
       }
    }
 
+   input_overlay_edit.left = 1.0f;
+   input_overlay_edit.top  = 1.0f;
+   for (i = 0; i < active->size; i++)
+   {
+      const struct overlay_desc *desc = &active->descs[i];
+      if (     desc->layout_group != group
+            || !OVERLAY_HAS_IMAGE(&desc->image)
+            || (desc->flags & OVERLAY_DESC_LAYOUT_HIDDEN))
+         continue;
+      input_overlay_edit.left = MIN(input_overlay_edit.left, desc->mod_x);
+      input_overlay_edit.top  = MIN(input_overlay_edit.top,  desc->mod_y);
+   }
+
    input_overlay_edit.page     = (unsigned)index;
    input_overlay_edit.start_x  = x;
    input_overlay_edit.start_y  = y;
@@ -7525,6 +7552,24 @@ static void input_overlay_edit_move(input_overlay_t *ol, float x, float y)
          && fabs(dx) < 0.015f && fabs(dy) < 0.015f)
       return;
    input_overlay_edit.flags |= OVERLAY_EDIT_MOVED | OVERLAY_EDIT_CHANGED;
+
+   /* The control's left and top edges onto the grid */
+   {
+      unsigned dims = video_driver_get_output_dims();
+      float w       = (float)VIDEO_SCALE_W(dims);
+      float h       = (float)VIDEO_SCALE_H(dims);
+      float cell    = MAX(w, h) / OVERLAY_EDIT_GRID;
+      if (     cell >= 1.0f
+            && ol->active->mod_w > 0.0f && ol->active->mod_h > 0.0f)
+      {
+         float left = (input_overlay_edit.left + dx * ol->active->mod_w) * w;
+         float top  = (input_overlay_edit.top  + dy * ol->active->mod_h) * h;
+         left = (float)floor(left / cell + 0.5f) * cell;
+         top  = (float)floor(top  / cell + 0.5f) * cell;
+         dx   = (left / w - input_overlay_edit.left) / ol->active->mod_w;
+         dy   = (top  / h - input_overlay_edit.top)  / ol->active->mod_h;
+      }
+   }
 
    for (i = 0; i < input_overlay_edit.count; i++)
    {
@@ -7686,6 +7731,10 @@ void input_overlay_edit_begin(void)
       if (runloop_st->flags & RUNLOOP_FLAG_PAUSED)
          input_overlay_edit.flags |= OVERLAY_EDIT_PAUSED;
    }
+
+#ifdef HAVE_GFX_WIDGETS
+   gfx_widgets_set_overlay_grid(OVERLAY_EDIT_GRID);
+#endif
 
    _msg = msg_hash_to_str(MSG_OVERLAY_EDIT_LAYOUT_START);
    runloop_msg_queue_push(_msg, strlen(_msg), 2, 300, true, NULL,
