@@ -643,8 +643,8 @@ static bool task_overlay_desc_box(config_file_t *conf, unsigned ol_idx,
 }
 
 /* How much of the room between a drawn D-pad's arms and its middle
- * they are drawn across: arms 30% nearer to each other than placed */
-#define OVERLAY_DRAW_DPAD_CLOSER 0.3f
+ * they are drawn across: arms 45% nearer to each other than placed */
+#define OVERLAY_DRAW_DPAD_CLOSER 0.45f
 
 /* Draws @desc's button in place of its image, if it is one of those
  * drawn (input_overlay_draw_classify), at the size it is shown */
