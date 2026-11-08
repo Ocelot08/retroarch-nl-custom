@@ -87,6 +87,8 @@ struct overlay_loader
    unsigned draw_dims;
    /* The pages keep their own shape on screen (auto scale) */
    bool draw_auto_scale;
+   /* The outline's width in sixteenths of a grid cell */
+   unsigned draw_stroke;
 #endif
 
    uint16_t overlay_types;
@@ -751,6 +753,12 @@ static bool task_overlay_load_desc_drawn(
    /* A little over the size shown, as the page may be scaled up */
    draw.width  = (unsigned)MIN(1024.0f, MAX(8.0f, 2.0f * rx * w * 1.25f));
    draw.height = (unsigned)MIN(1024.0f, MAX(8.0f, 2.0f * ry * h * 1.25f));
+   draw.filled      = (loader->flags & OVERLAY_LOADER_FILLED) != 0;
+   /* Sixteenths of a grid cell (OVERLAY_EDIT_GRID to the longer side
+    * of the screen), drawn 1.25 times as the button is */
+   draw.stroke      = loader->draw_stroke
+      * MAX(VIDEO_SCALE_W(loader->draw_dims),
+            VIDEO_SCALE_H(loader->draw_dims)) / 50.0f / 16.0f * 1.25f;
    draw.pack_width  = (unsigned)MAX(1.0f, 2.0f * pack_rx * w * 1.25f);
    draw.pack_height = (unsigned)MAX(1.0f, 2.0f * pack_ry * h * 1.25f);
 
@@ -1897,6 +1905,9 @@ static void task_overlay_handler(retro_task_t *task)
       data->active                      = loader->active;
       data->size                        = loader->size;
       data->flags                       = loader->flags;
+#ifdef RARCH_INTERNAL
+      data->stroke                      = loader->draw_stroke;
+#endif
       data->overlay_types               = loader->overlay_types;
       data->overlay_path                = loader->overlay_path;
       data->image_list                  = loader->image_list;
@@ -2113,16 +2124,36 @@ bool task_push_overlay_load_default(
 #ifdef RARCH_INTERNAL
    gfx_surface_image_request(&loader->req, gfx_surface_wants_rgba(),
          GFX_SURFACE_REQ_COMPRESSED);
-   /* Buttons are drawn unless the layout says not to */
+   /* Buttons are drawn unless the layout says not to, and outlined
+    * unless it says filled */
    {
+      char style[16];
       bool drawn = true;
+      if (     !is_osk
+            && config_get_array(conf, "overlay_button_style",
+               style, sizeof(style))
+            && string_is_equal(style, "filled"))
+         loader->flags |= OVERLAY_LOADER_FILLED;
       config_get_bool(conf, "overlay_drawn_buttons", &drawn);
+      loader->draw_stroke = 2;
+      config_get_uint(conf, "overlay_button_stroke", &loader->draw_stroke);
+      loader->draw_stroke = MAX(1, MIN(loader->draw_stroke, 8));
       if (drawn && !is_osk)
       {
+         /* The font this build keeps with its overlays, else the
+          * menu's, which is the same */
          char font_path[PATH_MAX_LENGTH];
-         fill_pathname_join_special(font_path,
-               config_get_ptr()->paths.directory_assets,
-               "ozone/regular.ttf", sizeof(font_path));
+         char dir[DIR_MAX_LENGTH];
+         fill_pathname_basedir(dir, overlay_path, sizeof(dir));
+         fill_pathname_join_special(font_path, dir,
+               "../neo-custom/button-font.ttf", sizeof(font_path));
+         if (!path_is_valid(font_path))
+            fill_pathname_join_special(font_path,
+                  config_get_ptr()->paths.directory_assets,
+                  "ozone/regular.ttf", sizeof(font_path));
+         if (!path_is_valid(font_path))
+            RARCH_WARN("[Overlay] No font for the drawn buttons' labels: "
+                  "\"%s\".\n", font_path);
          loader->draw_font = input_overlay_draw_font_new(font_path);
          loader->draw_dims = video_driver_get_output_dims();
          loader->draw_auto_scale =

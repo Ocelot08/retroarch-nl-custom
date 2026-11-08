@@ -2186,6 +2186,15 @@ void input_overlay_layout_reset(void);
 bool input_overlay_layout_drawn(void);
 bool input_overlay_layout_drawn_toggle(void);
 
+/* Button Style: filled buttons with dark labels, or outlined ones with
+ * light labels, kept in the layout of the scope chosen */
+bool input_overlay_layout_filled(void);
+bool input_overlay_layout_filled_toggle(void);
+/* Stroke Width of the drawn buttons, in pixels of this screen, and a
+ * step up or down */
+unsigned input_overlay_layout_stroke(void);
+bool input_overlay_layout_stroke_step(int dir);
+
 /* Named copies of the layout shown, kept apart for each overlay:
  * saved from what all the scopes make of it, loaded into the scope
  * chosen in place of its layout. The list holds the names, sorted. */

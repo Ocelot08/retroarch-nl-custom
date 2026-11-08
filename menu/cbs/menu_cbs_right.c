@@ -1354,6 +1354,18 @@ static int menu_cbs_init_bind_right_compare_type(menu_file_list_cbs_t *cbs,
 }
 
 #ifdef HAVE_OVERLAY
+static int action_right_overlay_layout_fill(unsigned type, const char *label,
+      bool wraparound)
+{
+   return input_overlay_layout_filled_toggle() ? 0 : -1;
+}
+
+static int action_right_overlay_layout_stroke(unsigned type, const char *label,
+      bool wraparound)
+{
+   return input_overlay_layout_stroke_step(1) ? 0 : -1;
+}
+
 static int action_right_overlay_layout_drawn(unsigned type, const char *label,
       bool wraparound)
 {
@@ -1462,6 +1474,12 @@ static int menu_cbs_init_bind_right_compare_label(menu_file_list_cbs_t *cbs,
                break;
             case MENU_ENUM_LABEL_OVERLAY_LAYOUT_DRAWN:
                BIND_ACTION_RIGHT(cbs, action_right_overlay_layout_drawn);
+               break;
+            case MENU_ENUM_LABEL_OVERLAY_LAYOUT_FILL:
+               BIND_ACTION_RIGHT(cbs, action_right_overlay_layout_fill);
+               break;
+            case MENU_ENUM_LABEL_OVERLAY_LAYOUT_STROKE:
+               BIND_ACTION_RIGHT(cbs, action_right_overlay_layout_stroke);
                break;
 #endif
             case MENU_ENUM_LABEL_PLAYLIST_MANAGER_RIGHT_THUMBNAIL_MODE:

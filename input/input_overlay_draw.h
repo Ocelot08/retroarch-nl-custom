@@ -52,6 +52,12 @@ typedef struct
     * and arrow follow the button's size but not its shape */
    unsigned pack_width;
    unsigned pack_height;
+   /* The outline's width in the same pixels, the same for every
+    * button whatever its size; 0 for a width by its size */
+   float stroke;
+   /* Filled: a light button with dark label, rather than a dark one
+    * with a light outline and label */
+   bool filled;
    char label[16];
 } overlay_draw_t;
 

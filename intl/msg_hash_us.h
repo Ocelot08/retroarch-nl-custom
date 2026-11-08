@@ -15213,6 +15213,30 @@ MSG_HASH(
    "Show or hide the controls of the overlay page shown. Below them are those of its other pages, then each D-pad and face button on its own: switching one on adds it, in the middle of the screen."
    )
 MSG_HASH(
+   MENU_ENUM_LABEL_VALUE_OVERLAY_LAYOUT_STYLE,
+   "Button Style"
+   )
+MSG_HASH(
+   MENU_ENUM_SUBLABEL_OVERLAY_LAYOUT_STYLE,
+   "How the buttons are drawn, for all of them, kept in the layout chosen in 'Layout For'."
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_VALUE_OVERLAY_LAYOUT_FILL,
+   "Style"
+   )
+MSG_HASH(
+   MENU_ENUM_SUBLABEL_OVERLAY_LAYOUT_FILL,
+   "Outline: dark buttons with a light outline and labels. Filled: light buttons with dark labels. Only drawn buttons; images stay as they are."
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_VALUE_OVERLAY_LAYOUT_STROKE,
+   "Stroke Width"
+   )
+MSG_HASH(
+   MENU_ENUM_SUBLABEL_OVERLAY_LAYOUT_STROKE,
+   "The outline of every drawn button, the same width whatever its size."
+   )
+MSG_HASH(
    MENU_ENUM_LABEL_VALUE_OVERLAY_LAYOUT_DRAWN,
    "Drawn Buttons"
    )
@@ -32694,6 +32718,18 @@ MSG_HASH(
 MSG_HASH(
    MSG_OVERLAY_EDIT_CELLS,
    "%s cells"
+   )
+MSG_HASH(
+   MSG_OVERLAY_BUTTON_STYLE_OUTLINE,
+   "Outline"
+   )
+MSG_HASH(
+   MSG_OVERLAY_BUTTON_STYLE_FILLED,
+   "Filled"
+   )
+MSG_HASH(
+   MSG_OVERLAY_BUTTON_STROKE_PX,
+   "%u px"
    )
 MSG_HASH(
    MSG_FAILED_TO_LOAD_STATE,

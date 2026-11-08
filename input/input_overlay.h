@@ -109,7 +109,9 @@ enum OVERLAY_LOADER_FLAGS
     * overlay was parsed (task_overlay_predecode) */
    OVERLAY_LOADER_PREDECODED   = (1 << 4),
    /* Its buttons were drawn (input_overlay_draw.h), not loaded */
-   OVERLAY_LOADER_DRAWN        = (1 << 5)
+   OVERLAY_LOADER_DRAWN        = (1 << 5),
+   /* Its buttons are filled rather than outlined */
+   OVERLAY_LOADER_FILLED       = (1 << 6)
 };
 
 enum INPUT_OVERLAY_FLAGS
@@ -507,8 +509,11 @@ struct input_overlay
     * applied for */
    uint32_t layout_key;
 
-   /* Its buttons were drawn, as the layout asked */
+   /* Its buttons were drawn, and filled, as the layout asked */
    bool drawn;
+   bool filled;
+   /* Their outline, in sixteenths of a grid cell */
+   uint8_t stroke;
    uint8_t flags;
 };
 
@@ -561,6 +566,8 @@ typedef struct
     * pack takes them over with the images. */
    struct string_list *anim_list;
    size_t size;
+   /* The drawn buttons' outline, in sixteenths of a grid cell */
+   unsigned stroke;
    uint16_t overlay_types;
    uint8_t flags;
 } overlay_task_data_t;

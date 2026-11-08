@@ -391,6 +391,8 @@ bool input_overlay_draw_render(struct texture_image *img,
       radius = short_px * 0.16f;
    else if (draw->shape == OVERLAY_DRAW_RING)
       stroke = MAX(1.5f, short_px * 0.02f);
+   if (draw->stroke > 0.0f)
+      stroke = MIN(draw->stroke, short_px * 0.25f);
    if (draw->shape == OVERLAY_DRAW_ARROW)
       overlay_draw_arrow_points(draw->dir, (float)w, (float)h,
             ((draw->dir < 2) ? pack_w : pack_h) * grow * 0.68f,
@@ -443,7 +445,14 @@ bool input_overlay_draw_render(struct texture_image *img,
             alpha = outer;
          }
          text  = cover[y * w + x] * inner;
-         value = value + (OVERLAY_DRAW_LINE - value) * text;
+         if (draw->filled && !hollow)
+         {
+            /* All light, the label dark */
+            value = OVERLAY_DRAW_LINE
+               + (OVERLAY_DRAW_FILL - OVERLAY_DRAW_LINE) * text;
+         }
+         else
+            value = value + (OVERLAY_DRAW_LINE - value) * text;
 
          v = (unsigned)(value + 0.5f);
          a = (unsigned)(alpha * 255.0f + 0.5f);

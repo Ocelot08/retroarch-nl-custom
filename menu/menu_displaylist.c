@@ -12834,10 +12834,10 @@ unsigned menu_displaylist_build_list(
             static const enum msg_hash_enums rows[][2] = {
                { MENU_ENUM_LABEL_OVERLAY_LAYOUT_SCOPE,
                   MENU_ENUM_LABEL_VALUE_OVERLAY_LAYOUT_SCOPE },
+               { MENU_ENUM_LABEL_OVERLAY_LAYOUT_STYLE,
+                  MENU_ENUM_LABEL_VALUE_OVERLAY_LAYOUT_STYLE },
                { MENU_ENUM_LABEL_OVERLAY_EDIT_LAYOUT,
                   MENU_ENUM_LABEL_VALUE_OVERLAY_EDIT_LAYOUT },
-               { MENU_ENUM_LABEL_OVERLAY_LAYOUT_DRAWN,
-                  MENU_ENUM_LABEL_VALUE_OVERLAY_LAYOUT_DRAWN },
                { MENU_ENUM_LABEL_OVERLAY_LAYOUT_CONTROLS,
                   MENU_ENUM_LABEL_VALUE_OVERLAY_LAYOUT_CONTROLS },
                { MENU_ENUM_LABEL_OVERLAY_LAYOUT_PROFILE_SAVE,
@@ -12871,6 +12871,25 @@ unsigned menu_displaylist_build_list(
                         MENU_ENUM_LABEL_OVERLAY_LAYOUT_CONTROL_STR,
                         MENU_ENUM_LABEL_OVERLAY_LAYOUT_CONTROL,
                         MENU_SETTING_ACTION, 0, i, NULL))
+                  count++;
+         }
+         break;
+      case DISPLAYLIST_OVERLAY_BUTTON_STYLE_LIST:
+         {
+            static const enum msg_hash_enums rows[][2] = {
+               { MENU_ENUM_LABEL_OVERLAY_LAYOUT_FILL,
+                  MENU_ENUM_LABEL_VALUE_OVERLAY_LAYOUT_FILL },
+               { MENU_ENUM_LABEL_OVERLAY_LAYOUT_DRAWN,
+                  MENU_ENUM_LABEL_VALUE_OVERLAY_LAYOUT_DRAWN },
+               { MENU_ENUM_LABEL_OVERLAY_LAYOUT_STROKE,
+                  MENU_ENUM_LABEL_VALUE_OVERLAY_LAYOUT_STROKE },
+            };
+
+            for (i = 0; i < ARRAY_SIZE(rows); i++)
+               if (menu_entries_append(list,
+                        msg_hash_to_str(rows[i][1]),
+                        msg_hash_to_str(rows[i][0]),
+                        rows[i][0], MENU_SETTING_ACTION, 0, 0, NULL))
                   count++;
          }
          break;
@@ -16962,6 +16981,7 @@ static bool menu_displaylist_ctl_internal(
          case DISPLAYLIST_OVERLAY_LAYOUT_CONTROLS_LIST:
          case DISPLAYLIST_OVERLAY_LAYOUT_PROFILE_LOAD_LIST:
          case DISPLAYLIST_OVERLAY_LAYOUT_PROFILE_DELETE_LIST:
+         case DISPLAYLIST_OVERLAY_BUTTON_STYLE_LIST:
 #endif
          case DISPLAYLIST_ACCOUNTS_CHEEVOS_LIST:
          case DISPLAYLIST_ACCOUNTS_LIST:

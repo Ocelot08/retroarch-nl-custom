@@ -13,7 +13,7 @@ how much work it is:
 | 1 | Screen placement (built) | - | Medium |
 | 2 | Button size (built) | - | Medium |
 | 3 | Drawn buttons (built) | - | Large |
-| 4 | Button shapes and styles | 3 | Small |
+| 4 | Button style (built) | 3 | Small |
 | 5 | Custom buttons | 3 | Medium |
 | 6 | Buttons to switch profiles | 5 | Small |
 
@@ -77,13 +77,17 @@ away from what is being sized, with Reset and Done. Built together.
 - Made through the overlay's own images, so every video driver, the
   press highlight, hiding and sizing work as before.
 
-## 4. Button shapes and styles
+## 4. Button style
 
-*Needs first: 3. Effort: Small.*
+*Needs first: 3. Effort: Small. Built.*
 
-- A shape for the main buttons: circle or rounded rectangle.
-- Styles, such as filled or outline only.
-- Options of the drawn buttons, chosen in the editor.
+- Touch Layout > Button Style, for all buttons at once, per Layout
+  For: Style (Outline or Filled), Drawn Buttons (on or off) and Stroke
+  Width (the same outline on every drawn button, whatever its size).
+- Filled applies to drawn buttons; images, hotkeys included, stay as
+  they are.
+- Choosing a shape (round or rounded corners) per button was dropped
+  for this.
 
 ## 5. Custom buttons
 

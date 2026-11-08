@@ -41,6 +41,10 @@ cp "$here/rgui_themes/"*.cfg "$dst/assets/rgui/"
 named="$dst/overlays/gamepads/Named_Overlays_Custom"
 mkdir -p "$named" "$dst/overlays/gamepads/neo-custom/img"
 cp "$here/system_overlays/img/"*.png "$dst/overlays/gamepads/neo-custom/img/"
+# The drawn buttons' labels, in the menu's font, kept with the overlays
+# so that they are found wherever the menu's assets are
+cp "$src/retroarch-assets/ozone/regular.ttf" \
+   "$dst/overlays/gamepads/neo-custom/button-font.ttf"
 for name in "Nintendo - Nintendo DS" "Nintendo - Nintendo DSi"; do
    cp "$here/system_overlays/Nintendo - Nintendo DS.cfg" "$named/$name.cfg"
 done

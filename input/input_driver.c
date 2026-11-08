@@ -13236,6 +13236,8 @@ static void input_overlay_loaded(retro_task_t *task,
    ol->path        = data->overlay_path;
    ol->layout_key  = input_overlay_layout_key();
    ol->drawn       = (data->flags & OVERLAY_LOADER_DRAWN) != 0;
+   ol->filled      = (data->flags & OVERLAY_LOADER_FILLED) != 0;
+   ol->stroke      = (uint8_t)data->stroke;
    input_overlay_loads++;
    ol->num_images  = data->image_list->size;
    ol->next_index  = (unsigned)((ol->index + 1) % ol->size);
@@ -13515,9 +13517,9 @@ bool input_overlay_layout_drawn(void)
    return ol && ol->drawn;
 }
 
-/* Draws the buttons, or loads their images, from now on for the scope
- * chosen, and loads the overlay again */
-bool input_overlay_layout_drawn_toggle(void)
+/* Sets @key to @value in the layout of the scope chosen, and loads the
+ * overlay again */
+static bool input_overlay_layout_set(const char *key, const char *value)
 {
    char path[PATH_MAX_LENGTH];
    char dir[DIR_MAX_LENGTH];
@@ -13538,8 +13540,7 @@ bool input_overlay_layout_drawn_toggle(void)
       return false;
 
    input_overlay_edit_finish(input_driver_st.overlay_ptr, true);
-   config_set_string(conf, "overlay_drawn_buttons",
-         ol->drawn ? "false" : "true");
+   config_set_string(conf, key, value);
    fill_pathname_basedir(dir, path, sizeof(dir));
    if (!path_is_directory(dir))
       path_mkdir(dir);
@@ -13548,6 +13549,56 @@ bool input_overlay_layout_drawn_toggle(void)
    if (ret)
       input_overlay_layout_reload(ol);
    return ret;
+}
+
+/* Draws the buttons, or loads their images, from now on for the scope
+ * chosen */
+bool input_overlay_layout_drawn_toggle(void)
+{
+   input_overlay_t *ol = input_overlay_layout_target();
+   return ol && input_overlay_layout_set("overlay_drawn_buttons",
+         ol->drawn ? "false" : "true");
+}
+
+bool input_overlay_layout_filled(void)
+{
+   input_overlay_t *ol = input_overlay_layout_target();
+   return ol && ol->filled;
+}
+
+/* The outline width as Stroke Width shows it: pixels on this screen */
+unsigned input_overlay_layout_stroke(void)
+{
+   unsigned dims       = video_driver_get_output_dims();
+   input_overlay_t *ol = input_overlay_layout_target();
+   float px            = (ol ? ol->stroke : 2)
+      * MAX(VIDEO_SCALE_W(dims), VIDEO_SCALE_H(dims))
+      / (float)OVERLAY_EDIT_GRID / 16.0f;
+   return (unsigned)MAX(1.0f, px + 0.5f);
+}
+
+/* One step thicker or thinner, from 1 to 8 sixteenths of a cell */
+bool input_overlay_layout_stroke_step(int dir)
+{
+   char val[8];
+   input_overlay_t *ol = input_overlay_layout_target();
+   int stroke          = (ol ? ol->stroke : 2) + dir;
+   if (!ol)
+      return false;
+   if (stroke < 1)
+      stroke = 8;
+   else if (stroke > 8)
+      stroke = 1;
+   snprintf(val, sizeof(val), "%d", stroke);
+   return input_overlay_layout_set("overlay_button_stroke", val);
+}
+
+/* Filled buttons, or outlined, from now on for the scope chosen */
+bool input_overlay_layout_filled_toggle(void)
+{
+   input_overlay_t *ol = input_overlay_layout_target();
+   return ol && input_overlay_layout_set("overlay_button_style",
+         ol->filled ? "outline" : "filled");
 }
 
 void input_overlay_layout_reset(void)
