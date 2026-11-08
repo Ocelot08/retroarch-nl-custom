@@ -704,6 +704,29 @@ static bool task_overlay_load_desc_drawn(
    ry = (float)rstrtod(tok[5], NULL);
    pack_rx = rx;
    pack_ry = ry;
+   /* A profile's desc is as the user sized it; the pack's in _pack */
+   {
+      char pack[128];
+      snprintf(key, sizeof(key), "overlay%u_desc%u_pack", ol_idx, desc_idx);
+      if (config_get_array(conf, key, pack, sizeof(pack)))
+      {
+         char *q  = pack;
+         float v[4];
+         unsigned m = 0;
+         while (m < 4)
+         {
+            v[m++] = (float)rstrtod(q, &q);
+            if (*q != ',')
+               break;
+            q++;
+         }
+         if (m == 4)
+         {
+            pack_rx = v[2];
+            pack_ry = v[3];
+         }
+      }
+   }
 
    snprintf(key, sizeof(key), "overlay%u_desc%u_layout_w", ol_idx, desc_idx);
    if (config_get_float(conf, key, &tmp) && tmp > 0.0f)
@@ -1132,6 +1155,34 @@ static bool task_overlay_load_desc(
    desc->pack_x  = desc->x;
    desc->pack_y  = desc->y;
 
+   /* A layout profile writes where the user put it in the desc, which
+    * any overlay loader reads, and where the pack had it in _pack */
+   strlcpy_lit(overlay_key + _len, "_pack", sizeof(overlay_key) - _len);
+   {
+      char pack[128];
+      if (config_get_array(conf, overlay_key, pack, sizeof(pack)))
+      {
+         char *p      = pack;
+         float v[4];
+         unsigned n   = 0;
+         while (n < 4)
+         {
+            v[n++] = (float)rstrtod(p, &p);
+            if (*p != ',')
+               break;
+            p++;
+         }
+         if (n == 4)
+         {
+            desc->pack_x       = v[0];
+            desc->pack_y       = v[1];
+            desc->pack_range_x = v[2];
+            desc->pack_range_y = v[3];
+            desc->flags       |= OVERLAY_DESC_LAYOUT_PLACED;
+         }
+      }
+   }
+
    /* A user layout position, normalized whatever the desc uses */
    strlcpy_lit(overlay_key + _len, "_layout_x", sizeof(overlay_key) - _len);
    if (config_get_float(conf, overlay_key, &tmp_float))
@@ -1200,8 +1251,11 @@ static bool task_overlay_load_desc(
 
    desc->range_x      = (float)rstrtod(elems[4], NULL) * width_mod;
    desc->range_y      = (float)rstrtod(elems[5], NULL) * height_mod;
-   desc->pack_range_x = desc->range_x;
-   desc->pack_range_y = desc->range_y;
+   if (!(desc->flags & OVERLAY_DESC_LAYOUT_PLACED) || desc->pack_range_x <= 0.0f)
+   {
+      desc->pack_range_x = desc->range_x;
+      desc->pack_range_y = desc->range_y;
+   }
 
    /* A user layout size, normalized whatever the desc uses */
    strlcpy_lit(overlay_key + _len, "_layout_w", sizeof(overlay_key) - _len);
@@ -2089,7 +2143,8 @@ bool task_push_overlay_load_default(
    }
 
 #ifdef RARCH_INTERNAL
-   if (!is_osk)
+   /* A layout profile has its layout in it */
+   if (!is_osk && !input_overlay_is_profile(overlay_path))
       task_overlay_append_layout(conf, overlay_path);
 #endif
 
@@ -2144,9 +2199,16 @@ bool task_push_overlay_load_default(
           * menu's, which is the same */
          char font_path[PATH_MAX_LENGTH];
          char dir[DIR_MAX_LENGTH];
-         fill_pathname_basedir(dir, overlay_path, sizeof(dir));
+         fill_pathname_expand_special(dir,
+               config_get_ptr()->paths.directory_overlay, sizeof(dir));
          fill_pathname_join_special(font_path, dir,
-               "../neo-custom/button-font.ttf", sizeof(font_path));
+               "gamepads/neo-custom/button-font.ttf", sizeof(font_path));
+         if (!path_is_valid(font_path))
+         {
+            fill_pathname_basedir(dir, overlay_path, sizeof(dir));
+            fill_pathname_join_special(font_path, dir,
+                  "../neo-custom/button-font.ttf", sizeof(font_path));
+         }
          if (!path_is_valid(font_path))
             fill_pathname_join_special(font_path,
                   config_get_ptr()->paths.directory_assets,

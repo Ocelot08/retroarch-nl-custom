@@ -2202,6 +2202,9 @@ bool input_overlay_layout_profile_save(const char *name);
 bool input_overlay_layout_profile_load(const char *name);
 bool input_overlay_layout_profile_delete(const char *name);
 struct string_list *input_overlay_layout_profile_list(bool builtin);
+
+/* Whether @path is a layout profile's, a gamepad (overlays/gamepads/custom) */
+bool input_overlay_is_profile(const char *path);
 #endif
 
 #ifdef HAVE_BSV_MOVIE

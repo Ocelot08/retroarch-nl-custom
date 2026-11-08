@@ -55,26 +55,25 @@ Layout**, or **Quick Menu → On-Screen Overlay → Touch Layout** in a game.
     state, ...) keep their icons, in either style. Off shows the images.
   - **Stroke Width**: the outline of every drawn button, the same
     whatever its size.
-- **Layout For**: save a layout for all content, for one core, or for
-  one game. A game's layout applies over its core's, which applies over
-  the one for all content.
+- **Layout For**: what Load Gamepad picks a gamepad for: all content,
+  one core, or one game.
 - **Controls**: every control in one list, each on or off. First the
   controls of the page shown, then those the overlay has on its other
   pages (an analog stick, save/load state, turbo, the keyboard, ...),
   then each D-pad arrow and face button on its own, next to the
   cluster. Switching on one the page doesn't have yet adds it in the
   middle of the screen, to be dragged into place.
-- **Profiles**: a profile is a controller with its layout. Three come
-  built in: **Main**, **Nintendo DS** and **Nintendo 3DS**.
-  - **Save Layout as Profile**: save the controller shown and its
-    layout under a name.
-  - **Load Profile**: use a profile for what Layout For chooses (all
-    content, a core or a game): its controller and its layout. Main
-    for all content leaves DS and 3DS games on their own controls.
-  - **Delete Profile**: delete a saved profile. Layouts already loaded
-    from it are not changed.
-- **Reset Layout**: drop the layout chosen in Layout For, and the
-  controller a profile chose for it.
+- **Gamepads**: what you lay out is a gamepad, an overlay preset of its
+  own (RetroArch's word for an overlay config). Three come built in:
+  **Main**, **Nintendo DS** and **Nintendo 3DS**; DS and 3DS games
+  start on theirs, everything else on Main.
+  - **Edit Layout** changes the gamepad shown, for everything using it.
+  - **Save as Gamepad**: a copy of the gamepad shown, as laid out, to
+    lay out apart, say for one game.
+  - **Load Gamepad**: use a gamepad for what Layout For chooses (all
+    content, a core or a game).
+  - **Delete Gamepad**: delete one you saved.
+- **Reset Gamepad**: put a built-in gamepad back as it comes.
 
 #### Screenshots
 
@@ -94,12 +93,12 @@ theme.
   </tr>
 </table>
 
-Layouts are saved apart from the overlay itself, in
-`config/overlay_layouts/` (all content), `config/overlay_layouts/<core>/`
-and `config/overlay_layouts/<core>/<game>/`, so updating overlays does
-not lose them. Profiles are in `config/overlay_layouts/profiles/`, and
-the controller a profile chose for a scope in that scope's
-`controller.cfg`.
+Gamepads are kept in `overlays/gamepads/custom/` as ordinary overlay
+config files, which any RetroArch can load: buttons where you put them,
+with RetroArch's standard images. This build draws its own buttons in
+their place, from extra settings other versions ignore. The gamepad a
+core or game uses is in `config/overlay_layouts/<core>[/<game>]/controller.cfg`.
+Layouts from before gamepads are turned into gamepads the first time.
 
 ### Android defaults
 

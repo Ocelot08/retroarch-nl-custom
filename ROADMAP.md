@@ -15,7 +15,7 @@ how much work it is:
 | 3 | Drawn buttons (built) | - | Large |
 | 4 | Button style (built) | 3 | Small |
 | 5 | Custom buttons | 3 | Medium |
-| 6 | Buttons to switch profiles | 5 | Small |
+| 6 | Buttons to switch gamepads | 5 | Small |
 
 Test on the phone at each checkpoint below before building on: the
 Linux build used for development has no Android Back, keyboard,
@@ -36,7 +36,7 @@ away from what is being sized, with Reset and Done. Built together.
 - The game keeps its own shape inside the box. A Stretch option to
   fill it can come later.
 - Shared by the D-pad and analog pages.
-- Saved with Layout For (all content, core or game) and with profiles,
+- Saved with Layout For (all content, core or game) and with gamepads,
   like the controls. It is written as the overlay page's own viewport
   setting (`overlayN_viewport`) in the layout file.
 - Reset keeps the width and fits the height to the game's shape.
@@ -98,12 +98,12 @@ away from what is being sized, with Reset and Done. Built together.
 - Needs a way in the editor to make a button, type its label and pick
   its input.
 
-## 6. Buttons to switch profiles
+## 6. Buttons to switch gamepads
 
 *Needs first: 5. Effort: Small.*
 
-- On-screen buttons that switch to a saved layout profile.
-- A custom button whose action is a profile instead of an input.
+- On-screen buttons that switch to another gamepad.
+- A custom button whose action is a gamepad instead of an input.
 
 ## Test checkpoints
 
@@ -125,7 +125,7 @@ right first.
   OpenGL (Settings > Drivers > Video).
 - Turn the phone, and tick Analog: sizes and the screen box carry to
   the analog page, and landscape keeps its own.
-- Save for a core and for a game (Layout For); Save Layout as Profile,
+- Save for a core and for a game (Layout For); Save as Gamepad,
   load it elsewhere: sizes and the screen come with it.
 - DS and 3DS: the same, on their own controls; the swap screens
   button still swaps.
@@ -147,7 +147,7 @@ right first.
 ### C. After 5 and 6
 
 - A custom button sends the input chosen, in game, and its label
-  shows; it survives Save, profiles and a restart.
-- A profile button switches layouts in game, including between a
+  shows; it survives Save, gamepads and a restart.
+- A gamepad button switches gamepads in game, including between a
   core's and a game's.
 

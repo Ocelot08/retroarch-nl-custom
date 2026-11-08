@@ -32,6 +32,7 @@
 #include <sys/socket.h>
 #endif
 #include <string/stdstring.h>
+#include <string/rstrtod.h>
 #include <encodings/utf.h>
 #include <clamping.h>
 #include <compat/intrinsics.h>
@@ -7245,6 +7246,13 @@ size_t input_overlay_layout_scope_name(char *s, size_t len)
    return strlcpy(s, msg_hash_to_str(MSG_OVERLAY_LAYOUT_SCOPE_ALL), len);
 }
 
+static void input_overlay_layout_file(char *s, size_t len,
+      const char *overlay_path);
+static bool input_overlay_profile_normalize_file(const char *path);
+static const char *input_overlay_profile_for(const char *pack);
+static int input_overlay_builtin_profile_find(const char *name);
+static bool input_overlay_builtin_profile_reset(unsigned i);
+
 static bool input_overlay_layout_save(const input_overlay_t *ol)
 {
    size_t i, j;
@@ -7255,8 +7263,7 @@ static bool input_overlay_layout_save(const input_overlay_t *ol)
    config_file_t *conf = NULL;
    bool ret            = false;
 
-   input_overlay_layout_path(path, sizeof(path), ol->path,
-         input_overlay_layout_scope());
+   input_overlay_layout_file(path, sizeof(path), ol->path);
    if (!*path)
       return false;
 
@@ -7332,6 +7339,9 @@ static bool input_overlay_layout_save(const input_overlay_t *ol)
                   | OVERLAY_DESC_LAYOUT_HIDE_EDITED
                   | OVERLAY_DESC_LAYOUT_SIZE_EDITED);
       }
+      /* In a profile, in the descs, for any loader */
+      if (input_overlay_is_profile(path))
+         input_overlay_profile_normalize_file(path);
       RARCH_LOG("[Overlay] Saved layout: \"%s\".\n", path);
    }
    else
@@ -7472,6 +7482,7 @@ static void input_overlay_edit_drop(input_overlay_t *ol)
 
 static void input_overlay_layout_reload(const input_overlay_t *ol);
 static void input_overlay_viewport_publish(void);
+
 static size_t input_overlay_layout_name(const struct overlay *page,
       uint16_t group, char *s, size_t len);
 /* The page shown when the layout changed, to show again once it has
@@ -7500,9 +7511,8 @@ static void input_overlay_edit_undo_take(const input_overlay_t *ol)
 {
    if (input_overlay_edit_undo.taken)
       return;
-   input_overlay_layout_path(input_overlay_edit_undo.path,
-         sizeof(input_overlay_edit_undo.path), ol->path,
-         input_overlay_layout_scope());
+   input_overlay_layout_file(input_overlay_edit_undo.path,
+         sizeof(input_overlay_edit_undo.path), ol->path);
    input_overlay_edit_undo.taken   = true;
    input_overlay_edit_undo.existed =
          *input_overlay_edit_undo.path
@@ -13359,7 +13369,40 @@ static void input_overlay_loaded(retro_task_t *task,
 #define SYSTEM_OVERLAY_DIR "gamepads/Named_Overlays"
 #endif
 
+static const char *input_overlay_pack_path(void);
+
+/* The overlay to show: the on-screen keyboard's, the profile a layout
+ * profile choice names, or the overlay RetroArch would pick as its
+ * built-in profile, if it has one */
 static const char *input_overlay_path(bool want_osk)
+{
+   static char choice_path[PATH_MAX_LENGTH];
+   int scope;
+
+   if (want_osk)
+      return config_get_ptr()->paths.path_osk_overlay;
+
+   /* The most specific choice there is */
+   for (scope = OVERLAY_LAYOUT_SCOPE_LAST - 1; scope >= 0; scope--)
+   {
+      config_file_t *conf;
+      char choice[PATH_MAX_LENGTH];
+      input_overlay_layout_path(choice, sizeof(choice), "controller.cfg",
+            (enum overlay_layout_scope)scope);
+      if (     !*choice || !path_is_valid(choice)
+            || !(conf = config_file_new_from_path_to_string(choice)))
+         continue;
+      *choice_path = '\0';
+      config_get_path(conf, "overlay", choice_path, sizeof(choice_path));
+      config_file_free(conf);
+      if (*choice_path && path_is_valid(choice_path))
+         return choice_path;
+   }
+   return input_overlay_profile_for(input_overlay_pack_path());
+}
+
+/* The overlay RetroArch picks: the preset, or one for the system */
+static const char *input_overlay_pack_path(void)
 {
    static char   system_overlay_path[PATH_MAX_LENGTH] = {0};
    char          overlay_directory[PATH_MAX_LENGTH];
@@ -13368,30 +13411,6 @@ static const char *input_overlay_path(bool want_osk)
    playlist_t   *playlist                             = playlist_get_cached();
    core_info_t  *core_info                            = NULL;
    const char   *content_path                         = path_get(RARCH_PATH_CONTENT);
-
-   if (want_osk)
-      return settings->paths.path_osk_overlay;
-
-   /* The controller a layout profile chose, the most specific there is */
-   {
-      int scope;
-      for (scope = OVERLAY_LAYOUT_SCOPE_LAST - 1; scope >= 0; scope--)
-      {
-         config_file_t *conf;
-         char choice[PATH_MAX_LENGTH];
-         input_overlay_layout_path(choice, sizeof(choice), "controller.cfg",
-               (enum overlay_layout_scope)scope);
-         if (     !*choice || !path_is_valid(choice)
-               || !(conf = config_file_new_from_path_to_string(choice)))
-            continue;
-         *system_overlay_path = '\0';
-         config_get_path(conf, "overlay", system_overlay_path,
-               sizeof(system_overlay_path));
-         config_file_free(conf);
-         if (*system_overlay_path && path_is_valid(system_overlay_path))
-            return system_overlay_path;
-      }
-   }
 
    /* If the option is set to turn this off, just return default */
    if (!settings->bools.input_overlay_enable_autopreferred)
@@ -13555,8 +13574,7 @@ static bool input_overlay_layout_set(const char *key, const char *value)
 
    if (!ol)
       return false;
-   input_overlay_layout_path(path, sizeof(path), ol->path,
-         input_overlay_layout_scope());
+   input_overlay_layout_file(path, sizeof(path), ol->path);
    if (!*path)
       return false;
    if (     !path_is_valid(path)
@@ -13630,19 +13648,29 @@ bool input_overlay_layout_filled_toggle(void)
 void input_overlay_layout_reset(void)
 {
    char path[PATH_MAX_LENGTH];
-   const char *_msg = msg_hash_to_str(MSG_OVERLAY_LAYOUT_RESET);
+   const char *overlay = input_overlay_path(false);
+   const char *_msg    = msg_hash_to_str(MSG_OVERLAY_LAYOUT_RESET);
 
    input_overlay_edit_finish(input_driver_st.overlay_ptr, false);
 
-   input_overlay_layout_path(path, sizeof(path), input_overlay_path(false),
-         input_overlay_layout_scope());
-   if (*path && path_is_valid(path))
-      filestream_delete(path);
-   /* And the controller a profile chose for it */
-   input_overlay_layout_path(path, sizeof(path), "controller.cfg",
-         input_overlay_layout_scope());
-   if (*path && path_is_valid(path))
-      filestream_delete(path);
+   if (input_overlay_is_profile(overlay))
+   {
+      /* A built-in profile as it comes; one of the user's stays */
+      char name[NAME_MAX_LENGTH];
+      int builtin;
+      strlcpy(name, path_basename(overlay), sizeof(name));
+      path_remove_extension(name);
+      if ((builtin = input_overlay_builtin_profile_find(name)) < 0)
+         return;
+      input_overlay_builtin_profile_reset((unsigned)builtin);
+   }
+   else
+   {
+      input_overlay_layout_path(path, sizeof(path), overlay,
+            input_overlay_layout_scope());
+      if (*path && path_is_valid(path))
+         filestream_delete(path);
+   }
 
    /* Loaded again, with what the other layouts and the pack say */
    input_overlay_layout_reload(input_overlay_layout_target());
@@ -13651,15 +13679,79 @@ void input_overlay_layout_reset(void)
          MESSAGE_QUEUE_ICON_DEFAULT, MESSAGE_QUEUE_CATEGORY_INFO);
 }
 
-/* The key a profile names the controller (overlay pack) it is for by */
-#define OVERLAY_PROFILE_CONTROLLER "overlay_profile_controller"
+/* Layout profiles, gamepads to the user: overlay configs of their own,
+ * in overlays/gamepads/custom, that any RetroArch loads as it would
+ * another. Their images are the packs' they were made from, by
+ * relative path, but for this build's own (neo-custom), which are
+ * copied to custom/img. Where the user
+ * put a control is written in its desc, where the pack had it in
+ * _pack; a hidden control's desc is off the screen, where it was in
+ * _layout_x/_layout_y. */
 
-/* The profiles every build has: a controller each, as it comes */
+/* The profiles every build has, the overlays they are made from as
+ * input_overlay_builtin_pack() names them, and that DS and 3DS content
+ * starts on its own */
 static const char *input_overlay_builtin_profiles[] = {
    "Main", "Nintendo DS", "Nintendo 3DS" };
 
-/* The controller of built-in profile @i, if this build has it */
-static bool input_overlay_builtin_profile(unsigned i, char *s, size_t len)
+static void input_overlay_profiles_dir(char *s, size_t len)
+{
+   char dir[DIR_MAX_LENGTH];
+   fill_pathname_expand_special(dir, config_get_ptr()->paths.directory_overlay,
+         sizeof(dir));
+   fill_pathname_join_special(s, dir, "gamepads/custom", len);
+}
+
+bool input_overlay_is_profile(const char *path)
+{
+   char dir[DIR_MAX_LENGTH];
+   char base[DIR_MAX_LENGTH];
+   if (!path || !*path)
+      return false;
+   input_overlay_profiles_dir(dir, sizeof(dir));
+   fill_pathname_basedir(base, path, sizeof(base));
+   fill_pathname_slash(dir, sizeof(dir));
+   return string_is_equal(base, dir);
+}
+
+/* custom/@name.cfg; empty when @name leaves nothing to name a file */
+static void input_overlay_profile_file(char *s, size_t len, const char *name)
+{
+   char dir[DIR_MAX_LENGTH];
+   char file[NAME_MAX_LENGTH];
+   char *c;
+   size_t _len;
+
+   *s = '\0';
+   while (*name == ' ' || *name == '.')
+      name++;
+   _len = strlcpy(file, name, sizeof(file) - STRLEN_CONST(".cfg"));
+   if (_len >= sizeof(file) - STRLEN_CONST(".cfg"))
+      _len = sizeof(file) - STRLEN_CONST(".cfg") - 1;
+   while (_len && file[_len - 1] == ' ')
+      file[--_len] = '\0';
+   if (!_len)
+      return;
+   /* What file systems do not take in a name */
+   for (c = file; *c; c++)
+      if (strchr("/\\:*?\"<>|", *c) || (unsigned char)*c < 0x20)
+         *c = '_';
+   strlcpy(file + _len, ".cfg", sizeof(file) - _len);
+   input_overlay_profiles_dir(dir, sizeof(dir));
+   fill_pathname_join_special(s, dir, file, len);
+}
+
+static int input_overlay_builtin_profile_find(const char *name)
+{
+   unsigned i;
+   for (i = 0; i < ARRAY_SIZE(input_overlay_builtin_profiles); i++)
+      if (string_is_equal(name, input_overlay_builtin_profiles[i]))
+         return (int)i;
+   return -1;
+}
+
+/* The overlay built-in profile @i is made from */
+static bool input_overlay_builtin_pack(unsigned i, char *s, size_t len)
 {
    char dir[DIR_MAX_LENGTH];
    settings_t *settings = config_get_ptr();
@@ -13679,124 +13771,412 @@ static bool input_overlay_builtin_profile(unsigned i, char *s, size_t len)
    return *s && path_is_valid(s);
 }
 
-static int input_overlay_builtin_profile_find(const char *name)
+/* The keys of a desc whose place and size the layout gave, put in the
+ * desc itself, as the user put it, so that any loader reads it there;
+ * the pack's in _pack. A hidden one goes off the screen in its desc,
+ * where it was staying in _layout_x and _layout_y. */
+static void input_overlay_profile_normalize(config_file_t *conf)
 {
-   unsigned i;
-   for (i = 0; i < ARRAY_SIZE(input_overlay_builtin_profiles); i++)
-      if (string_is_equal(name, input_overlay_builtin_profiles[i]))
-         return (int)i;
-   return -1;
-}
+   unsigned o, d, pages = 0;
 
-/* config/overlay_layouts/profiles/, or, @legacy, the folder of the
- * controller shown that profiles were kept in before they named
- * theirs; and @name.cfg in it when @name is given. Empty when @name
- * leaves nothing to name a file with. */
-static void input_overlay_layout_profile_path(char *s, size_t len,
-      const char *name, bool legacy)
-{
-   char dir[DIR_MAX_LENGTH];
-
-   *s = '\0';
-   fill_pathname_application_special(dir, sizeof(dir),
-         APPLICATION_SPECIAL_DIRECTORY_CONFIG);
-   if (!*dir)
-      return;
-   fill_pathname_join_special(dir, dir, "overlay_layouts", sizeof(dir));
-   fill_pathname_join_special(dir, dir, "profiles", sizeof(dir));
-   if (legacy)
+   config_get_uint(conf, "overlays", &pages);
+   for (o = 0; o < pages; o++)
    {
-      char overlay[NAME_MAX_LENGTH];
-      input_overlay_t *ol = input_overlay_layout_target();
-      const char *path    = ol ? ol->path : input_overlay_path(false);
-      if (!path || !*path)
-         return;
-      strlcpy(overlay, path_basename(path), sizeof(overlay));
-      path_remove_extension(overlay);
-      fill_pathname_join_special(dir, dir, overlay, sizeof(dir));
-   }
+      unsigned descs = 0;
+      bool normalized = false;
+      char key[96];
 
-   if (name)
-   {
-      char file[NAME_MAX_LENGTH];
-      char *c;
-      size_t _len;
-
-      while (*name == ' ' || *name == '.')
-         name++;
-      _len = strlcpy(file, name, sizeof(file) - STRLEN_CONST(".cfg"));
-      if (_len >= sizeof(file) - STRLEN_CONST(".cfg"))
-         _len = sizeof(file) - STRLEN_CONST(".cfg") - 1;
-      while (_len && file[_len - 1] == ' ')
-         file[--_len] = '\0';
-      if (!_len)
-         return;
-      /* What file systems do not take in a name */
-      for (c = file; *c; c++)
-         if (strchr("/\\:*?\"<>|", *c) || (unsigned char)*c < 0x20)
-            *c = '_';
-      strlcpy(file + _len, ".cfg", sizeof(file) - _len);
-      fill_pathname_join_special(s, dir, file, len);
-   }
-   else
-      strlcpy(s, dir, len);
-}
-
-/* A saved profile's file, where it is */
-static bool input_overlay_layout_profile_find(const char *name,
-      char *s, size_t len)
-{
-   input_overlay_layout_profile_path(s, len, name, false);
-   if (*s && path_is_valid(s))
-      return true;
-   input_overlay_layout_profile_path(s, len, name, true);
-   return *s && path_is_valid(s);
-}
-
-bool input_overlay_layout_profile_save(const char *name)
-{
-   unsigned scope;
-   char path[PATH_MAX_LENGTH];
-   char dir[DIR_MAX_LENGTH];
-   bool ret            = false;
-   config_file_t *conf = NULL;
-   input_overlay_t *ol = input_overlay_layout_target();
-
-   /* The built-in names are taken */
-   if (input_overlay_builtin_profile_find(name) >= 0)
-      return false;
-   input_overlay_layout_profile_path(path, sizeof(path), name, false);
-   if (!ol || !*path || !(conf = config_file_new_alloc()))
-      return false;
-
-   /* Each scope over the one before, as they load */
-   for (scope = 0; scope < OVERLAY_LAYOUT_SCOPE_LAST; scope++)
-   {
-      char layer_path[PATH_MAX_LENGTH];
-      config_file_t *layer;
-      struct config_entry_list *entry;
-
-      input_overlay_layout_path(layer_path, sizeof(layer_path), ol->path,
-            (enum overlay_layout_scope)scope);
-      if (     !*layer_path || !path_is_valid(layer_path)
-            || !(layer = config_file_new_from_path_to_string(layer_path)))
+      snprintf(key, sizeof(key), "overlay%u_normalized", o);
+      config_get_bool(conf, key, &normalized);
+      snprintf(key, sizeof(key), "overlay%u_descs", o);
+      if (!normalized || !config_get_uint(conf, key, &descs))
          continue;
-      for (entry = layer->entries; entry; entry = entry->next)
-         if (entry->key && entry->value)
-            config_set_string(conf, entry->key, entry->value);
-      config_file_free(layer);
-   }
-   config_set_string(conf, OVERLAY_PROFILE_CONTROLLER, ol->path);
 
-   fill_pathname_basedir(dir, path, sizeof(dir));
-   if (!path_is_directory(dir))
-      path_mkdir(dir);
-   if ((ret = config_file_write(conf, path, true)))
-      RARCH_LOG("[Overlay] Saved layout profile: \"%s\".\n", path);
-   else
-      RARCH_ERR("[Overlay] Failed to save layout profile: \"%s\".\n", path);
+      for (d = 0; d < descs; d++)
+      {
+         char spec[256];
+         char out[256];
+         char base[64];
+         char *tok[6];
+         char *p;
+         unsigned n = 0, k;
+         float v[4], lay[4];
+         bool has[4];
+         bool hidden = false;
+         static const char *suffix[] = {
+            "_layout_x", "_layout_y", "_layout_w", "_layout_h" };
+
+         snprintf(base, sizeof(base), "overlay%u_desc%u", o, d);
+         if (!config_get_array(conf, base, spec, sizeof(spec)))
+            continue;
+         for (p = spec; n < 6; n++)
+         {
+            tok[n] = p;
+            while (*p && *p != ',')
+               p++;
+            if (!*p)
+            {
+               n++;
+               break;
+            }
+            *p++ = '\0';
+         }
+         if (n < 6)
+            continue;
+         v[0] = (float)rstrtod(tok[1], NULL);
+         v[1] = (float)rstrtod(tok[2], NULL);
+         v[2] = (float)rstrtod(tok[4], NULL);
+         v[3] = (float)rstrtod(tok[5], NULL);
+
+         for (k = 0; k < 4; k++)
+         {
+            snprintf(key, sizeof(key), "%s%s", base, suffix[k]);
+            has[k] = config_get_float(conf, key, &lay[k]);
+         }
+         snprintf(key, sizeof(key), "%s_layout_hidden", base);
+         config_get_bool(conf, key, &hidden);
+         if (!has[0] && !has[1] && !has[2] && !has[3] && !hidden)
+            continue;
+
+         /* Where the pack had it, once */
+         snprintf(key, sizeof(key), "%s_pack", base);
+         if (!config_get_entry(conf, key))
+         {
+            char pack[128];
+            snprintf(pack, sizeof(pack), "%.6f,%.6f,%.6f,%.6f",
+                  v[0], v[1], v[2], v[3]);
+            config_set_string(conf, key, pack);
+         }
+
+         /* A hidden one's place is in _layout_x/_y already, from when
+          * it went; its desc only says off the screen */
+         if (hidden && (v[0] > 2.0f || v[1] > 2.0f) && !has[0] && !has[1])
+            continue;
+         for (k = 0; k < 4; k++)
+            if (has[k])
+               v[k] = lay[k];
+         for (k = 0; k < 4; k++)
+         {
+            snprintf(key, sizeof(key), "%s%s", base, suffix[k]);
+            config_unset(conf, key);
+         }
+         if (hidden)
+         {
+            char val[32];
+            snprintf(key, sizeof(key), "%s_layout_x", base);
+            snprintf(val, sizeof(val), "%.6f", v[0]);
+            config_set_string(conf, key, val);
+            snprintf(key, sizeof(key), "%s_layout_y", base);
+            snprintf(val, sizeof(val), "%.6f", v[1]);
+            config_set_string(conf, key, val);
+            v[0] = v[1] = 2.5f;
+         }
+         snprintf(out, sizeof(out), "%s,%.6f,%.6f,%s,%.6f,%.6f",
+               tok[0], v[0], v[1], tok[3], v[2], v[3]);
+         config_set_string(conf, base, out);
+      }
+   }
+}
+
+/* Writes @path's layout keys into its descs (input_overlay_profile_normalize) */
+static bool input_overlay_profile_normalize_file(const char *path)
+{
+   bool ret;
+   config_file_t *conf = config_file_new_from_path_to_string(path);
+   if (!conf)
+      return false;
+   input_overlay_profile_normalize(conf);
+   ret = config_file_write(conf, path, true);
    config_file_free(conf);
    return ret;
+}
+
+/* Profile @out made from overlay @pack, the layouts @layers over it
+ * (those there are). Its images by relative path, this build's own
+ * copied beside it. */
+static bool input_overlay_profile_make(const char *out, const char *pack,
+      const char * const *layers, unsigned num_layers)
+{
+   unsigned i;
+   char dir[DIR_MAX_LENGTH];
+   char img_dir[DIR_MAX_LENGTH];
+   struct config_entry_list *entry;
+   bool ret;
+   config_file_t *conf = config_file_new_alloc();
+
+   if (!conf)
+      return false;
+   input_overlay_profiles_dir(dir, sizeof(dir));
+   fill_pathname_join_special(img_dir, dir, "img", sizeof(img_dir));
+   if (!path_is_directory(dir))
+      path_mkdir(dir);
+   fill_pathname_slash(dir, sizeof(dir));
+
+   for (i = 0; i <= num_layers; i++)
+   {
+      const char *from    = (i == 0) ? pack : layers[i - 1];
+      config_file_t *part;
+      if (     !from || !*from || !path_is_valid(from)
+            || !(part = config_file_new_from_path_to_string(from)))
+      {
+         if (i == 0)
+         {
+            config_file_free(conf);
+            return false;
+         }
+         continue;
+      }
+      for (entry = part->entries; entry; entry = entry->next)
+      {
+         size_t klen;
+         if (!entry->key || !entry->value)
+            continue;
+         klen = strlen(entry->key);
+         /* An image: the same file, from where the profile is */
+         if (     klen > STRLEN_CONST("_overlay")
+               && string_is_equal(entry->key + klen
+                  - STRLEN_CONST("_overlay"), "_overlay")
+               && *entry->value)
+         {
+            char abs_path[PATH_MAX_LENGTH];
+            char rel[PATH_MAX_LENGTH];
+            fill_pathname_resolve_relative(abs_path, from, entry->value,
+                  sizeof(abs_path));
+            path_resolve_realpath(abs_path, sizeof(abs_path), false);
+            if (strstr(abs_path, "neo-custom"))
+            {
+               char copy[PATH_MAX_LENGTH];
+               fill_pathname_join_special(copy, img_dir,
+                     path_basename(abs_path), sizeof(copy));
+               if (!path_is_valid(copy))
+               {
+                  void *buf    = NULL;
+                  int64_t blen = 0;
+                  if (!path_is_directory(img_dir))
+                     path_mkdir(img_dir);
+                  if (filestream_read_file(abs_path, &buf, &blen))
+                  {
+                     filestream_write_file(copy, buf, blen);
+                     free(buf);
+                  }
+               }
+               snprintf(rel, sizeof(rel), "img/%s", path_basename(abs_path));
+            }
+            else
+               path_relative_to(rel, abs_path, dir, sizeof(rel));
+            config_set_string(conf, entry->key, rel);
+         }
+         else
+            config_set_string(conf, entry->key, entry->value);
+      }
+      config_file_free(part);
+   }
+
+   input_overlay_profile_normalize(conf);
+   if ((ret = config_file_write(conf, out, true)))
+      RARCH_LOG("[Overlay] Made layout profile \"%s\" from \"%s\".\n",
+            out, pack);
+   config_file_free(conf);
+   return ret;
+}
+
+/* The built-in profiles, made the first time from their overlays with
+ * the layouts the user had for them before profiles; and the layouts
+ * the user had for a core or content, as profiles of their own chosen
+ * for it */
+static void input_overlay_profiles_ensure(void)
+{
+   unsigned i;
+   char path[PATH_MAX_LENGTH];
+   char pack[PATH_MAX_LENGTH];
+   char dir[DIR_MAX_LENGTH];
+   char layouts[DIR_MAX_LENGTH];
+   static bool checked = false;
+
+   if (checked)
+      return;
+   checked = true;
+   input_overlay_profiles_dir(dir, sizeof(dir));
+   fill_pathname_join_special(path, dir, ".made", sizeof(path));
+   if (path_is_valid(path))
+      return;
+
+   fill_pathname_application_special(layouts, sizeof(layouts),
+         APPLICATION_SPECIAL_DIRECTORY_CONFIG);
+   fill_pathname_join_special(layouts, layouts, "overlay_layouts",
+         sizeof(layouts));
+
+   for (i = 0; i < ARRAY_SIZE(input_overlay_builtin_profiles); i++)
+   {
+      char out[PATH_MAX_LENGTH];
+      char layer[PATH_MAX_LENGTH];
+      const char *layers[1];
+      struct string_list *cores;
+
+      if (!input_overlay_builtin_pack(i, pack, sizeof(pack)))
+         continue;
+      input_overlay_profile_file(out, sizeof(out),
+            input_overlay_builtin_profiles[i]);
+      fill_pathname_join_special(layer, layouts, path_basename(pack),
+            sizeof(layer));
+      layers[0] = layer;
+      if (!path_is_valid(out))
+         input_overlay_profile_make(out, pack, layers, 1);
+
+      /* A core's or a content's layout of it: a profile for it */
+      if (!(cores = dir_list_new(layouts, NULL, true, false, false, false)))
+         continue;
+      {
+         size_t c;
+         for (c = 0; c < cores->size; c++)
+         {
+            char core_layer[PATH_MAX_LENGTH];
+            const char *core = cores->elems[c].data;
+            struct string_list *games;
+            if (     !path_is_directory(core)
+                  || string_is_equal(path_basename(core), "profiles"))
+               continue;
+            fill_pathname_join_special(core_layer, core,
+                  path_basename(pack), sizeof(core_layer));
+            if (path_is_valid(core_layer))
+            {
+               char name[NAME_MAX_LENGTH];
+               char choice[PATH_MAX_LENGTH];
+               char line[PATH_MAX_LENGTH + 32];
+               const char *two[2];
+               two[0] = layer;
+               two[1] = core_layer;
+               snprintf(name, sizeof(name), "%s (%s)",
+                     input_overlay_builtin_profiles[i], path_basename(core));
+               input_overlay_profile_file(out, sizeof(out), name);
+               if (input_overlay_profile_make(out, pack, two, 2))
+               {
+                  fill_pathname_join_special(choice, core, "controller.cfg",
+                        sizeof(choice));
+                  snprintf(line, sizeof(line), "overlay = \"%s\"\n", out);
+                  filestream_write_file(choice, line, strlen(line));
+               }
+            }
+            if (!(games = dir_list_new(core, NULL, true, false, false, false)))
+               continue;
+            {
+               size_t g;
+               for (g = 0; g < games->size; g++)
+               {
+                  char game_layer[PATH_MAX_LENGTH];
+                  const char *game = games->elems[g].data;
+                  if (!path_is_directory(game))
+                     continue;
+                  fill_pathname_join_special(game_layer, game,
+                        path_basename(pack), sizeof(game_layer));
+                  if (path_is_valid(game_layer))
+                  {
+                     char name[NAME_MAX_LENGTH];
+                     char choice[PATH_MAX_LENGTH];
+                     char line[PATH_MAX_LENGTH + 32];
+                     const char *three[3];
+                     three[0] = layer;
+                     three[1] = core_layer;
+                     three[2] = game_layer;
+                     snprintf(name, sizeof(name), "%s (%s)",
+                           input_overlay_builtin_profiles[i],
+                           path_basename(game));
+                     input_overlay_profile_file(out, sizeof(out), name);
+                     if (input_overlay_profile_make(out, pack, three, 3))
+                     {
+                        fill_pathname_join_special(choice, game,
+                              "controller.cfg", sizeof(choice));
+                        snprintf(line, sizeof(line), "overlay = \"%s\"\n", out);
+                        filestream_write_file(choice, line, strlen(line));
+                     }
+                  }
+               }
+            }
+            string_list_free(games);
+         }
+      }
+      string_list_free(cores);
+   }
+
+   fill_pathname_join_special(path, dir, ".made", sizeof(path));
+   filestream_write_file(path, "", 0);
+}
+
+/* The profile to use for overlay @pack where nothing chose one: its
+ * built-in profile, if it has one */
+static const char *input_overlay_profile_for(const char *pack)
+{
+   static char profile[PATH_MAX_LENGTH];
+   unsigned i;
+
+   if (!pack || !*pack)
+      return pack;
+   input_overlay_profiles_ensure();
+   for (i = 0; i < ARRAY_SIZE(input_overlay_builtin_profiles); i++)
+   {
+      char from[PATH_MAX_LENGTH];
+      if (     !input_overlay_builtin_pack(i, from, sizeof(from))
+            || (  !string_is_equal(path_basename(from), path_basename(pack))
+               && !(i == 1 && string_is_equal(path_basename(pack),
+                     "Nintendo - Nintendo DSi.cfg"))))
+         continue;
+      input_overlay_profile_file(profile, sizeof(profile),
+            input_overlay_builtin_profiles[i]);
+      if (path_is_valid(profile))
+         return profile;
+   }
+   return pack;
+}
+
+/* Where the layout shown is saved: its profile, or, for an overlay of
+ * its own, the layout of the scope chosen */
+static void input_overlay_layout_file(char *s, size_t len,
+      const char *overlay_path)
+{
+   if (input_overlay_is_profile(overlay_path))
+      strlcpy(s, overlay_path, len);
+   else
+      input_overlay_layout_path(s, len, overlay_path,
+            input_overlay_layout_scope());
+}
+
+/* A copy of the profile shown, its edits in, as @name */
+bool input_overlay_layout_profile_save(const char *name)
+{
+   char path[PATH_MAX_LENGTH];
+   input_overlay_t *ol = input_overlay_layout_target();
+
+   if (!ol || input_overlay_builtin_profile_find(name) >= 0)
+      return false;
+   input_overlay_profile_file(path, sizeof(path), name);
+   if (!*path)
+      return false;
+   if (input_overlay_is_profile(ol->path))
+   {
+      void *buf    = NULL;
+      int64_t blen = 0;
+      bool ret;
+      if (!filestream_read_file(ol->path, &buf, &blen))
+         return false;
+      ret = filestream_write_file(path, buf, blen);
+      free(buf);
+      return ret;
+   }
+   else
+   {
+      /* An overlay of its own, with its layouts */
+      unsigned scope;
+      char layer[OVERLAY_LAYOUT_SCOPE_LAST][PATH_MAX_LENGTH];
+      const char *layers[OVERLAY_LAYOUT_SCOPE_LAST];
+      for (scope = 0; scope < OVERLAY_LAYOUT_SCOPE_LAST; scope++)
+      {
+         input_overlay_layout_path(layer[scope], sizeof(layer[scope]),
+               ol->path, (enum overlay_layout_scope)scope);
+         layers[scope] = layer[scope];
+      }
+      return input_overlay_profile_make(path, ol->path, layers,
+            OVERLAY_LAYOUT_SCOPE_LAST);
+   }
 }
 
 /* @value written to @path, or @path taken away when @value is NULL */
@@ -13812,71 +14192,32 @@ static bool input_overlay_layout_write(const char *path, const void *value,
    return filestream_write_file(path, value, len);
 }
 
-/* Profile @name for the scope chosen: its controller, and its layout
- * of it in place of the scope's */
+/* Profile @name for what Layout For chooses */
 bool input_overlay_layout_profile_load(const char *name)
 {
-   char path[PATH_MAX_LENGTH];
-   char controller[PATH_MAX_LENGTH];
+   char profile[PATH_MAX_LENGTH];
    char choice[PATH_MAX_LENGTH];
-   char layout[PATH_MAX_LENGTH];
    char line[PATH_MAX_LENGTH + 32];
-   void *buf                       = NULL;
-   int64_t _len                    = 0;
    bool ret;
-   int builtin                     = input_overlay_builtin_profile_find(name);
    enum overlay_layout_scope scope = input_overlay_layout_scope();
 
-   if (builtin >= 0)
-   {
-      if (!input_overlay_builtin_profile((unsigned)builtin, controller,
-               sizeof(controller)))
-         return false;
-   }
-   else
-   {
-      config_file_t *conf;
-      input_overlay_t *ol = input_overlay_layout_target();
-      if (     !input_overlay_layout_profile_find(name, path, sizeof(path))
-            || !filestream_read_file(path, &buf, &_len))
-         return false;
-      /* A profile from before they named their controller is the one
-       * shown's */
-      *controller = '\0';
-      if ((conf = config_file_new_from_path_to_string(path)))
-      {
-         config_get_path(conf, OVERLAY_PROFILE_CONTROLLER, controller,
-               sizeof(controller));
-         config_file_free(conf);
-      }
-      if (!*controller && ol)
-         strlcpy(controller, ol->path, sizeof(controller));
-   }
-
+   input_overlay_profiles_ensure();
+   input_overlay_profile_file(profile, sizeof(profile), name);
    input_overlay_layout_path(choice, sizeof(choice), "controller.cfg", scope);
-   input_overlay_layout_path(layout, sizeof(layout), controller, scope);
-   if (!*controller || !*choice || !*layout)
-   {
-      free(buf);
+   if (!*profile || !path_is_valid(profile) || !*choice)
       return false;
-   }
 
    input_overlay_edit_finish(input_driver_st.overlay_ptr, false);
-
-   snprintf(line, sizeof(line), "overlay = \"%s\"\n", controller);
-   /* A built-in one is the controller as the scopes under make it; and
-    * Main for all content is no choice, so that DS and 3DS content
-    * still has its own */
-   ret =    input_overlay_layout_write(choice,
-               (builtin == 0 && scope == OVERLAY_LAYOUT_SCOPE_ALL)
-               ? NULL : line, strlen(line))
-         && input_overlay_layout_write(layout, buf, _len);
-   free(buf);
+   snprintf(line, sizeof(line), "overlay = \"%s\"\n", profile);
+   /* Main for all content is no choice, so that DS and 3DS content
+    * still starts on its own */
+   ret = input_overlay_layout_write(choice,
+         (input_overlay_builtin_profile_find(name) == 0
+          && scope == OVERLAY_LAYOUT_SCOPE_ALL) ? NULL : line,
+         strlen(line));
    if (ret)
-      RARCH_LOG("[Overlay] Loaded layout profile \"%s\": \"%s\".\n",
-            name, controller);
+      RARCH_LOG("[Overlay] Using layout profile \"%s\".\n", profile);
 
-   /* Another controller, perhaps: on its own first page */
    input_overlay_layout_reload_page = -1;
    input_overlay_deinit();
    input_overlay_init();
@@ -13889,49 +14230,61 @@ bool input_overlay_layout_profile_load(const char *name)
 bool input_overlay_layout_profile_delete(const char *name)
 {
    char path[PATH_MAX_LENGTH];
-   return   input_overlay_builtin_profile_find(name) < 0
-         && input_overlay_layout_profile_find(name, path, sizeof(path))
-         && filestream_delete(path) == 0;
+   if (input_overlay_builtin_profile_find(name) >= 0)
+      return false;
+   input_overlay_profile_file(path, sizeof(path), name);
+   return *path && path_is_valid(path) && filestream_delete(path) == 0;
 }
 
 struct string_list *input_overlay_layout_profile_list(bool builtin)
 {
-   unsigned i, j;
+   unsigned i;
    char dir[DIR_MAX_LENGTH];
    char path[PATH_MAX_LENGTH];
    union string_list_elem_attr attr;
+   struct string_list *files;
    struct string_list *names = string_list_new();
 
    if (!names)
       return NULL;
    attr.i = 0;
+   input_overlay_profiles_ensure();
    if (builtin)
       for (i = 0; i < ARRAY_SIZE(input_overlay_builtin_profiles); i++)
-         if (input_overlay_builtin_profile(i, path, sizeof(path)))
+      {
+         input_overlay_profile_file(path, sizeof(path),
+               input_overlay_builtin_profiles[i]);
+         if (path_is_valid(path))
             string_list_append(names, input_overlay_builtin_profiles[i], attr);
+      }
 
-   /* Saved ones, and then those from before profiles named their
-    * controller */
-   for (j = 0; j < 2; j++)
+   input_overlay_profiles_dir(dir, sizeof(dir));
+   if ((files = dir_list_new(dir, "cfg", false, false, false, false)))
    {
-      struct string_list *files;
-      input_overlay_layout_profile_path(dir, sizeof(dir), NULL, j == 1);
-      if (     !*dir
-            || !(files = dir_list_new(dir, "cfg", false, false, false, false)))
-         continue;
       dir_list_sort_ignore_ext(files, false);
       for (i = 0; i < files->size; i++)
       {
          char name[NAME_MAX_LENGTH];
          strlcpy(name, path_basename(files->elems[i].data), sizeof(name));
          path_remove_extension(name);
-         if (     input_overlay_builtin_profile_find(name) < 0
-               && string_list_find_elem(names, name) == 0)
+         if (input_overlay_builtin_profile_find(name) < 0)
             string_list_append(names, name, attr);
       }
       string_list_free(files);
    }
    return names;
+}
+
+/* Puts built-in profile @i back as its overlay makes it */
+static bool input_overlay_builtin_profile_reset(unsigned i)
+{
+   char pack[PATH_MAX_LENGTH];
+   char out[PATH_MAX_LENGTH];
+   if (!input_overlay_builtin_pack(i, pack, sizeof(pack)))
+      return false;
+   input_overlay_profile_file(out, sizeof(out),
+         input_overlay_builtin_profiles[i]);
+   return input_overlay_profile_make(out, pack, NULL, 0);
 }
 
 /* The overlay's config as it loads, with the user layouts over it */
@@ -13941,7 +14294,10 @@ static config_file_t *input_overlay_layout_open(const char *overlay_path)
    char path[PATH_MAX_LENGTH];
    config_file_t *conf = config_file_new_from_path_to_string(overlay_path);
 
-   for (scope = 0; conf && scope < OVERLAY_LAYOUT_SCOPE_LAST; scope++)
+   /* A profile has its layout in it */
+   for (scope = input_overlay_is_profile(overlay_path)
+         ? OVERLAY_LAYOUT_SCOPE_LAST : 0;
+         conf && scope < OVERLAY_LAYOUT_SCOPE_LAST; scope++)
    {
       config_file_t *layout;
       input_overlay_layout_path(path, sizeof(path), overlay_path,
@@ -13979,8 +14335,7 @@ static bool input_overlay_layout_add_control(input_overlay_t *ol,
    src   = add.page;
    group = add.group;
 
-   input_overlay_layout_path(path, sizeof(path), ol->path,
-         input_overlay_layout_scope());
+   input_overlay_layout_file(path, sizeof(path), ol->path);
    if (     !*path
          || !(merged = input_overlay_layout_open(ol->path)))
       return false;
@@ -14066,6 +14421,8 @@ static bool input_overlay_layout_add_control(input_overlay_t *ol,
    ret = config_file_write(layout, path, true);
    config_file_free(layout);
    config_file_free(merged);
+   if (ret && input_overlay_is_profile(path))
+      input_overlay_profile_normalize_file(path);
    return ret;
 }
 #endif

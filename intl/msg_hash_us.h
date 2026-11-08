@@ -15202,7 +15202,7 @@ MSG_HASH(
    )
 MSG_HASH(
    MENU_ENUM_SUBLABEL_OVERLAY_LAYOUT_SCOPE,
-   "Which layout changes are saved to. A content's layout applies over its core's, which applies over the one for all content."
+   "What Load Gamepad chooses a gamepad for: all content, the running core, or the running content. Edits go into the gamepad shown."
    )
 MSG_HASH(
    MENU_ENUM_LABEL_VALUE_OVERLAY_LAYOUT_CONTROLS,
@@ -15246,35 +15246,35 @@ MSG_HASH(
    )
 MSG_HASH(
    MENU_ENUM_LABEL_VALUE_OVERLAY_LAYOUT_PROFILE_SAVE,
-   "Save Layout as Profile"
+   "Save as Gamepad"
    )
 MSG_HASH(
    MENU_ENUM_SUBLABEL_OVERLAY_LAYOUT_PROFILE_SAVE,
-   "Save the controller shown and its layout under a name, to load later for any core or content."
+   "Save the gamepad shown, as laid out, as a new one, to load for any core or content and lay out apart."
    )
 MSG_HASH(
    MENU_ENUM_LABEL_VALUE_OVERLAY_LAYOUT_PROFILE_LOAD,
-   "Load Profile"
+   "Load Gamepad"
    )
 MSG_HASH(
    MENU_ENUM_SUBLABEL_OVERLAY_LAYOUT_PROFILE_LOAD,
-   "Use a profile for what 'Layout For' chooses: its controller (Main, Nintendo DS, Nintendo 3DS, or the one a saved profile was made with) and its layout."
+   "Use a gamepad for what 'Layout For' chooses. A gamepad is an overlay preset of its own, which any RetroArch can load: Main, Nintendo DS, Nintendo 3DS, or one you saved."
    )
 MSG_HASH(
    MENU_ENUM_LABEL_VALUE_OVERLAY_LAYOUT_PROFILE_DELETE,
-   "Delete Profile"
+   "Delete Gamepad"
    )
 MSG_HASH(
    MENU_ENUM_SUBLABEL_OVERLAY_LAYOUT_PROFILE_DELETE,
-   "Delete a saved layout profile. Layouts already loaded from it stay as they are."
+   "Delete a gamepad you saved."
    )
 MSG_HASH(
    MENU_ENUM_LABEL_VALUE_OVERLAY_RESET_LAYOUT,
-   "Reset Layout"
+   "Reset Gamepad"
    )
 MSG_HASH(
    MENU_ENUM_SUBLABEL_OVERLAY_RESET_LAYOUT,
-   "Discard the layout chosen in 'Layout For', and the controller a profile chose for it, going back to those under it."
+   "Put a built-in gamepad (Main, Nintendo DS, Nintendo 3DS) back as it comes."
    )
 MSG_HASH(
    MENU_ENUM_LABEL_VALUE_OVERLAY,
@@ -32613,23 +32613,23 @@ MSG_HASH(
    )
 MSG_HASH(
    MSG_OVERLAY_LAYOUT_PROFILE_NAME,
-   "Profile Name"
+   "Gamepad Name"
    )
 MSG_HASH(
    MSG_OVERLAY_LAYOUT_PROFILE_SAVED,
-   "Saved layout profile: %s"
+   "Saved gamepad: %s"
    )
 MSG_HASH(
    MSG_OVERLAY_LAYOUT_PROFILE_LOADED,
-   "Loaded layout profile %s for %s"
+   "Using gamepad %s for %s"
    )
 MSG_HASH(
    MSG_OVERLAY_LAYOUT_PROFILE_DELETED,
-   "Deleted layout profile: %s"
+   "Deleted gamepad: %s"
    )
 MSG_HASH(
    MSG_OVERLAY_LAYOUT_PROFILE_FAILED,
-   "Layout profile could not be written or read."
+   "The gamepad could not be written or read."
    )
 MSG_HASH(
    MSG_OVERLAY_CONTROL_DPAD,
