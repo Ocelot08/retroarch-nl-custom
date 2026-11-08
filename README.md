@@ -77,7 +77,7 @@ not lose them. Profiles are in
 - Installs as **RetroArch Custom** (`com.retroarch.custom`), alongside
   the Play Store builds.
 - RGUI is the default menu, with the bundled **Highlighter** theme
-  (**My Theme** is also included).
+  (**My Theme** is also included), without the menu border.
 - The touch controls stay shown over the menu.
 - Menu assets, overlays, controller profiles and core info files are
   bundled in the APK.
