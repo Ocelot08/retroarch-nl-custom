@@ -15213,6 +15213,14 @@ MSG_HASH(
    "Show or hide the controls of the overlay page shown. Below them are those of its other pages, then each D-pad and face button on its own: switching one on adds it, in the middle of the screen."
    )
 MSG_HASH(
+   MENU_ENUM_LABEL_VALUE_OVERLAY_LAYOUT_DRAWN,
+   "Drawn Buttons"
+   )
+MSG_HASH(
+   MENU_ENUM_SUBLABEL_OVERLAY_LAYOUT_DRAWN,
+   "Draw the main buttons, D-pad and sticks, sharp at any size and shape, in place of the overlay's images. Kept in the layout chosen in 'Layout For'."
+   )
+MSG_HASH(
    MENU_ENUM_LABEL_VALUE_OVERLAY_LAYOUT_PROFILE_SAVE,
    "Save Layout as Profile"
    )

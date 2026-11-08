@@ -38,6 +38,10 @@
 #include "../input/input_driver.h"
 #include "../input/input_overlay.h"
 #include "../input/input_remapping.h"
+#ifdef RARCH_INTERNAL
+#include "../input/input_overlay_draw.h"
+#include "../configuration.h"
+#endif
 #include "../led/led_defines.h"
 #include "../verbosity.h"
 #include <string/rstrtod.h>
@@ -73,6 +77,16 @@ struct overlay_loader
     * from the driver's answers when the load is pushed, since the
     * decode runs where the driver cannot be asked */
    image_texture_request_t req;
+
+#ifdef RARCH_INTERNAL
+   /* Set when the pack's buttons are drawn rather than loaded: the
+    * labels' font, made on the main thread, and the screen they are
+    * drawn for */
+   overlay_draw_font_t *draw_font;
+   unsigned draw_dims;
+   /* The pages keep their own shape on screen (auto scale) */
+   bool draw_auto_scale;
+#endif
 
    uint16_t overlay_types;
 
@@ -578,6 +592,112 @@ static bool task_overlay_load_image_texture(
    return true;
 }
 
+#ifdef RARCH_INTERNAL
+/* Draws @desc's button in place of its image, if it is one of those
+ * drawn (input_overlay_draw_classify), at the size it is shown */
+static bool task_overlay_load_desc_drawn(
+      overlay_loader_t *loader,
+      struct overlay_desc *desc,
+      struct overlay *overlay,
+      unsigned ol_idx, unsigned desc_idx)
+{
+   union string_list_elem_attr attr;
+   overlay_draw_t draw;
+   char key[64];
+   char spec[256];
+   char label[32];
+   char name[96];
+   char *tok[6];
+   char *p;
+   unsigned n      = 0;
+   bool movable    = false;
+   float rx, ry, tmp;
+   int img_idx;
+   config_file_t *conf = loader->conf;
+   float w         = (float)VIDEO_SCALE_W(loader->draw_dims);
+   float h         = (float)VIDEO_SCALE_H(loader->draw_dims);
+
+   if (!overlay->config.normalized || w <= 0.0f || h <= 0.0f)
+      return false;
+   /* The page as it is shown: its own shape, as big as fits */
+   if (loader->draw_auto_scale && overlay->aspect_ratio > 0.0f)
+   {
+      if (w / h > overlay->aspect_ratio)
+         w = h * overlay->aspect_ratio;
+      else
+         h = w / overlay->aspect_ratio;
+   }
+
+   snprintf(key, sizeof(key), "overlay%u_desc%u", ol_idx, desc_idx);
+   if (!config_get_array(conf, key, spec, sizeof(spec)))
+      return false;
+   for (p = spec; n < 6; n++)
+   {
+      tok[n] = p;
+      while (*p && *p != ',')
+         p++;
+      if (!*p)
+      {
+         n++;
+         break;
+      }
+      *p++ = '\0';
+   }
+   if (n < 6)
+      return false;
+   rx = (float)rstrtod(tok[4], NULL);
+   ry = (float)rstrtod(tok[5], NULL);
+
+   snprintf(key, sizeof(key), "overlay%u_desc%u_layout_w", ol_idx, desc_idx);
+   if (config_get_float(conf, key, &tmp) && tmp > 0.0f)
+      rx = tmp;
+   snprintf(key, sizeof(key), "overlay%u_desc%u_layout_h", ol_idx, desc_idx);
+   if (config_get_float(conf, key, &tmp) && tmp > 0.0f)
+      ry = tmp;
+   snprintf(key, sizeof(key), "overlay%u_desc%u_movable", ol_idx, desc_idx);
+   config_get_bool(conf, key, &movable);
+   label[0] = '\0';
+   snprintf(key, sizeof(key), "overlay%u_desc%u_label", ol_idx, desc_idx);
+   config_get_array(conf, key, label, sizeof(label));
+
+   if (!input_overlay_draw_classify(tok[0], movable, label, &draw))
+      return false;
+
+   /* A little over the size shown, as the page may be scaled up */
+   draw.width  = (unsigned)MIN(1024.0f, MAX(8.0f, 2.0f * rx * w * 1.25f));
+   draw.height = (unsigned)MIN(1024.0f, MAX(8.0f, 2.0f * ry * h * 1.25f));
+
+   snprintf(name, sizeof(name), "drawn/%d/%u/%s/%ux%u", (int)draw.shape,
+         draw.dir, draw.label, draw.width, draw.height);
+   img_idx = string_list_find_elem(loader->image_list, name) - 1;
+   if (img_idx >= 0)
+   {
+      desc->image            = *((struct texture_image*)
+            loader->image_list->elems[img_idx].attr.p);
+      desc->pack_image_index = (unsigned)img_idx;
+   }
+   else
+   {
+      memset(&desc->image, 0, sizeof(desc->image));
+      desc->image.supports_rgba = loader->req.rgba;
+      if (!input_overlay_draw_render(&desc->image, &draw, loader->draw_font))
+         return false;
+      attr.p = (void*)&desc->image;
+      string_list_append(loader->image_list, name, attr);
+      desc->pack_image_index = (unsigned)(loader->image_list->size - 1);
+#ifdef HAVE_RPNG
+      /* Not animated: the list of animations stays one to one */
+      attr.p = NULL;
+      string_list_append(loader->anim_list, name, attr);
+#endif
+   }
+
+   overlay->load_images[overlay->load_images_size++] = desc->image;
+   desc->image_index = overlay->load_images_size - 1;
+   return true;
+}
+#endif
+
 static void task_overlay_load_desc_image(
       overlay_loader_t *loader,
       struct overlay_desc *desc,
@@ -593,6 +713,18 @@ static void task_overlay_load_desc_image(
 
    snprintf(overlay_desc_image_key, sizeof(overlay_desc_image_key),
          "overlay%u_desc%u_overlay", ol_idx, desc_idx);
+
+#ifdef RARCH_INTERNAL
+   if (     loader->draw_font
+         && config_get_path(conf, overlay_desc_image_key,
+            image_path, sizeof(image_path))
+         && task_overlay_load_desc_drawn(loader, desc, overlay,
+            ol_idx, desc_idx))
+   {
+      overlay->pos ++;
+      return;
+   }
+#endif
 
    if (config_get_path(conf, overlay_desc_image_key,
             image_path, sizeof(image_path)))
@@ -1561,6 +1693,11 @@ static void task_overlay_free(retro_task_t *task)
    task_overlay_predecoded_free(loader->predecoded);
    loader->predecoded = NULL;
 
+#ifdef RARCH_INTERNAL
+   input_overlay_draw_font_free(loader->draw_font);
+   loader->draw_font = NULL;
+#endif
+
    /* Release what the loader still owns.
     *
     * A successful load hands the overlays, the path and the image
@@ -1888,6 +2025,24 @@ bool task_push_overlay_load_default(
 #ifdef RARCH_INTERNAL
    gfx_surface_image_request(&loader->req, gfx_surface_wants_rgba(),
          GFX_SURFACE_REQ_COMPRESSED);
+   /* Buttons are drawn unless the layout says not to */
+   {
+      bool drawn = true;
+      config_get_bool(conf, "overlay_drawn_buttons", &drawn);
+      if (drawn && !is_osk)
+      {
+         char font_path[PATH_MAX_LENGTH];
+         fill_pathname_join_special(font_path,
+               config_get_ptr()->paths.directory_assets,
+               "ozone/regular.ttf", sizeof(font_path));
+         loader->draw_font = input_overlay_draw_font_new(font_path);
+         loader->draw_dims = video_driver_get_output_dims();
+         loader->draw_auto_scale =
+            config_get_ptr()->bools.input_overlay_auto_scale;
+         if (loader->draw_font)
+            loader->flags |= OVERLAY_LOADER_DRAWN;
+      }
+   }
 #else
    loader->req.want_compressed = true;
 #endif

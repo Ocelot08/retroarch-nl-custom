@@ -794,6 +794,7 @@ INPUT
 #include "../input/input_driver_choice.c"
 #include "../input/input_overlay_textures.c"
 #include "../input/input_overlay_alpha.c"
+#include "../input/input_overlay_draw.c"
 #ifdef HAVE_BSV_MOVIE
 #include "../input/bsv/bsvmovie.c"
 #include "../input/bsv/uint32s_index.c"

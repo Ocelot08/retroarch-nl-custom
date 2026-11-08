@@ -2181,6 +2181,11 @@ bool input_overlay_layout_control_toggle(unsigned i);
 /* Forgets the layout of the scope chosen and reloads the overlay. */
 void input_overlay_layout_reset(void);
 
+/* Whether the overlay's buttons are drawn rather than images, and the
+ * switch between the two, kept in the layout of the scope chosen */
+bool input_overlay_layout_drawn(void);
+bool input_overlay_layout_drawn_toggle(void);
+
 /* Named copies of the layout shown, kept apart for each overlay:
  * saved from what all the scopes make of it, loaded into the scope
  * chosen in place of its layout. The list holds the names, sorted. */

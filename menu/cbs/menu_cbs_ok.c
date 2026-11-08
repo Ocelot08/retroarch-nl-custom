@@ -6441,6 +6441,12 @@ static int action_ok_overlay_reset_layout(const char *path,
    return 0;
 }
 
+static int action_ok_overlay_layout_drawn(const char *path,
+      const char *label, unsigned type, size_t idx, size_t entry_idx)
+{
+   return input_overlay_layout_drawn_toggle() ? 0 : -1;
+}
+
 static int action_ok_overlay_layout_scope(const char *path,
       const char *label, unsigned type, size_t idx, size_t entry_idx)
 {
@@ -9902,6 +9908,7 @@ static int menu_cbs_init_bind_ok_compare_label(menu_file_list_cbs_t *cbs,
          {MENU_ENUM_LABEL_OVERLAY_EDIT_LAYOUT,                 action_ok_overlay_edit_layout},
          {MENU_ENUM_LABEL_OVERLAY_RESET_LAYOUT,                action_ok_overlay_reset_layout},
          {MENU_ENUM_LABEL_OVERLAY_LAYOUT_SCOPE,                action_ok_overlay_layout_scope},
+         {MENU_ENUM_LABEL_OVERLAY_LAYOUT_DRAWN,                action_ok_overlay_layout_drawn},
          {MENU_ENUM_LABEL_OVERLAY_LAYOUT_CONTROL,              action_ok_overlay_layout_control},
          {MENU_ENUM_LABEL_OVERLAY_LAYOUT_PROFILE_SAVE,         action_ok_overlay_layout_profile_save},
          {MENU_ENUM_LABEL_OVERLAY_LAYOUT_PROFILE_LOAD_ITEM,    action_ok_overlay_layout_profile_load_item},

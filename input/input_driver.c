@@ -7019,7 +7019,10 @@ enum input_overlay_edit_flags
    OVERLAY_EDIT_SEL_SCREEN = (1 << 12),
    /* A finger went down on the game's screen, and has moved it */
    OVERLAY_EDIT_SCREEN_HELD  = (1 << 13),
-   OVERLAY_EDIT_SCREEN_MOVED = (1 << 14)
+   OVERLAY_EDIT_SCREEN_MOVED = (1 << 14),
+   /* A control was sized while the finger was down: drawn buttons are
+    * drawn again at the new size once it lifts */
+   OVERLAY_EDIT_RESIZED      = (1 << 15)
 };
 
 /* Grid cells to the longer side of the screen, square, whose corners
@@ -7895,7 +7898,7 @@ static void input_overlay_edit_resize(input_overlay_t *ol, uint16_t group,
          | OVERLAY_DESC_LAYOUT_PLACED | OVERLAY_DESC_LAYOUT_SIZE_EDITED;
    }
 
-   input_overlay_edit.flags |= OVERLAY_EDIT_CHANGED;
+   input_overlay_edit.flags |= OVERLAY_EDIT_CHANGED | OVERLAY_EDIT_RESIZED;
    command_event(CMD_EVENT_OVERLAY_SET_SCALE_FACTOR, NULL);
 }
 
@@ -8314,16 +8317,12 @@ static int input_overlay_edit_bar_hit(float px, float py)
 /* Adds @e while editing: what was laid out so far is written first,
  * the overlay loads again with it and the editor goes on over it. The
  * layout as it was is kept for Cancel. True, as @ol is gone. */
-static bool input_overlay_edit_add(input_overlay_t *ol,
-      const input_overlay_layout_entry_t *e)
+static void input_overlay_edit_reload(input_overlay_t *ol)
 {
    uint16_t flags = input_overlay_edit.flags;
    unsigned first = input_overlay_edit.panel_first;
-
-   input_overlay_edit_undo_take(ol);
-   input_overlay_layout_save(ol);
-   if (!input_overlay_layout_add_entry(ol, e))
-      return false;
+   uint16_t group = input_overlay_edit.sel_group;
+   unsigned page  = input_overlay_edit.page;
 
    /* Not editing while it reloads, so that nothing finishes */
    input_overlay_edit_drop(ol);
@@ -8332,9 +8331,33 @@ static bool input_overlay_edit_add(input_overlay_t *ol,
    input_overlay_layout_reload(ol);
 
    input_overlay_edit.flags       = OVERLAY_EDIT_ACTIVE | OVERLAY_EDIT_CHANGED
-         | (flags & (OVERLAY_EDIT_PAUSED | OVERLAY_EDIT_PANEL));
+         | (flags & (OVERLAY_EDIT_PAUSED | OVERLAY_EDIT_PANEL
+                  | OVERLAY_EDIT_SELECTED | OVERLAY_EDIT_SEL_SCREEN));
    input_overlay_edit.panel_first = first;
+   input_overlay_edit.sel_group   = group;
+   /* The page it reloads on, so that the selection stays */
+   input_overlay_edit.page        = page;
    input_overlay_edit.bar_item    = -1;
+}
+
+/* What was laid out so far is written to the layout, the layout as it
+ * was kept for Cancel, and the overlay loaded again from it: so that a
+ * control added or resized is made anew. @ol is gone after. */
+static void input_overlay_edit_commit(input_overlay_t *ol)
+{
+   input_overlay_edit_undo_take(ol);
+   input_overlay_layout_save(ol);
+   input_overlay_edit_reload(ol);
+}
+
+static bool input_overlay_edit_add(input_overlay_t *ol,
+      const input_overlay_layout_entry_t *e)
+{
+   input_overlay_edit_undo_take(ol);
+   input_overlay_layout_save(ol);
+   if (!input_overlay_layout_add_entry(ol, e))
+      return false;
+   input_overlay_edit_reload(ol);
    return true;
 }
 
@@ -8380,8 +8403,13 @@ static bool input_overlay_edit_bar_tap(input_overlay_t *ol, int item)
             }
          }
          else if (input_overlay_edit.flags & OVERLAY_EDIT_SELECTED)
+         {
             input_overlay_edit_resize(ol, input_overlay_edit.sel_group,
                   1.0f, 1.0f);
+            input_overlay_edit.flags &= ~OVERLAY_EDIT_RESIZED;
+            input_overlay_edit_commit(ol);
+            return true;
+         }
          break;
       case GFX_OVERLAY_BAR_HALF:
          input_overlay_edit_bar.half = !input_overlay_edit_bar.half;
@@ -8641,6 +8669,14 @@ static void input_overlay_edit_poll(input_overlay_t *ol, float opacity)
                input_overlay_edit.ptr_y) == item
             && input_overlay_edit_bar_tap(ol, item))
          return;
+
+      /* Sized: drawn again at its new size */
+      if (input_overlay_edit.flags & OVERLAY_EDIT_RESIZED)
+      {
+         input_overlay_edit.flags &= ~OVERLAY_EDIT_RESIZED;
+         input_overlay_edit_commit(ol);
+         return;
+      }
 
       /* A tap selects the control or the screen it is on, and nothing
        * when on neither */
@@ -13197,6 +13233,7 @@ static void input_overlay_loaded(retro_task_t *task,
    ol->active      = data->active;
    ol->path        = data->overlay_path;
    ol->layout_key  = input_overlay_layout_key();
+   ol->drawn       = (data->flags & OVERLAY_LOADER_DRAWN) != 0;
    input_overlay_loads++;
    ol->num_images  = data->image_list->size;
    ol->next_index  = (unsigned)((ol->index + 1) % ol->size);
@@ -13468,6 +13505,47 @@ static void input_overlay_layout_reload(const input_overlay_t *ol)
       ? (int)(ol->active - ol->overlays) : -1;
    input_overlay_deinit();
    input_overlay_init();
+}
+
+bool input_overlay_layout_drawn(void)
+{
+   input_overlay_t *ol = input_overlay_layout_target();
+   return ol && ol->drawn;
+}
+
+/* Draws the buttons, or loads their images, from now on for the scope
+ * chosen, and loads the overlay again */
+bool input_overlay_layout_drawn_toggle(void)
+{
+   char path[PATH_MAX_LENGTH];
+   char dir[DIR_MAX_LENGTH];
+   bool ret;
+   config_file_t *conf = NULL;
+   input_overlay_t *ol = input_overlay_layout_target();
+
+   if (!ol)
+      return false;
+   input_overlay_layout_path(path, sizeof(path), ol->path,
+         input_overlay_layout_scope());
+   if (!*path)
+      return false;
+   if (     !path_is_valid(path)
+         || !(conf = config_file_new_from_path_to_string(path)))
+      conf = config_file_new_alloc();
+   if (!conf)
+      return false;
+
+   input_overlay_edit_finish(input_driver_st.overlay_ptr, true);
+   config_set_string(conf, "overlay_drawn_buttons",
+         ol->drawn ? "false" : "true");
+   fill_pathname_basedir(dir, path, sizeof(dir));
+   if (!path_is_directory(dir))
+      path_mkdir(dir);
+   ret = config_file_write(conf, path, true);
+   config_file_free(conf);
+   if (ret)
+      input_overlay_layout_reload(ol);
+   return ret;
 }
 
 void input_overlay_layout_reset(void)

@@ -1572,6 +1572,20 @@ static size_t menu_action_setting_disp_set_label_overlay_layout_scope(
    return input_overlay_layout_scope_name(s, len);
 }
 
+static size_t menu_action_setting_disp_set_label_overlay_layout_drawn(
+      file_list_t* list,
+      unsigned *w, unsigned type, unsigned i,
+      const char *label,
+      char *s, size_t len,
+      const char *path,
+      char *s2, size_t len2)
+{
+   *w = 19;
+   strlcpy(s2, path, len2);
+   return strlcpy(s, msg_hash_to_str(input_overlay_layout_drawn()
+         ? MENU_ENUM_LABEL_VALUE_ON : MENU_ENUM_LABEL_VALUE_OFF), len);
+}
+
 static size_t menu_action_setting_disp_set_label_overlay_layout_control(
       file_list_t* list,
       unsigned *w, unsigned type, unsigned i,
@@ -2236,6 +2250,10 @@ static int menu_cbs_init_bind_get_string_representation_compare_label(
          case MENU_ENUM_LABEL_OVERLAY_LAYOUT_CONTROL:
             BIND_ACTION_GET_VALUE(cbs,
                   menu_action_setting_disp_set_label_overlay_layout_control);
+            break;
+         case MENU_ENUM_LABEL_OVERLAY_LAYOUT_DRAWN:
+            BIND_ACTION_GET_VALUE(cbs,
+                  menu_action_setting_disp_set_label_overlay_layout_drawn);
             break;
 #endif
          case MENU_ENUM_LABEL_PLAYLIST_MANAGER_RIGHT_THUMBNAIL_MODE:

@@ -1204,6 +1204,12 @@ static int bind_left_generic(unsigned type, const char *label,
 }
 
 #ifdef HAVE_OVERLAY
+static int action_left_overlay_layout_drawn(unsigned type, const char *label,
+      bool wraparound)
+{
+   return input_overlay_layout_drawn_toggle() ? 0 : -1;
+}
+
 static int action_left_overlay_layout_scope(unsigned type, const char *label,
       bool wraparound)
 {
@@ -1304,6 +1310,9 @@ static int menu_cbs_init_bind_left_compare_label(menu_file_list_cbs_t *cbs,
 #ifdef HAVE_OVERLAY
             case MENU_ENUM_LABEL_OVERLAY_LAYOUT_SCOPE:
                BIND_ACTION_LEFT(cbs, action_left_overlay_layout_scope);
+               break;
+            case MENU_ENUM_LABEL_OVERLAY_LAYOUT_DRAWN:
+               BIND_ACTION_LEFT(cbs, action_left_overlay_layout_drawn);
                break;
 #endif
             case MENU_ENUM_LABEL_PLAYLIST_MANAGER_RIGHT_THUMBNAIL_MODE:

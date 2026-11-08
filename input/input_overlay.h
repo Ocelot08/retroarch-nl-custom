@@ -107,7 +107,9 @@ enum OVERLAY_LOADER_FLAGS
    OVERLAY_LOADER_HAS_LEDS     = (1 << 3),
    /* The pack's images were decoded together before the first
     * overlay was parsed (task_overlay_predecode) */
-   OVERLAY_LOADER_PREDECODED   = (1 << 4)
+   OVERLAY_LOADER_PREDECODED   = (1 << 4),
+   /* Its buttons were drawn (input_overlay_draw.h), not loaded */
+   OVERLAY_LOADER_DRAWN        = (1 << 5)
 };
 
 enum INPUT_OVERLAY_FLAGS
@@ -501,6 +503,8 @@ struct input_overlay
     * applied for */
    uint32_t layout_key;
 
+   /* Its buttons were drawn, as the layout asked */
+   bool drawn;
    uint8_t flags;
 };
 
