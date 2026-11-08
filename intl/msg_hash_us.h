@@ -32537,7 +32537,7 @@ MSG_HASH(
    )
 MSG_HASH(
    MSG_OVERLAY_EDIT_LAYOUT_START,
-   "Drag controls to move them. Press Back when done."
+   "Drag controls to move them. Save or Cancel on the bar, which moves by its grip."
    )
 MSG_HASH(
    MSG_OVERLAY_LAYOUT_SAVED,
@@ -32586,6 +32586,34 @@ MSG_HASH(
 MSG_HASH(
    MSG_OVERLAY_CONTROL_PAGE,
    "Page: %s"
+   )
+MSG_HASH(
+   MSG_OVERLAY_EDIT_SAVE,
+   "Save"
+   )
+MSG_HASH(
+   MSG_OVERLAY_EDIT_CANCEL,
+   "Cancel"
+   )
+MSG_HASH(
+   MSG_OVERLAY_EDIT_CONTROLS,
+   "Controls"
+   )
+MSG_HASH(
+   MSG_OVERLAY_EDIT_HALF_GRID,
+   "Half grid"
+   )
+MSG_HASH(
+   MSG_OVERLAY_EDIT_DONE,
+   "Done"
+   )
+MSG_HASH(
+   MSG_OVERLAY_EDIT_PREV,
+   "Prev"
+   )
+MSG_HASH(
+   MSG_OVERLAY_EDIT_NEXT,
+   "Next"
    )
 MSG_HASH(
    MSG_FAILED_TO_LOAD_STATE,

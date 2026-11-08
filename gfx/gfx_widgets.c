@@ -2007,34 +2007,329 @@ bool gfx_widgets_visible(void *data)
    return false;
 }
 
-void gfx_widgets_set_overlay_grid(unsigned cells)
+void gfx_widgets_set_overlay_bar(const gfx_overlay_bar_t *bar)
 {
-   retro_atomic_store_release_int(&dispwidget_st.overlay_grid, (int)cells);
+   dispgfx_widget_t *p_dispwidget = &dispwidget_st;
+   int seq = retro_atomic_load_relaxed_int(&p_dispwidget->overlay_bar_seq);
+
+   retro_atomic_store_relaxed_int(&p_dispwidget->overlay_bar_seq, seq + 1);
+   retro_atomic_thread_fence_release();
+   if (bar)
+      memcpy(&p_dispwidget->overlay_bar, bar, sizeof(*bar));
+   else
+      p_dispwidget->overlay_bar.flags = 0;
+   retro_atomic_thread_fence_release();
+   retro_atomic_store_release_int(&p_dispwidget->overlay_bar_seq, seq + 2);
 }
 
-/* 1px white lines at 30%, where the editor snaps controls to */
-static void gfx_widgets_draw_overlay_grid(gfx_display_t *p_disp,
-      gfx_display_ctx_driver_t *dispctx, void *userdata,
-      unsigned video_dims, unsigned cells)
+bool gfx_widgets_overlay_bar_rect(unsigned dims,
+      const gfx_overlay_bar_t *bar, unsigned item,
+      int *x, int *y, int *w, int *h)
 {
-   float color[16] = COLOR_HEX_TO_FLOAT(0xFFFFFF, 0.3f);
-   unsigned w      = VIDEO_SCALE_W(video_dims);
-   unsigned h      = VIDEO_SCALE_H(video_dims);
-   float cell      = (float)MAX(w, h) / (float)cells;
-   float pos;
+   /* In grid cells: the bar is 3 high, its parts these wide */
+   static const float part[] = { 2.0f, 3.5f, 4.0f, 4.5f, 7.0f };
+   int sw    = (int)VIDEO_SCALE_W(dims);
+   int sh    = (int)VIDEO_SCALE_H(dims);
+   float u   = (float)MAX(sw, sh) / GFX_OVERLAY_BAR_GRID;
+   int bar_w, bar_h, bx, by;
+   unsigned i;
 
-   if (cell < 1.0f)
+   if (     !bar || !(bar->flags & GFX_OVERLAY_BAR_FLAG_SHOWN)
+         || sw <= 0 || sh <= 0)
+      return false;
+   if (u * 21.0f > (float)sw)
+      u = (float)sw / 21.0f;
+   bar_w = (int)(u * 21.0f);
+   bar_h = (int)(u * 3.0f);
+   bx    = MAX(0, MIN((int)(bar->x * sw), sw - bar_w));
+   by    = MAX(0, MIN((int)(bar->y * sh), sh - bar_h));
+
+   if (item <= GFX_OVERLAY_BAR_HALF)
+   {
+      float left = 0.0f;
+      for (i = 0; i < item; i++)
+         left += part[i];
+      *x = bx + (int)(left * u);
+      *y = by;
+      *w = (int)(part[item] * u);
+      *h = bar_h;
+      return true;
+   }
+   if (item == GFX_OVERLAY_BAR_BAR)
+   {
+      *x = bx;
+      *y = by;
+      *w = bar_w;
+      *h = bar_h;
+      return true;
+   }
+
+   if (!(bar->flags & GFX_OVERLAY_BAR_FLAG_PANEL_OPEN))
+      return false;
+
+   /* The panel: under the bar, or over it where there is no room */
+   {
+      unsigned rows = MIN(bar->count, GFX_OVERLAY_BAR_ROWS);
+      int row_h     = (int)(u * 2.5f);
+      int pw        = MIN(sw, (int)(u * 15.0f));
+      int ph        = row_h * (int)(rows + 1);
+      int px        = MAX(0, MIN(bx, sw - pw));
+      int py        = (by + bar_h + ph <= sh) ? by + bar_h : MAX(0, by - ph);
+
+      switch (item)
+      {
+         case GFX_OVERLAY_BAR_PANEL:
+            *x = px;
+            *y = py;
+            *w = pw;
+            *h = ph;
+            return true;
+         case GFX_OVERLAY_BAR_PANEL_DONE:
+            *w = (int)(u * 5.0f);
+            *x = px + pw - *w;
+            *y = py;
+            *h = row_h;
+            return true;
+         case GFX_OVERLAY_BAR_PANEL_PREV:
+         case GFX_OVERLAY_BAR_PANEL_NEXT:
+            if (bar->count <= GFX_OVERLAY_BAR_ROWS)
+               return false;
+            *w = (int)(u * 4.0f);
+            *x = px + (item == GFX_OVERLAY_BAR_PANEL_NEXT ? *w : 0);
+            *y = py;
+            *h = row_h;
+            return true;
+         default:
+            break;
+      }
+      if (     item >= GFX_OVERLAY_BAR_ROW
+            && item - GFX_OVERLAY_BAR_ROW < rows
+            && bar->first + (item - GFX_OVERLAY_BAR_ROW) < bar->count)
+      {
+         *x = px;
+         *y = py + row_h * (int)(item - GFX_OVERLAY_BAR_ROW + 1);
+         *w = pw;
+         *h = row_h;
+         return true;
+      }
+   }
+   return false;
+}
+
+static void gfx_widgets_overlay_rect(gfx_display_t *p_disp, void *userdata,
+      unsigned video_dims, int x, int y, int w, int h,
+      uint32_t hex, float alpha)
+{
+   float color[16] = COLOR_HEX_TO_FLOAT(hex, alpha);
+   if (w > 0 && h > 0)
+      gfx_display_draw_quad(p_disp, userdata, video_dims, x, y,
+            VIDEO_SCALE_PACK(w, h), video_dims, color, NULL);
+}
+
+static void gfx_widgets_overlay_frame(gfx_display_t *p_disp,
+      void *userdata, unsigned video_dims, int x, int y, int w, int h,
+      uint32_t hex, float alpha)
+{
+   gfx_widgets_overlay_rect(p_disp, userdata, video_dims, x, y, w, 1, hex, alpha);
+   gfx_widgets_overlay_rect(p_disp, userdata, video_dims, x, y + h - 1, w, 1, hex, alpha);
+   gfx_widgets_overlay_rect(p_disp, userdata, video_dims, x, y, 1, h, hex, alpha);
+   gfx_widgets_overlay_rect(p_disp, userdata, video_dims, x + w - 1, y, 1, h, hex, alpha);
+}
+
+#define OVERLAY_BAR_BG     0x000000
+#define OVERLAY_BAR_LINE   0x00FCB8
+#define OVERLAY_BAR_CHECK  0xCCFF02
+#define OVERLAY_BAR_TEXT   0xFFFFFFFF
+
+/* The scale at which @label fits in @w x @h, never over 1 */
+static float gfx_widgets_overlay_fit(dispgfx_widget_t *p_dispwidget,
+      const char *label, int w, int h)
+{
+   gfx_widget_font_data_t *font = &p_dispwidget->gfx_widget_fonts.regular;
+   float scale                  = 1.0f;
+   int width;
+
+   if (!font->font || !label || !*label)
+      return scale;
+   width = font_driver_get_message_width(font->font, label, strlen(label), 1.0f);
+   if (width > 0 && width > w * 0.85f)
+      scale = (w * 0.85f) / width;
+   if (font->line_height > 0.0f && font->line_height * scale > h * 0.5f)
+      scale = (h * 0.5f) / font->line_height;
+   return scale;
+}
+
+static void gfx_widgets_overlay_text(dispgfx_widget_t *p_dispwidget,
+      unsigned video_dims, const char *label, int x, int y, int w, int h,
+      float scale, bool centred)
+{
+   gfx_widget_font_data_t *font = &p_dispwidget->gfx_widget_fonts.regular;
+
+   if (!font->font || !label || !*label)
+      return;
+   gfx_display_draw_text(font->font, label,
+         centred ? x + w / 2.0f : (float)x,
+         y + h / 2.0f + font->line_centre_offset * scale,
+         video_dims, OVERLAY_BAR_TEXT,
+         centred ? TEXT_ALIGN_CENTER : TEXT_ALIGN_LEFT,
+         scale, false, 0.0f, false);
+   font->usage_count++;
+}
+
+/* Where the label of a box goes, within @w x @h */
+#define OVERLAY_CHECK_LABEL_X(h)  ((h) / 4 + (h) / 2 + (h) / 4)
+
+/* A box, ticked or not, and @label after it, within @w x @h */
+static void gfx_widgets_overlay_check(dispgfx_widget_t *p_dispwidget,
+      gfx_display_t *p_disp, void *userdata, unsigned video_dims,
+      int x, int y, int w, int h, bool ticked, const char *label,
+      float scale)
+{
+   int box = h / 2;
+   int top = y + (h - box) / 2;
+   int pad = h / 4;
+
+   gfx_widgets_overlay_frame(p_disp, userdata, video_dims,
+         x + pad, top, box, box, OVERLAY_BAR_LINE, 1.0f);
+   if (ticked)
+      gfx_widgets_overlay_rect(p_disp, userdata, video_dims,
+            x + pad + 3, top + 3, box - 6, box - 6, OVERLAY_BAR_CHECK, 1.0f);
+   gfx_widgets_overlay_text(p_dispwidget, video_dims, label,
+         x + OVERLAY_CHECK_LABEL_X(h), y, w - OVERLAY_CHECK_LABEL_X(h), h,
+         scale, false);
+}
+
+/* The grid, 1px white lines at 30% (at 15% between them for half
+ * cells), then the bar and its panel over it */
+static void gfx_widgets_draw_overlay_bar(dispgfx_widget_t *p_dispwidget,
+      gfx_display_t *p_disp, gfx_display_ctx_driver_t *dispctx,
+      void *userdata, unsigned video_dims)
+{
+   static const enum msg_hash_enums labels[] = {
+      MSG_UNKNOWN, MSG_OVERLAY_EDIT_SAVE, MSG_OVERLAY_EDIT_CANCEL,
+      MSG_OVERLAY_EDIT_CONTROLS, MSG_OVERLAY_EDIT_HALF_GRID };
+   const gfx_overlay_bar_t *bar = &p_dispwidget->overlay_bar_drawn;
+   unsigned w     = VIDEO_SCALE_W(video_dims);
+   unsigned h     = VIDEO_SCALE_H(video_dims);
+   bool half      = (bar->flags & GFX_OVERLAY_BAR_FLAG_HALF_GRID) != 0;
+   float cell     = (float)MAX(w, h) / (GFX_OVERLAY_BAR_GRID * (half ? 2 : 1));
+   float pos;
+   unsigned i, n;
+   int x, y, iw, ih;
+
+   float scale    = 1.0f;
+
+   if (!(bar->flags & GFX_OVERLAY_BAR_FLAG_SHOWN) || cell < 1.0f)
       return;
 
+   /* One size for the bar's labels, the one the longest needs */
+   for (i = GFX_OVERLAY_BAR_SAVE; i <= GFX_OVERLAY_BAR_HALF; i++)
+   {
+      gfx_widgets_overlay_bar_rect(video_dims, bar, i, &x, &y, &iw, &ih);
+      if (i == GFX_OVERLAY_BAR_HALF)
+         iw -= OVERLAY_CHECK_LABEL_X(ih);
+      scale = MIN(scale, gfx_widgets_overlay_fit(p_dispwidget,
+               msg_hash_to_str(labels[i]), iw, ih));
+   }
+
    gfx_display_blend_begin(dispctx, userdata);
-   for (pos = cell; pos < (float)w; pos += cell)
-      gfx_display_draw_quad(p_disp, userdata, video_dims,
-            (int)(pos + 0.5f), 0, VIDEO_SCALE_PACK(1, h),
-            video_dims, color, NULL);
-   for (pos = cell; pos < (float)h; pos += cell)
-      gfx_display_draw_quad(p_disp, userdata, video_dims,
-            0, (int)(pos + 0.5f), VIDEO_SCALE_PACK(w, 1),
-            video_dims, color, NULL);
+
+   for (n = 1, pos = cell; pos < (float)w; pos += cell, n++)
+      gfx_widgets_overlay_rect(p_disp, userdata, video_dims,
+            (int)(pos + 0.5f), 0, 1, h, 0xFFFFFF,
+            (half && (n & 1)) ? 0.15f : 0.3f);
+   for (n = 1, pos = cell; pos < (float)h; pos += cell, n++)
+      gfx_widgets_overlay_rect(p_disp, userdata, video_dims,
+            0, (int)(pos + 0.5f), w, 1, 0xFFFFFF,
+            (half && (n & 1)) ? 0.15f : 0.3f);
+
+   /* The bar */
+   gfx_widgets_overlay_bar_rect(video_dims, bar, GFX_OVERLAY_BAR_BAR,
+         &x, &y, &iw, &ih);
+   gfx_widgets_overlay_rect(p_disp, userdata, video_dims,
+         x, y, iw, ih, OVERLAY_BAR_BG, 0.85f);
+   gfx_widgets_overlay_frame(p_disp, userdata, video_dims,
+         x, y, iw, ih, OVERLAY_BAR_LINE, 1.0f);
+   for (i = GFX_OVERLAY_BAR_GRIP; i <= GFX_OVERLAY_BAR_HALF; i++)
+   {
+      gfx_widgets_overlay_bar_rect(video_dims, bar, i, &x, &y, &iw, &ih);
+      if (bar->pressed == (int)i)
+         gfx_widgets_overlay_rect(p_disp, userdata, video_dims,
+               x, y, iw, ih, OVERLAY_BAR_LINE, 0.3f);
+      if (i > GFX_OVERLAY_BAR_GRIP)
+         gfx_widgets_overlay_rect(p_disp, userdata, video_dims,
+               x, y + ih / 5, 1, ih - 2 * (ih / 5), OVERLAY_BAR_LINE, 0.5f);
+      switch (i)
+      {
+         case GFX_OVERLAY_BAR_GRIP:
+            /* Three lines to take hold of */
+            for (n = 0; n < 3; n++)
+               gfx_widgets_overlay_rect(p_disp, userdata, video_dims,
+                     x + iw / 4, y + ih / 3 + (int)n * (ih / 6) - 1,
+                     iw / 2, 2, OVERLAY_BAR_LINE, 1.0f);
+            break;
+         case GFX_OVERLAY_BAR_HALF:
+            gfx_widgets_overlay_check(p_dispwidget, p_disp, userdata,
+                  video_dims, x, y, iw, ih, half,
+                  msg_hash_to_str(labels[i]), scale);
+            break;
+         case GFX_OVERLAY_BAR_CONTROLS_BUTTON:
+            if (bar->flags & GFX_OVERLAY_BAR_FLAG_PANEL_OPEN)
+               gfx_widgets_overlay_rect(p_disp, userdata, video_dims,
+                     x + iw / 6, y + ih - 4, iw - iw / 3, 2,
+                     OVERLAY_BAR_CHECK, 1.0f);
+            /* fall-through */
+         default:
+            gfx_widgets_overlay_text(p_dispwidget, video_dims,
+                  msg_hash_to_str(labels[i]), x, y, iw, ih, scale, true);
+            break;
+      }
+   }
+
+   /* The panel of controls, shown or not */
+   if (gfx_widgets_overlay_bar_rect(video_dims, bar, GFX_OVERLAY_BAR_PANEL,
+            &x, &y, &iw, &ih))
+   {
+      float row_scale = scale;
+
+      gfx_widgets_overlay_rect(p_disp, userdata, video_dims,
+            x, y, iw, ih, OVERLAY_BAR_BG, 0.85f);
+      gfx_widgets_overlay_frame(p_disp, userdata, video_dims,
+            x, y, iw, ih, OVERLAY_BAR_LINE, 1.0f);
+
+      /* The rows' names all at one size too */
+      for (i = GFX_OVERLAY_BAR_ROW; i < GFX_OVERLAY_BAR_ITEMS; i++)
+         if (gfx_widgets_overlay_bar_rect(video_dims, bar, i,
+                  &x, &y, &iw, &ih))
+            row_scale = MIN(row_scale, gfx_widgets_overlay_fit(p_dispwidget,
+                     bar->names[bar->first + (i - GFX_OVERLAY_BAR_ROW)],
+                     iw - OVERLAY_CHECK_LABEL_X(ih), ih));
+
+      for (i = GFX_OVERLAY_BAR_PANEL_DONE; i < GFX_OVERLAY_BAR_ITEMS; i++)
+      {
+         if (!gfx_widgets_overlay_bar_rect(video_dims, bar, i,
+                  &x, &y, &iw, &ih))
+            continue;
+         if (bar->pressed == (int)i)
+            gfx_widgets_overlay_rect(p_disp, userdata, video_dims,
+                  x, y, iw, ih, OVERLAY_BAR_LINE, 0.3f);
+         if (i >= GFX_OVERLAY_BAR_ROW)
+         {
+            unsigned c = bar->first + (i - GFX_OVERLAY_BAR_ROW);
+            gfx_widgets_overlay_check(p_dispwidget, p_disp, userdata,
+                  video_dims, x, y, iw, ih, bar->shown[c] != 0,
+                  bar->names[c], row_scale);
+            continue;
+         }
+         gfx_widgets_overlay_text(p_dispwidget, video_dims,
+               msg_hash_to_str(i == GFX_OVERLAY_BAR_PANEL_DONE
+                  ? MSG_OVERLAY_EDIT_DONE
+                  : i == GFX_OVERLAY_BAR_PANEL_PREV
+                  ? MSG_OVERLAY_EDIT_PREV : MSG_OVERLAY_EDIT_NEXT),
+               x, y, iw, ih, scale, true);
+      }
+   }
+
    gfx_display_blend_end(dispctx, userdata);
 }
 
@@ -2102,11 +2397,19 @@ static void gfx_widgets_frame_state(void *data)
       video_st->current_video->set_viewport(
             video_st->data, video_info->dims, true, false);
 
+   /* The overlay layout editor's bar, as last handed over whole */
    {
-      int grid = retro_atomic_load_acquire_int(&p_dispwidget->overlay_grid);
-      if (grid > 0)
-         gfx_widgets_draw_overlay_grid(p_disp, dispctx, userdata,
-               video_info->dims, (unsigned)grid);
+      int seq = retro_atomic_load_acquire_int(&p_dispwidget->overlay_bar_seq);
+      if (!(seq & 1))
+      {
+         memcpy(&p_dispwidget->overlay_bar_read, &p_dispwidget->overlay_bar,
+               sizeof(p_dispwidget->overlay_bar_read));
+         retro_atomic_thread_fence_acquire();
+         if (retro_atomic_load_relaxed_int(&p_dispwidget->overlay_bar_seq) == seq)
+            memcpy(&p_dispwidget->overlay_bar_drawn,
+                  &p_dispwidget->overlay_bar_read,
+                  sizeof(p_dispwidget->overlay_bar_drawn));
+      }
    }
 
    /* Font setup */
@@ -2123,6 +2426,9 @@ static void gfx_widgets_frame_state(void *data)
    p_dispwidget->gfx_widget_fonts.bold.usage_count                            = 0;
    p_dispwidget->gfx_widget_fonts.msg_queue.raster_block.carr.coords.vertices = 0;
    p_dispwidget->gfx_widget_fonts.msg_queue.usage_count                       = 0;
+
+   gfx_widgets_draw_overlay_bar(p_dispwidget, p_disp, dispctx, userdata,
+         video_info->dims);
 
 #ifdef HAVE_TRANSLATE
    /* AI Service overlay */

@@ -7005,7 +7005,11 @@ enum input_overlay_edit_flags
    OVERLAY_EDIT_CHANGED  = (1 << 5),
    /* Back is down, and went down while editing: its release finishes */
    OVERLAY_EDIT_BACK     = (1 << 6),
-   OVERLAY_EDIT_BACK_NEW = (1 << 7)
+   OVERLAY_EDIT_BACK_NEW = (1 << 7),
+   /* The bar's panel of controls is open */
+   OVERLAY_EDIT_PANEL    = (1 << 8),
+   /* The bar is being moved by its grip */
+   OVERLAY_EDIT_GRIP     = (1 << 9)
 };
 
 /* Grid cells to the longer side of the screen, square, whose corners
@@ -7024,9 +7028,29 @@ static struct
     * the screen */
    float mid_x;
    float mid_y;
+   /* Where the finger last was, in pixels, and where on the bar's grip
+    * it took hold */
+   float ptr_x;
+   float ptr_y;
+   float grip_x;
+   float grip_y;
    unsigned page;
-   uint8_t flags;
+   /* First control the panel shows */
+   unsigned panel_first;
+   /* gfx_overlay_bar_item held down, or -1 */
+   int bar_item;
+   uint16_t flags;
 } input_overlay_edit;
+
+/* Where the bar is, as fractions of the screen (negative before it was
+ * first shown), and whether the grid is halved: kept from one editing
+ * to the next while the app runs */
+static struct
+{
+   float x;
+   float y;
+   bool half;
+} input_overlay_edit_bar = { -1.0f, -1.0f, false };
 
 /* The scope the layout is edited for, and the content it was chosen
  * with: other content starts from the most specific layout it has. */
@@ -7394,7 +7418,7 @@ static void input_overlay_edit_drop(input_overlay_t *ol)
 
 static void input_overlay_edit_finish(input_overlay_t *ol, bool save)
 {
-   uint8_t flags = input_overlay_edit.flags;
+   uint16_t flags = input_overlay_edit.flags;
 
    if (!(flags & OVERLAY_EDIT_ACTIVE))
       return;
@@ -7403,7 +7427,7 @@ static void input_overlay_edit_finish(input_overlay_t *ol, bool save)
    free(input_overlay_edit.items);
    memset(&input_overlay_edit, 0, sizeof(input_overlay_edit));
 #ifdef HAVE_GFX_WIDGETS
-   gfx_widgets_set_overlay_grid(0);
+   gfx_widgets_set_overlay_bar(NULL);
 #endif
 
    if (save && ol && (flags & OVERLAY_EDIT_CHANGED))
@@ -7563,7 +7587,8 @@ static void input_overlay_edit_move(input_overlay_t *ol, float x, float y)
       unsigned dims = video_driver_get_output_dims();
       float w       = (float)VIDEO_SCALE_W(dims);
       float h       = (float)VIDEO_SCALE_H(dims);
-      float cell    = MAX(w, h) / OVERLAY_EDIT_GRID;
+      float cell    = MAX(w, h) / (OVERLAY_EDIT_GRID
+            * (input_overlay_edit_bar.half ? 2 : 1));
       if (     cell >= 1.0f
             && ol->active->mod_w > 0.0f && ol->active->mod_h > 0.0f)
       {
@@ -7612,6 +7637,154 @@ static void input_overlay_edit_return(void)
 #endif
 }
 
+static void input_overlay_deinit(void);
+static uint16_t input_overlay_layout_nth_control(input_overlay_t *ol,
+      unsigned i);
+
+#ifdef HAVE_GFX_WIDGETS
+/* Out of the editor into the menu: saved, or back to what was saved */
+static void input_overlay_edit_leave(input_overlay_t *ol, bool save)
+{
+   bool changed = (input_overlay_edit.flags & OVERLAY_EDIT_CHANGED) != 0;
+
+   input_overlay_edit_finish(ol, save);
+   if (!save && changed)
+   {
+      input_overlay_deinit();
+      input_overlay_init();
+   }
+#ifdef HAVE_MENU
+   if (!(menu_state_get_ptr()->flags & MENU_ST_FLAG_ALIVE))
+      retroarch_menu_running();
+#endif
+}
+
+/* What the widgets draw of the bar, made again at every poll */
+static gfx_overlay_bar_t input_overlay_edit_bar_drawn;
+
+static gfx_overlay_bar_t *input_overlay_edit_bar_make(void)
+{
+   unsigned i;
+   gfx_overlay_bar_t *bar = &input_overlay_edit_bar_drawn;
+   unsigned count         = input_overlay_layout_control_count();
+
+   if (input_overlay_edit_bar.x < 0.0f)
+   {
+      /* Middle of the top, to start with */
+      int x, y, w, h;
+      unsigned dims = video_driver_get_output_dims();
+      bar->x        = 0.0f;
+      bar->y        = 0.0f;
+      bar->flags    = GFX_OVERLAY_BAR_FLAG_SHOWN;
+      if (     VIDEO_SCALE_W(dims)
+            && gfx_widgets_overlay_bar_rect(dims, bar, GFX_OVERLAY_BAR_BAR,
+               &x, &y, &w, &h))
+      {
+         input_overlay_edit_bar.x = (1.0f - (float)w / VIDEO_SCALE_W(dims)) * 0.5f;
+         input_overlay_edit_bar.y = 0.04f;
+      }
+   }
+
+   bar->x       = input_overlay_edit_bar.x;
+   bar->y       = input_overlay_edit_bar.y;
+   bar->pressed = input_overlay_edit.bar_item;
+   bar->count   = MIN(count, GFX_OVERLAY_BAR_CONTROLS);
+   bar->first   = input_overlay_edit.panel_first;
+   bar->flags   = GFX_OVERLAY_BAR_FLAG_SHOWN;
+   if (input_overlay_edit_bar.half)
+      bar->flags |= GFX_OVERLAY_BAR_FLAG_HALF_GRID;
+   if (input_overlay_edit.flags & OVERLAY_EDIT_PANEL)
+      bar->flags |= GFX_OVERLAY_BAR_FLAG_PANEL_OPEN;
+   for (i = 0; i < bar->count; i++)
+   {
+      bool shown = false;
+      input_overlay_layout_control_get(i, bar->names[i],
+            sizeof(bar->names[i]), &shown);
+      bar->shown[i] = shown;
+   }
+   return bar;
+}
+
+/* The part of the bar at @x, @y (pixels), or -1: the panel's over the
+ * bar's, either one's own background last */
+static int input_overlay_edit_bar_hit(float px, float py)
+{
+   static const unsigned order[] = {
+      GFX_OVERLAY_BAR_PANEL_DONE, GFX_OVERLAY_BAR_PANEL_PREV,
+      GFX_OVERLAY_BAR_PANEL_NEXT, GFX_OVERLAY_BAR_PANEL,
+      GFX_OVERLAY_BAR_GRIP, GFX_OVERLAY_BAR_SAVE, GFX_OVERLAY_BAR_CANCEL,
+      GFX_OVERLAY_BAR_CONTROLS_BUTTON, GFX_OVERLAY_BAR_HALF,
+      GFX_OVERLAY_BAR_BAR };
+   unsigned i;
+   int x, y, w, h;
+   unsigned dims          = video_driver_get_output_dims();
+   gfx_overlay_bar_t *bar = &input_overlay_edit_bar_drawn;
+
+   if (!gfx_widgets_ready() || !(bar->flags & GFX_OVERLAY_BAR_FLAG_SHOWN))
+      return -1;
+
+   for (i = GFX_OVERLAY_BAR_ROW; i < GFX_OVERLAY_BAR_ITEMS; i++)
+      if (     gfx_widgets_overlay_bar_rect(dims, bar, i, &x, &y, &w, &h)
+            && px >= x && px < x + w && py >= y && py < y + h)
+         return (int)i;
+   for (i = 0; i < ARRAY_SIZE(order); i++)
+      if (     gfx_widgets_overlay_bar_rect(dims, bar, order[i], &x, &y, &w, &h)
+            && px >= x && px < x + w && py >= y && py < y + h)
+         return (int)order[i];
+   return -1;
+}
+
+/* A tap on @item of the bar. True when it ended the editing. */
+static bool input_overlay_edit_bar_tap(input_overlay_t *ol, int item)
+{
+   switch (item)
+   {
+      case GFX_OVERLAY_BAR_SAVE:
+         input_overlay_edit_leave(ol, true);
+         return true;
+      case GFX_OVERLAY_BAR_CANCEL:
+         input_overlay_edit_leave(ol, false);
+         return true;
+      case GFX_OVERLAY_BAR_CONTROLS_BUTTON:
+         input_overlay_edit.flags      ^= OVERLAY_EDIT_PANEL;
+         input_overlay_edit.panel_first = 0;
+         break;
+      case GFX_OVERLAY_BAR_HALF:
+         input_overlay_edit_bar.half = !input_overlay_edit_bar.half;
+         break;
+      case GFX_OVERLAY_BAR_PANEL_DONE:
+         input_overlay_edit.flags &= ~OVERLAY_EDIT_PANEL;
+         break;
+      case GFX_OVERLAY_BAR_PANEL_PREV:
+         input_overlay_edit.panel_first =
+               (input_overlay_edit.panel_first > GFX_OVERLAY_BAR_ROWS)
+            ? input_overlay_edit.panel_first - GFX_OVERLAY_BAR_ROWS : 0;
+         break;
+      case GFX_OVERLAY_BAR_PANEL_NEXT:
+         if (     input_overlay_edit.panel_first + GFX_OVERLAY_BAR_ROWS
+               < input_overlay_edit_bar_drawn.count)
+            input_overlay_edit.panel_first += GFX_OVERLAY_BAR_ROWS;
+         break;
+      default:
+         /* A control on or off, saved or not with the rest */
+         if (item >= GFX_OVERLAY_BAR_ROW && item < GFX_OVERLAY_BAR_ITEMS)
+         {
+            bool shown;
+            unsigned i     = input_overlay_edit.panel_first
+                  + (unsigned)(item - GFX_OVERLAY_BAR_ROW);
+            uint16_t group = input_overlay_layout_nth_control(ol, i);
+            if (group && input_overlay_layout_control_get(i, NULL, 0, &shown))
+            {
+               input_overlay_layout_set_hidden(ol, group, shown);
+               input_overlay_edit.flags |= OVERLAY_EDIT_CHANGED;
+            }
+         }
+         break;
+   }
+   return false;
+}
+#endif
+
 static void input_overlay_edit_poll(input_overlay_t *ol, float opacity)
 {
    input_driver_state_t *input_st    = &input_driver_st;
@@ -7622,7 +7795,10 @@ static void input_overlay_edit_poll(input_overlay_t *ol, float opacity)
    bool pressed                      = false;
    float x                           = 0.0f;
    float y                           = 0.0f;
+   float sx                          = 0.0f;
+   float sy                          = 0.0f;
    float base                        = (opacity < 0.5f) ? 0.5f : opacity;
+   unsigned dims                     = video_driver_get_output_dims();
 
    /* The pack was replaced under the drag */
    if (     input_overlay_edit.ol != ol
@@ -7660,28 +7836,70 @@ static void input_overlay_edit_poll(input_overlay_t *ol, float opacity)
                input_st->primary_joypad, &joypad_info, NULL, true, 0,
                device, 0, RETRO_DEVICE_ID_POINTER_Y);
          pressed    = true;
-         x          = ((float)(px + 0x7fff) / 0xffff - ol->active->mod_x)
-            / ol->active->mod_w;
-         y          = ((float)(py + 0x7fff) / 0xffff - ol->active->mod_y)
-            / ol->active->mod_h;
+         sx         = (float)(px + 0x7fff) / 0xffff;
+         sy         = (float)(py + 0x7fff) / 0xffff;
+         x          = (sx - ol->active->mod_x) / ol->active->mod_w;
+         y          = (sy - ol->active->mod_y) / ol->active->mod_h;
+         sx        *= VIDEO_SCALE_W(dims);
+         sy        *= VIDEO_SCALE_H(dims);
       }
    }
 
    if (pressed)
    {
+      input_overlay_edit.ptr_x = sx;
+      input_overlay_edit.ptr_y = sy;
       if (!(input_overlay_edit.flags & OVERLAY_EDIT_HELD))
       {
+         int item = -1;
          input_overlay_edit.flags |= OVERLAY_EDIT_HELD;
-         input_overlay_edit_grab(ol, x, y);
+#ifdef HAVE_GFX_WIDGETS
+         item = input_overlay_edit_bar_hit(sx, sy);
+#endif
+         if (item < 0)
+            input_overlay_edit_grab(ol, x, y);
+#ifdef HAVE_GFX_WIDGETS
+         else if (item == GFX_OVERLAY_BAR_GRIP && VIDEO_SCALE_W(dims))
+         {
+            input_overlay_edit.flags |= OVERLAY_EDIT_GRIP;
+            input_overlay_edit.grip_x = sx
+               - input_overlay_edit_bar.x * VIDEO_SCALE_W(dims);
+            input_overlay_edit.grip_y = sy
+               - input_overlay_edit_bar.y * VIDEO_SCALE_H(dims);
+         }
+#endif
+         else
+            input_overlay_edit.bar_item = item;
+      }
+      else if (input_overlay_edit.flags & OVERLAY_EDIT_GRIP)
+      {
+         input_overlay_edit_bar.x = (sx - input_overlay_edit.grip_x)
+            / VIDEO_SCALE_W(dims);
+         input_overlay_edit_bar.y = (sy - input_overlay_edit.grip_y)
+            / VIDEO_SCALE_H(dims);
       }
       else if (input_overlay_edit.flags & OVERLAY_EDIT_DRAGGING)
          input_overlay_edit_move(ol, x, y);
    }
    else if (input_overlay_edit.flags & OVERLAY_EDIT_HELD)
    {
+      int item = input_overlay_edit.bar_item;
+
       /* Only placed: a control does nothing while it is laid out */
       input_overlay_edit_drop(ol);
-      input_overlay_edit.flags &= ~OVERLAY_EDIT_HELD;
+      input_overlay_edit.bar_item = -1;
+      input_overlay_edit.flags   &= ~(OVERLAY_EDIT_HELD | OVERLAY_EDIT_GRIP);
+
+#ifdef HAVE_GFX_WIDGETS
+      /* The bar's parts act on a lift over them */
+      if (     item >= 0
+            && input_overlay_edit_bar_hit(input_overlay_edit.ptr_x,
+               input_overlay_edit.ptr_y) == item
+            && input_overlay_edit_bar_tap(ol, item))
+         return;
+#else
+      (void)item;
+#endif
    }
 
    /* Back finishes, as the hint says. Android sends it to the menu's
@@ -7713,6 +7931,10 @@ static void input_overlay_edit_poll(input_overlay_t *ol, float opacity)
    else
       input_overlay_alpha_pass(ol, base, false, 1.0f,
             input_st->overlay_leds_lit, input_overlay_led_map());
+
+#ifdef HAVE_GFX_WIDGETS
+   gfx_widgets_set_overlay_bar(input_overlay_edit_bar_make());
+#endif
 }
 
 void input_overlay_edit_begin(void)
@@ -7737,9 +7959,7 @@ void input_overlay_edit_begin(void)
          input_overlay_edit.flags |= OVERLAY_EDIT_PAUSED;
    }
 
-#ifdef HAVE_GFX_WIDGETS
-   gfx_widgets_set_overlay_grid(OVERLAY_EDIT_GRID);
-#endif
+   input_overlay_edit.bar_item = -1;
 
    _msg = msg_hash_to_str(MSG_OVERLAY_EDIT_LAYOUT_START);
    runloop_msg_queue_push(_msg, strlen(_msg), 2, 300, true, NULL,
@@ -8039,11 +8259,12 @@ INPUT_NOINLINE static void input_poll_overlay(
    if (     (input_overlay_edit.flags & OVERLAY_EDIT_ACTIVE)
          && !(ol->flags & INPUT_OVERLAY_IS_OSK))
    {
-      input_overlay_edit_poll(ol, opacity);
+      /* First: Cancel can free @ol */
+      ptr_state->device_mask = 0;
       old_blocked_touch_idx  = -1;
       old_ptrdev_touch_mask  = 0;
       old_hitbox_touch_mask  = 0;
-      ptr_state->device_mask = 0;
+      input_overlay_edit_poll(ol, opacity);
       return;
    }
 

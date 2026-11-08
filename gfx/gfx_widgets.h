@@ -199,6 +199,52 @@ typedef struct disp_widget_msg
    bool alternative_look;
 } disp_widget_msg_t;
 
+/* The overlay layout editor's bar and its panel of controls */
+#define GFX_OVERLAY_BAR_GRID       50
+#define GFX_OVERLAY_BAR_CONTROLS   64
+#define GFX_OVERLAY_BAR_ROWS       7
+#define GFX_OVERLAY_BAR_NAME_LEN   48
+
+enum gfx_overlay_bar_item
+{
+   GFX_OVERLAY_BAR_GRIP = 0,
+   GFX_OVERLAY_BAR_SAVE,
+   GFX_OVERLAY_BAR_CANCEL,
+   GFX_OVERLAY_BAR_CONTROLS_BUTTON,
+   GFX_OVERLAY_BAR_HALF,
+   GFX_OVERLAY_BAR_BAR,
+   GFX_OVERLAY_BAR_PANEL,
+   GFX_OVERLAY_BAR_PANEL_DONE,
+   GFX_OVERLAY_BAR_PANEL_PREV,
+   GFX_OVERLAY_BAR_PANEL_NEXT,
+   /* Then the panel's rows, GFX_OVERLAY_BAR_ROWS of them */
+   GFX_OVERLAY_BAR_ROW,
+   GFX_OVERLAY_BAR_ITEMS = GFX_OVERLAY_BAR_ROW + GFX_OVERLAY_BAR_ROWS
+};
+
+enum gfx_overlay_bar_flags
+{
+   GFX_OVERLAY_BAR_FLAG_SHOWN      = (1 << 0),
+   /* Twice the cells, to snap to half cells */
+   GFX_OVERLAY_BAR_FLAG_HALF_GRID  = (1 << 1),
+   GFX_OVERLAY_BAR_FLAG_PANEL_OPEN = (1 << 2)
+};
+
+typedef struct
+{
+   /* Top left of the bar, as fractions of the screen */
+   float x;
+   float y;
+   /* Controls in the panel, and the first one shown */
+   unsigned count;
+   unsigned first;
+   /* gfx_overlay_bar_item held down, or -1 */
+   int pressed;
+   uint8_t flags;
+   uint8_t shown[GFX_OVERLAY_BAR_CONTROLS];
+   char names[GFX_OVERLAY_BAR_CONTROLS][GFX_OVERLAY_BAR_NAME_LEN];
+} gfx_overlay_bar_t;
+
 typedef struct dispgfx_widget
 {
 #ifdef HAVE_THREADS
@@ -250,9 +296,10 @@ typedef struct dispgfx_widget
    void *task_cmds;
 #endif
    retro_atomic_int_t task_cmds_count;
-   /* Cells along the longer side of the grid the overlay layout
-    * editor shows, 0 for none: set by the main thread. */
-   retro_atomic_int_t overlay_grid;
+   /* The overlay layout editor's bar, from the main thread: a seqlock,
+    * odd while it is written. Copied out whole when it is even before
+    * and after, and drawn from the copy. */
+   retro_atomic_int_t overlay_bar_seq;
    /* The owner's: task widgets waiting for room on screen. */
    disp_widget_msg_t* task_pending[MSG_QUEUE_PENDING_MAX];
    unsigned task_pending_size;
@@ -262,6 +309,9 @@ typedef struct dispgfx_widget
    uintptr_t task_key_last;
    disp_widget_msg_t* current_msgs[MSG_QUEUE_ONSCREEN_MAX];
    gfx_widget_fonts_t gfx_widget_fonts; /* ptr alignment */
+   gfx_overlay_bar_t overlay_bar;
+   gfx_overlay_bar_t overlay_bar_read;
+   gfx_overlay_bar_t overlay_bar_drawn;
 
 #ifdef HAVE_TRANSLATE
    gfx_surface_t *ai_service_overlay_texture;
@@ -501,9 +551,15 @@ int  gfx_widgets_ai_service_overlay_get_state(void);
 void gfx_widgets_ai_service_overlay_set_state(int state);
 #endif
 
-/* Shows the overlay layout editor's grid, @cells to the longer side of
- * the screen, square; 0 hides it. */
-void gfx_widgets_set_overlay_grid(unsigned cells);
+/* Hands over the overlay layout editor's bar to draw, with its grid;
+ * NULL hides both. */
+void gfx_widgets_set_overlay_bar(const gfx_overlay_bar_t *bar);
+
+/* Where @item of @bar is on a screen of @dims, in pixels; false when it
+ * is not shown. The editor's touches and the drawing both go by it. */
+bool gfx_widgets_overlay_bar_rect(unsigned dims,
+      const gfx_overlay_bar_t *bar, unsigned item,
+      int *x, int *y, int *w, int *h);
 
 #ifdef HAVE_CHEEVOS
 void gfx_widgets_update_cheevos_appearance(void);
