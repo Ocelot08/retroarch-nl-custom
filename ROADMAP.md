@@ -39,9 +39,9 @@ away from what is being sized, with Reset and Done. Built together.
 - Saved with Layout For (all content, core or game) and with profiles,
   like the controls. It is written as the overlay page's own viewport
   setting (`overlayN_viewport`) in the layout file.
-- The Vulkan video driver places the menu through the same viewport
-  code as OpenGL, so it follows the box there too (read in the code,
-  not yet seen on a device).
+- Reset keeps the width and fits the height to the game's shape.
+- The box is placed from the top on OpenGL as on Vulkan: RetroArch's
+  own placement code had it upside down on OpenGL, now fixed.
 
 ## 2. Button size
 
