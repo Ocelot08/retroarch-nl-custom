@@ -17,6 +17,10 @@ how much work it is:
 | 5 | Custom buttons | 3 | Medium |
 | 6 | Buttons to switch profiles | 5 | Small |
 
+Test on the phone at each checkpoint below before building on: the
+Linux build used for development has no Android Back, keyboard,
+Vulkan or real touch, and each next item builds on what came before.
+
 Both 1 and 2 use one way of editing: tap something in the editor to
 select it, and a panel of notched sliders opens under the editor bar,
 away from what is being sized, with Reset and Done. Built together.
@@ -86,3 +90,44 @@ away from what is being sized, with Reset and Done. Built together.
 
 - On-screen buttons that switch to a saved layout profile.
 - A custom button whose action is a profile instead of an input.
+
+## Test checkpoints
+
+### A. Now: after 1 and 2, before 3
+
+Item 3 changes how buttons are drawn and sized, so sizing should be
+right first.
+
+- Tap a button, a D-pad and the face buttons: each is outlined and
+  the panel opens under the bar, as wide as it.
+- Drag Size and Shape: notches are easy to hit, the value shown
+  matches, a cluster keeps its middle and spacing.
+- Two different buttons set to the same Size look the same size.
+- Reset, then Done. Cancel after resizing puts the old sizes back.
+- Dragging a button still moves it, and does not select it.
+- Tap the screen box, drag it, set Width and Height; play a game and
+  open the menu: both sit in the box. Reset puts it back at the top.
+- Check both of the above with the video driver on Vulkan and on
+  OpenGL (Settings > Drivers > Video).
+- Turn the phone, and tick Analog: sizes and the screen box carry to
+  the analog page, and landscape keeps its own.
+- Save for a core and for a game (Layout For); Save Layout as Profile,
+  load it elsewhere: sizes and the screen come with it.
+- DS and 3DS: the same, on their own controls; the swap screens
+  button still swaps.
+- Restart the app: everything is where it was saved.
+
+### B. After 3, before 4 and 5
+
+- Every button of the main, DS and 3DS controls is drawn, pressed
+  states included, at every size from item 2.
+- Text is sharp at small and large sizes, and in both orientations.
+- Speed: no slower than with images, in a demanding game.
+
+### C. After 5 and 6
+
+- A custom button sends the input chosen, in game, and its label
+  shows; it survives Save, profiles and a restart.
+- A profile button switches layouts in game, including between a
+  core's and a game's.
+
