@@ -36,15 +36,14 @@ cp "$src/libretro-core-info/"*.info "$dst/info/"
 cp "$here/rgui_themes/"*.cfg "$dst/assets/rgui/"
 # The overlays this build picks for a system (Named_Overlays_Custom,
 # see input_overlay_path()): only DS, DSi and 3DS, which the main
-# overlay does not fit. DS has the DS layout with the neo-retropad
-# buttons (made by ds_overlay/make_ds_overlay.py).
+# overlay does not fit, with its buttons (made by
+# system_overlays/make_overlays.py)
 named="$dst/overlays/gamepads/Named_Overlays_Custom"
-mkdir -p "$named" "$dst/overlays/gamepads/neo-ds/img"
-cp "$here/ds_overlay/img/"*.png "$dst/overlays/gamepads/neo-ds/img/"
+mkdir -p "$named" "$dst/overlays/gamepads/neo-custom/img"
+cp "$here/system_overlays/img/"*.png "$dst/overlays/gamepads/neo-custom/img/"
 for name in "Nintendo - Nintendo DS" "Nintendo - Nintendo DSi"; do
-   cp "$here/ds_overlay/Nintendo - Nintendo DS.cfg" "$named/$name.cfg"
+   cp "$here/system_overlays/Nintendo - Nintendo DS.cfg" "$named/$name.cfg"
 done
-cp "$src/common-overlays/gamepads/Named_Overlays/Nintendo - Nintendo 3DS.cfg" \
-   "$named/"
+cp "$here/system_overlays/Nintendo - Nintendo 3DS.cfg" "$named/"
 
 du -sh "$dst"/*

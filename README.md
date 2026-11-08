@@ -83,8 +83,8 @@ not lose them. Profiles are in
 - The touch controls stay shown over the menu.
 - Every system uses the main touch controls (Neo RetroPad) and their
   layouts, but for DS, DSi and 3DS, which get controls of their own:
-  RetroArch's 3DS overlay, and for DS the layout of RetroArch's DS
-  overlay drawn with the same buttons as the rest. Upstream picks a
+  the layouts of RetroArch's DS and 3DS overlays, drawn with the same
+  buttons as the rest. Upstream picks a
   system overlay for some 75 systems; this build only from
   `overlays/gamepads/Named_Overlays_Custom`.
 - Menu assets, overlays, controller profiles and core info files are

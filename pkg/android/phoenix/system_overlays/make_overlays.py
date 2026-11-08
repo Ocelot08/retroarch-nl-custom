@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
-"""Writes the Nintendo DS overlay of this build: the layout of the DS
-overlay in common-overlays (gamepads/Named_Overlays), drawn with the
-neo-retropad buttons, so that it looks like the rest and its controls
-are laid out with the touch layout editor. Usage:
-make_ds_overlay.py <out.cfg>"""
+"""Writes this build's Nintendo DS and 3DS overlays: the layouts of the
+DS and 3DS overlays in common-overlays (gamepads/Named_Overlays), drawn
+with the neo-retropad buttons, so that they look like the rest and are
+laid out with the touch layout editor like them. Usage:
+make_overlays.py <out dir>"""
 import sys
 
 NEO = "../neo-retropad/img/default/"
-OWN = "../neo-ds/img/"
+OWN = "../neo-custom/img/"
 
 LANDSCAPE = 1.77777778
 PORTRAIT = 0.56236559
@@ -126,83 +126,49 @@ def extras(lines, page, y, xs, hot):
     return n
 
 
-def main(out):
-    head = ["# Nintendo DS, laid out as the common-overlays DS overlay, with",
-            "# the neo-retropad buttons. Made by make_ds_overlay.py.",
+def stick(lines, page, n, action, x, y, bg, knob, knob_image):
+    """A neo-retropad analog stick: its ring, and the knob that moves"""
+    desc(lines, page, n, spec(action, x, y, "radial", *bg),
+         NEO + "analog_bg.png", saturate_pct=1000000.0, reach_x=0)
+    desc(lines, page, n + 1, spec(action, x, y, "radial", *knob),
+         knob_image, movable="true", reach_x=1.3, reach_y=1.3,
+         range_mod=3.0, range_mod_exclusive="true")
+    return n + 2
+
+
+def build(out, title, landscape, portrait):
+    """@landscape and @portrait: the middle of the D-pad and of the face
+    buttons, then the rest as (action, x, y, shape, size, image, extra)
+    or (stick, action, x, y, ring size, knob size, knob image), and
+    (rotate,) for the page turned to on rotating"""
+    head = ["# %s, laid out as the common-overlays %s overlay, with" % (
+        title, title),
+            "# the neo-retropad buttons. Made by make_overlays.py.",
             "overlays = 5", ""]
     pages = []
 
-    # Landscape
-    hot = (0.02150, 0.03824)
-    big = (0.03011, 0.03824)
-    lr = (0.03011, 0.04589)
-    l = []
-    page_header(head, 0, "landscape", LANDSCAPE, "false")
-    n = pad(l, 0, 0, (0.12500, 0.77778), (0.85938, 0.75000), True)
-    for action, x, y, size, image, ex in (
-            ("start", 0.93750, 0.28889, big, NEO + "button_start.png",
-             dict(reach_x=1.5, reach_y=1.6, exclusive="true")),
-            ("select", 0.06250, 0.28889, big, NEO + "button_select.png",
-             dict(reach_x=1.5, reach_y=1.6, exclusive="true")),
-            ("l", 0.03011, 0.50556, lr, OWN + "button_l.png",
-             dict(reach_x=1.2, reach_y=1.6, exclusive="true")),
-            ("r", 0.96989, 0.50556, lr, OWN + "button_r.png",
-             dict(reach_x=1.2, reach_y=1.6, exclusive="true"))):
-        desc(l, 0, n, spec(action, x, y, "rect", *size), image, **ex)
-        n += 1
-    desc(l, 0, n, spec("menu_toggle", 0.93750, 0.08889, "radial", *hot),
-         NEO + "hotkey_menu.png", reach_x=1.6, reach_y=1.6)
-    n += 1
-    desc(l, 0, n, spec("overlay_next", 2.5, 2.5, "radial", 0.1, 0.1),
-         next_target='"portrait"')
-    n += 1
-    desc(l, 0, n, spec("overlay_next", 0.80000, 0.08889, "radial", *hot),
-         NEO + "hotkey_hide.png", next_target='"hidden"',
-         reach_x=1.6, reach_y=1.6)
-    n += 1
-    desc(l, 0, n, spec("r2|r3", 0.06250, 0.08889, "radial", *hot),
-         OWN + "hotkey_swap_screens.png", reach_x=1.6, reach_y=1.6)
-    n += 1
-    desc(l, 0, n, spec("toggle_fast_forward", 0.20000, 0.08889, "radial",
-         *hot), NEO + "hotkey_fast_forward.png", reach_x=1.6, reach_y=1.6)
-    n += 1
-    pages.append(["", "## Overlay 0: landscape", "overlay0_descs = %d" % n] + l)
+    for page, name, aspect, ysep, other, layout in (
+            (0, "landscape", LANDSCAPE, "false", "portrait", landscape),
+            (1, "portrait", PORTRAIT, "true", "landscape", portrait)):
+        l = []
+        page_header(head, page, name, aspect, ysep)
+        n = pad(l, page, 0, layout[0], layout[1], page == 0)
+        for c in layout[2]:
+            if c[0] == "stick":
+                n = stick(l, page, n, *c[1:])
+                continue
+            if c[0] == "rotate":
+                # Turned to on rotating
+                desc(l, page, n, spec("overlay_next", 2.5, 2.5, "radial",
+                     0.1, 0.1), next_target='"%s"' % other)
+                n += 1
+                continue
+            action, x, y, shape, size, image, ex = c
+            desc(l, page, n, spec(action, x, y, shape, *size), image, **ex)
+            n += 1
+        pages.append(["", "## Overlay %d: %s" % (page, name),
+                      "overlay%d_descs = %d" % (page, n)] + l)
 
-    # Portrait
-    hot = (0.03824, 0.02151)
-    big = (0.05354, 0.02151)
-    lr = (0.05354, 0.02581)
-    l = []
-    page_header(head, 1, "portrait", PORTRAIT, "true")
-    n = pad(l, 1, 0, (0.21606, 0.90440), (0.78393, 0.90440), False)
-    for action, x, y, size, image, ex in (
-            ("select", 0.5, 0.895, big, NEO + "button_select.png",
-             dict(reach_x=1.4, reach_y=1.4, exclusive="true")),
-            ("start", 0.5, 0.96, big, NEO + "button_start.png",
-             dict(reach_x=1.4, reach_y=1.4, exclusive="true")),
-            ("l", 0.1, 0.77, lr, OWN + "button_l.png",
-             dict(reach_x=1.2, reach_y=2.0, exclusive="true")),
-            ("r", 0.9, 0.77, lr, OWN + "button_r.png",
-             dict(reach_x=1.2, reach_y=2.0, exclusive="true"))):
-        desc(l, 1, n, spec(action, x, y, "rect", *size), image, **ex)
-        n += 1
-    desc(l, 1, n, spec("menu_toggle", 0.5, 0.77, "radial", *hot),
-         NEO + "hotkey_menu.png", reach_x=1.6, reach_y=1.6, exclusive="true")
-    n += 1
-    desc(l, 1, n, spec("overlay_next", 2.5, 2.5, "radial", 0.1, 0.1),
-         next_target='"landscape"')
-    n += 1
-    desc(l, 1, n, spec("r2|r3", 0.37, 0.77, "radial", *hot),
-         OWN + "hotkey_swap_screens.png", reach_x=1.6, reach_y=1.6,
-         exclusive="true")
-    n += 1
-    desc(l, 1, n, spec("toggle_fast_forward", 0.63, 0.77, "radial", *hot),
-         NEO + "hotkey_fast_forward.png", reach_x=1.6, reach_y=1.6,
-         exclusive="true")
-    n += 1
-    pages.append(["", "## Overlay 1: portrait", "overlay1_descs = %d" % n] + l)
-
-    # Hidden
     l = []
     page_header(head, 2, "hidden", LANDSCAPE, "false")
     desc(l, 2, 0, spec("overlay_next", 0.80000, 0.08889, "radial",
@@ -227,5 +193,80 @@ def main(out):
         f.write("\n".join(head + sum(pages, [])) + "\n")
 
 
+# Sizes on a landscape page, and on a portrait one
+L_HOT, L_BIG, L_LR = (0.02150, 0.03824), (0.03011, 0.03824), (0.03011, 0.04589)
+P_HOT, P_BIG, P_LR = (0.03824, 0.02151), (0.05354, 0.02151), (0.05354, 0.02581)
+HOT = dict(reach_x=1.6, reach_y=1.6)
+HOT_X = dict(reach_x=1.6, reach_y=1.6, exclusive="true")
+L_SHOULDER = dict(reach_x=1.2, reach_y=1.6, exclusive="true")
+P_SHOULDER = dict(reach_x=1.2, reach_y=2.0, exclusive="true")
+P_SHOULDER2 = dict(reach_x=1.6, reach_y=2.0, exclusive="true")
+L_MIDDLE = dict(reach_x=1.5, reach_y=1.6, exclusive="true")
+P_MIDDLE = dict(reach_x=1.4, reach_y=1.4, exclusive="true")
+
+
+def hide(x, y):
+    return ("overlay_next", x, y, "radial", L_HOT, NEO + "hotkey_hide.png",
+            dict(next_target='"hidden"', reach_x=1.6, reach_y=1.6))
+
+
+def ds(out):
+    build(out, "Nintendo DS", (
+        (0.12500, 0.77778), (0.85938, 0.75000), (
+            ("start", 0.93750, 0.28889, "rect", L_BIG, NEO + "button_start.png", L_MIDDLE),
+            ("select", 0.06250, 0.28889, "rect", L_BIG, NEO + "button_select.png", L_MIDDLE),
+            ("l", 0.03011, 0.50556, "rect", L_LR, OWN + "button_l.png", L_SHOULDER),
+            ("r", 0.96989, 0.50556, "rect", L_LR, OWN + "button_r.png", L_SHOULDER),
+            ("menu_toggle", 0.93750, 0.08889, "radial", L_HOT, NEO + "hotkey_menu.png", HOT),
+            ("rotate",),
+            hide(0.80000, 0.08889),
+            ("r2|r3", 0.06250, 0.08889, "radial", L_HOT, OWN + "hotkey_swap_screens.png", HOT),
+            ("toggle_fast_forward", 0.20000, 0.08889, "radial", L_HOT, NEO + "hotkey_fast_forward.png", HOT))), (
+        (0.21606, 0.90440), (0.78393, 0.90440), (
+            ("select", 0.5, 0.895, "rect", P_BIG, NEO + "button_select.png", P_MIDDLE),
+            ("start", 0.5, 0.96, "rect", P_BIG, NEO + "button_start.png", P_MIDDLE),
+            ("l", 0.1, 0.77, "rect", P_LR, OWN + "button_l.png", P_SHOULDER),
+            ("r", 0.9, 0.77, "rect", P_LR, OWN + "button_r.png", P_SHOULDER),
+            ("menu_toggle", 0.5, 0.77, "radial", P_HOT, NEO + "hotkey_menu.png", HOT_X),
+            ("rotate",),
+            ("r2|r3", 0.37, 0.77, "radial", P_HOT, OWN + "hotkey_swap_screens.png", HOT_X),
+            ("toggle_fast_forward", 0.63, 0.77, "radial", P_HOT, NEO + "hotkey_fast_forward.png", HOT_X))))
+
+
+def n3ds(out):
+    build(out, "Nintendo 3DS", (
+        (0.12500, 0.77778), (0.85938, 0.75000), (
+            ("start", 0.4, 0.93, "rect", L_BIG, NEO + "button_start.png", L_MIDDLE),
+            ("select", 0.6, 0.93, "rect", L_BIG, NEO + "button_select.png", L_MIDDLE),
+            ("l", 0.03011, 0.08889, "rect", L_LR, OWN + "button_l.png", L_SHOULDER),
+            ("l2", 0.12917, 0.08889, "rect", L_LR, OWN + "button_zl.png", L_SHOULDER),
+            ("r", 0.96989, 0.08889, "rect", L_LR, OWN + "button_r.png", L_SHOULDER),
+            ("r2", 0.87083, 0.08889, "rect", L_LR, OWN + "button_zr.png", L_SHOULDER),
+            ("menu_toggle", 0.5, 0.93, "radial", L_HOT, NEO + "hotkey_menu.png", HOT),
+            hide(0.80000, 0.08889),
+            ("toggle_fast_forward", 0.20000, 0.08889, "radial", L_HOT, NEO + "hotkey_fast_forward.png", HOT),
+            ("stick", "analog_left", 0.095, 0.35, (0.08710, 0.15488),
+             (0.05054, 0.08987), NEO + "analog_stick.png"),
+            ("stick", "analog_right", 0.93, 0.35, (0.06406, 0.11388),
+             (0.03772, 0.06667), OWN + "analog_stick_c.png"),
+            ("rotate",))), (
+        (0.21606, 0.90440), (0.78393, 0.90440), (
+            ("select", 0.5, 0.895, "rect", P_BIG, NEO + "button_select.png", P_MIDDLE),
+            ("start", 0.5, 0.96, "rect", P_BIG, NEO + "button_start.png", P_MIDDLE),
+            ("l", 0.1, 0.77, "rect", P_LR, OWN + "button_l.png", P_SHOULDER),
+            ("l2", 0.25, 0.77, "rect", P_LR, OWN + "button_zl.png", P_SHOULDER2),
+            ("r", 0.9, 0.77, "rect", P_LR, OWN + "button_r.png", P_SHOULDER),
+            ("r2", 0.75, 0.77, "rect", P_LR, OWN + "button_zr.png", P_SHOULDER2),
+            ("toggle_fast_forward", 0.5, 0.83, "radial", P_HOT, NEO + "hotkey_fast_forward.png", HOT_X),
+            ("menu_toggle", 0.5, 0.77, "radial", P_HOT, NEO + "hotkey_menu.png", HOT_X),
+            ("stick", "analog_left", 0.15, 0.625, (0.15488, 0.08710),
+             (0.08987, 0.05054), NEO + "analog_stick.png"),
+            ("stick", "analog_right", 0.88, 0.625, (0.11388, 0.06406),
+             (0.06667, 0.03772), OWN + "analog_stick_c.png"),
+            ("rotate",))))
+
+
 if __name__ == "__main__":
-    main(sys.argv[1])
+    import os
+    ds(os.path.join(sys.argv[1], "Nintendo - Nintendo DS.cfg"))
+    n3ds(os.path.join(sys.argv[1], "Nintendo - Nintendo 3DS.cfg"))
