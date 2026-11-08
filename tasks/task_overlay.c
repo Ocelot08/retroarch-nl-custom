@@ -901,6 +901,8 @@ static bool task_overlay_load_desc(
 
    desc->x       = (float)rstrtod(elems[1], NULL) * width_mod;
    desc->y       = (float)rstrtod(elems[2], NULL) * height_mod;
+   desc->pack_x  = desc->x;
+   desc->pack_y  = desc->y;
 
    /* A user layout position, normalized whatever the desc uses */
    strlcpy_lit(overlay_key + _len, "_layout_x", sizeof(overlay_key) - _len);
@@ -914,6 +916,18 @@ static bool task_overlay_load_desc(
    {
       desc->y      = tmp_float;
       desc->flags |= OVERLAY_DESC_LAYOUT_PLACED;
+   }
+   strlcpy_lit(overlay_key + _len, "_layout_hidden", sizeof(overlay_key) - _len);
+   desc->flags &= ~OVERLAY_DESC_LAYOUT_HIDDEN;
+   if (config_get_bool(conf, overlay_key, &tmp_bool) && tmp_bool)
+      desc->flags |= OVERLAY_DESC_LAYOUT_HIDDEN;
+   strlcpy_lit(overlay_key + _len, "_layout_added", sizeof(overlay_key) - _len);
+   desc->layout_added = 0;
+   desc->layout_group = 0;
+   {
+      unsigned added = 0;
+      if (config_get_uint(conf, overlay_key, &added))
+         desc->layout_added = (uint16_t)added;
    }
 
    desc->x_shift = desc->x;
@@ -1680,23 +1694,29 @@ static bool task_overlay_finder(retro_task_t *task, void *user_data)
 }
 
 #ifdef RARCH_INTERNAL
-/* The user layout's entries take the place of the overlay's own. */
+/* The user layouts' entries take the place of the overlay's own, the
+ * more specific layout's over the more general one's. */
 static void task_overlay_append_layout(config_file_t *conf,
       const char *overlay_path)
 {
+   unsigned scope;
    char layout_path[PATH_MAX_LENGTH];
-   config_file_t *layout = NULL;
 
-   input_overlay_layout_path(layout_path, sizeof(layout_path),
-         overlay_path);
+   for (scope = 0; scope < OVERLAY_LAYOUT_SCOPE_LAST; scope++)
+   {
+      config_file_t *layout = NULL;
 
-   if (     !*layout_path
-         || !path_is_valid(layout_path)
-         || !(layout = config_file_new_from_path_to_string(layout_path)))
-      return;
+      input_overlay_layout_path(layout_path, sizeof(layout_path),
+            overlay_path, (enum overlay_layout_scope)scope);
 
-   RARCH_LOG("[Overlay] Applying layout: \"%s\".\n", layout_path);
-   config_file_append_conf(conf, layout);
+      if (     !*layout_path
+            || !path_is_valid(layout_path)
+            || !(layout = config_file_new_from_path_to_string(layout_path)))
+         continue;
+
+      RARCH_LOG("[Overlay] Applying layout: \"%s\".\n", layout_path);
+      config_file_append_conf(conf, layout);
+   }
 }
 #endif
 

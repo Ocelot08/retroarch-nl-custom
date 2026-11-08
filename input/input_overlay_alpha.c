@@ -172,6 +172,20 @@ void input_overlay_alpha_pass(input_overlay_t *ol, float mod,
       }
    }
 
+   /* What the user layout removed stays out of sight */
+   for (i = 0; i < ol->active->size; i++)
+   {
+      const struct overlay_desc *desc = &ol->active->descs[i];
+      if (     !(desc->flags & OVERLAY_DESC_LAYOUT_HIDDEN)
+            || !OVERLAY_HAS_IMAGE(&desc->image)
+            || desc->image_index >= n)
+         continue;
+      if (want)
+         want[desc->image_index] = 0.0f;
+      else
+         ol->iface->set_alpha(ol->iface_data, desc->image_index, 0.0f);
+   }
+
    if (want)
       for (i = 0; i < n; i++)
          input_overlay_set_image_alpha(ol, (unsigned)i, want[i]);

@@ -7335,7 +7335,7 @@ void retroarch_menu_running(void)
 
 #ifdef HAVE_OVERLAY
    /* The menu's touches are its own */
-   input_overlay_edit_end();
+   input_overlay_edit_stop();
 #endif
 
    if (menu)
@@ -7419,8 +7419,13 @@ void retroarch_menu_running_finished(bool quit)
    menu_handle_t *menu             = menu_st->driver_data;
    menu_input_t *menu_input        = &menu_st->input_state;
 
-   /* Only allow toggling menu off with a proper core */
-   if (runloop_st->current_core_type == CORE_TYPE_DUMMY && !quit)
+   /* Only allow toggling menu off with a proper core, or to lay out
+    * the overlay */
+   if (     runloop_st->current_core_type == CORE_TYPE_DUMMY && !quit
+#ifdef HAVE_OVERLAY
+         && !input_overlay_edit_active()
+#endif
+      )
       return;
 
    if (menu)

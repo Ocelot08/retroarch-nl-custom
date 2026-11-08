@@ -8003,7 +8003,12 @@ static enum runloop_state_enum runloop_check_state(
             retroarch_menu_running();
       }
       /* Initial menu toggle on startup */
-      else if (core_type_is_dummy && !(menu_st->flags & MENU_ST_FLAG_ALIVE))
+      else if (core_type_is_dummy && !(menu_st->flags & MENU_ST_FLAG_ALIVE)
+#ifdef HAVE_OVERLAY
+            /* Laying out the overlay with no content */
+            && !input_overlay_edit_active()
+#endif
+            )
          retroarch_menu_running();
 
       old_pressed             = pressed;

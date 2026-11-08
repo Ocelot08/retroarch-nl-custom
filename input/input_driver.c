@@ -5650,6 +5650,9 @@ static bool input_overlay_coords_inside_hitbox(const struct overlay_desc *desc,
 {
    float range_x, range_y;
 
+   if (desc->flags & OVERLAY_DESC_LAYOUT_HIDDEN)
+      return false;
+
    if (use_range_mod)
    {
       range_x = desc->range_x_mod;
@@ -6973,11 +6976,11 @@ static void input_overlay_update_pointer_coords(
          BIT256_SET((state)->buttons, down); \
    } while (0)
 
-/* Layout editor. A touch grabs the descs under it, together with every
- * desc joined to them by overlapping (a D-pad is a dozen of them), and
- * drags them; the same descs on the other pages of the same shape move
- * along. Positions are saved to the overlay's layout file
- * (input_overlay_layout_path). */
+/* Layout editor. A touch grabs the control under it - the descs that
+ * overlap where the pack puts them (a D-pad is a dozen), or that the
+ * user layout added together - and drags it; the same descs on the
+ * other pages of the same shape move along. What is laid out is saved
+ * to the layout of the scope chosen (input_overlay_layout_path). */
 typedef struct
 {
    unsigned page;
@@ -7017,10 +7020,40 @@ static struct
    uint8_t flags;
 } input_overlay_edit;
 
+/* The scope the layout is edited for, and the content it was chosen
+ * with: other content starts from the most specific layout it has. */
+static struct
+{
+   uint32_t key;
+   enum overlay_layout_scope scope;
+   bool chosen;
+} input_overlay_layout_sel;
+
+/* The names the core and content layouts are filed under; empty when
+ * no core, or no content, is running. */
+static void input_overlay_layout_names(char *core, size_t core_len,
+      char *content, size_t content_len)
+{
+   runloop_state_t *runloop_st = runloop_state_get_ptr();
+   const char *core_name       = runloop_st->system.info.library_name;
+   const char *base            = path_get(RARCH_PATH_BASENAME);
+
+   *core    = '\0';
+   *content = '\0';
+   if (     runloop_st->current_core_type == CORE_TYPE_DUMMY
+         || !core_name || !*core_name)
+      return;
+   strlcpy(core, core_name, core_len);
+   if (base && *base)
+      strlcpy(content, path_basename_nocompression(base), content_len);
+}
+
 void input_overlay_layout_path(char *s, size_t len,
-      const char *overlay_path)
+      const char *overlay_path, enum overlay_layout_scope scope)
 {
    char dir[DIR_MAX_LENGTH];
+   char core[NAME_MAX_LENGTH];
+   char content[NAME_MAX_LENGTH];
    const char *name = overlay_path ? path_basename(overlay_path) : NULL;
 
    *s = '\0';
@@ -7031,9 +7064,126 @@ void input_overlay_layout_path(char *s, size_t len,
          APPLICATION_SPECIAL_DIRECTORY_CONFIG);
    if (!*dir)
       return;
-
    fill_pathname_join_special(dir, dir, "overlay_layouts", sizeof(dir));
+
+   if (scope != OVERLAY_LAYOUT_SCOPE_ALL)
+   {
+      input_overlay_layout_names(core, sizeof(core),
+            content, sizeof(content));
+      if (!*core || (scope == OVERLAY_LAYOUT_SCOPE_CONTENT && !*content))
+         return;
+      fill_pathname_join_special(dir, dir, core, sizeof(dir));
+      if (scope == OVERLAY_LAYOUT_SCOPE_CONTENT)
+         fill_pathname_join_special(dir, dir, content, sizeof(dir));
+   }
+
    fill_pathname_join_special(s, dir, name, len);
+}
+
+uint32_t input_overlay_layout_key(void)
+{
+   char core[NAME_MAX_LENGTH];
+   char content[NAME_MAX_LENGTH];
+   const char *s;
+   uint32_t hash = 5381;
+
+   input_overlay_layout_names(core, sizeof(core), content, sizeof(content));
+   for (s = core; *s; s++)
+      hash = hash * 33 + (uint8_t)*s;
+   hash = hash * 33;
+   for (s = content; *s; s++)
+      hash = hash * 33 + (uint8_t)*s;
+   return hash;
+}
+
+/* The gamepad overlay being laid out, shown or not, if loaded */
+static input_overlay_t *input_overlay_layout_target(void)
+{
+   input_overlay_t *ol = input_driver_st.overlay_ptr;
+   if (!ol || (ol->flags & INPUT_OVERLAY_IS_OSK))
+      ol = input_driver_st.overlay_cache_ptr;
+   if (!ol || (ol->flags & INPUT_OVERLAY_IS_OSK) || !ol->active)
+      return NULL;
+   return ol;
+}
+
+/* The most specific scope the running content has */
+static enum overlay_layout_scope input_overlay_layout_scope_max(void)
+{
+   char core[NAME_MAX_LENGTH];
+   char content[NAME_MAX_LENGTH];
+
+   input_overlay_layout_names(core, sizeof(core), content, sizeof(content));
+   if (!*core)
+      return OVERLAY_LAYOUT_SCOPE_ALL;
+   if (!*content)
+      return OVERLAY_LAYOUT_SCOPE_CORE;
+   return OVERLAY_LAYOUT_SCOPE_CONTENT;
+}
+
+enum overlay_layout_scope input_overlay_layout_scope(void)
+{
+   uint32_t key                  = input_overlay_layout_key();
+   enum overlay_layout_scope max = input_overlay_layout_scope_max();
+
+   if (     !input_overlay_layout_sel.chosen
+         || input_overlay_layout_sel.key != key)
+   {
+      char path[PATH_MAX_LENGTH];
+      input_overlay_t *ol = input_overlay_layout_target();
+      int scope           = (int)max;
+
+      /* The most specific layout there is */
+      for (; ol && scope > OVERLAY_LAYOUT_SCOPE_ALL; scope--)
+      {
+         input_overlay_layout_path(path, sizeof(path), ol->path,
+               (enum overlay_layout_scope)scope);
+         if (*path && path_is_valid(path))
+            break;
+      }
+      if (!ol)
+         scope = OVERLAY_LAYOUT_SCOPE_ALL;
+
+      input_overlay_layout_sel.key    = key;
+      input_overlay_layout_sel.scope  = (enum overlay_layout_scope)scope;
+      input_overlay_layout_sel.chosen = true;
+   }
+
+   if (input_overlay_layout_sel.scope > max)
+      input_overlay_layout_sel.scope = max;
+   return input_overlay_layout_sel.scope;
+}
+
+void input_overlay_layout_scope_step(int dir)
+{
+   int max   = (int)input_overlay_layout_scope_max();
+   int scope = (int)input_overlay_layout_scope() + dir;
+
+   if (scope < 0)
+      scope = max;
+   else if (scope > max)
+      scope = 0;
+   input_overlay_layout_sel.scope = (enum overlay_layout_scope)scope;
+}
+
+size_t input_overlay_layout_scope_name(char *s, size_t len)
+{
+   char core[NAME_MAX_LENGTH];
+   char content[NAME_MAX_LENGTH];
+
+   input_overlay_layout_names(core, sizeof(core), content, sizeof(content));
+   switch (input_overlay_layout_scope())
+   {
+      case OVERLAY_LAYOUT_SCOPE_CORE:
+         return snprintf(s, len,
+               msg_hash_to_str(MSG_OVERLAY_LAYOUT_SCOPE_CORE), core);
+      case OVERLAY_LAYOUT_SCOPE_CONTENT:
+         return snprintf(s, len,
+               msg_hash_to_str(MSG_OVERLAY_LAYOUT_SCOPE_CONTENT), content);
+      default:
+         break;
+   }
+   return strlcpy(s, msg_hash_to_str(MSG_OVERLAY_LAYOUT_SCOPE_ALL), len);
 }
 
 static bool input_overlay_layout_save(const input_overlay_t *ol)
@@ -7046,7 +7196,8 @@ static bool input_overlay_layout_save(const input_overlay_t *ol)
    config_file_t *conf = NULL;
    bool ret            = false;
 
-   input_overlay_layout_path(path, sizeof(path), ol->path);
+   input_overlay_layout_path(path, sizeof(path), ol->path,
+         input_overlay_layout_scope());
    if (!*path)
       return false;
 
@@ -7063,16 +7214,25 @@ static bool input_overlay_layout_save(const input_overlay_t *ol)
       for (j = 0; j < page->size; j++)
       {
          const struct overlay_desc *desc = &page->descs[j];
-         if (!(desc->flags & OVERLAY_DESC_LAYOUT_EDITED))
-            continue;
-         snprintf(key, sizeof(key), "overlay%u_desc%u_layout_x",
-               (unsigned)i, (unsigned)j);
-         snprintf(val, sizeof(val), "%.6f", desc->x);
-         config_set_string(conf, key, val);
-         snprintf(key, sizeof(key), "overlay%u_desc%u_layout_y",
-               (unsigned)i, (unsigned)j);
-         snprintf(val, sizeof(val), "%.6f", desc->y);
-         config_set_string(conf, key, val);
+         if (desc->flags & OVERLAY_DESC_LAYOUT_EDITED)
+         {
+            snprintf(key, sizeof(key), "overlay%u_desc%u_layout_x",
+                  (unsigned)i, (unsigned)j);
+            snprintf(val, sizeof(val), "%.6f", desc->x);
+            config_set_string(conf, key, val);
+            snprintf(key, sizeof(key), "overlay%u_desc%u_layout_y",
+                  (unsigned)i, (unsigned)j);
+            snprintf(val, sizeof(val), "%.6f", desc->y);
+            config_set_string(conf, key, val);
+         }
+         if (desc->flags & OVERLAY_DESC_LAYOUT_HIDE_EDITED)
+         {
+            snprintf(key, sizeof(key), "overlay%u_desc%u_layout_hidden",
+                  (unsigned)i, (unsigned)j);
+            config_set_string(conf, key,
+                  (desc->flags & OVERLAY_DESC_LAYOUT_HIDDEN)
+                  ? "true" : "false");
+         }
       }
    }
 
@@ -7084,7 +7244,8 @@ static bool input_overlay_layout_save(const input_overlay_t *ol)
    {
       for (i = 0; i < ol->size; i++)
          for (j = 0; j < ol->overlays[i].size; j++)
-            ol->overlays[i].descs[j].flags &= ~OVERLAY_DESC_LAYOUT_EDITED;
+            ol->overlays[i].descs[j].flags &= ~(OVERLAY_DESC_LAYOUT_EDITED
+                  | OVERLAY_DESC_LAYOUT_HIDE_EDITED);
       RARCH_LOG("[Overlay] Saved layout: \"%s\".\n", path);
    }
    else
@@ -7092,6 +7253,125 @@ static bool input_overlay_layout_save(const input_overlay_t *ol)
 
    config_file_free(conf);
    return ret;
+}
+
+static bool input_overlay_pack_overlap(const struct overlay_desc *a,
+      const struct overlay_desc *b)
+{
+   return   fabs(a->pack_x - b->pack_x) < a->range_x + b->range_x
+         && fabs(a->pack_y - b->pack_y) < a->range_y + b->range_y;
+}
+
+/* Numbers the controls of @page (overlay_desc::layout_group). Where the
+ * pack puts them, and not where the user did: a control dropped on
+ * another stays apart from it. */
+static void input_overlay_layout_group(struct overlay *page)
+{
+   size_t i, j, k;
+   uint16_t group = 0;
+   bool grew;
+
+   if (page->flags & OVERLAY_LAYOUT_GROUPED)
+      return;
+
+   for (i = 0; i < page->size; i++)
+      page->descs[i].layout_group = 0;
+
+   for (i = 0; i < page->size; i++)
+   {
+      if (page->descs[i].layout_group)
+         continue;
+      page->descs[i].layout_group = ++group;
+      do
+      {
+         grew = false;
+         for (j = 0; j < page->size; j++)
+         {
+            struct overlay_desc *desc = &page->descs[j];
+            if (desc->layout_group)
+               continue;
+            for (k = 0; k < page->size; k++)
+            {
+               const struct overlay_desc *in = &page->descs[k];
+               if (in->layout_group != group)
+                  continue;
+               if (     (desc->layout_added || in->layout_added)
+                     ? (desc->layout_added == in->layout_added)
+                     : input_overlay_pack_overlap(desc, in))
+               {
+                  desc->layout_group = group;
+                  grew               = true;
+                  break;
+               }
+            }
+         }
+      } while (grew);
+   }
+
+   page->flags |= OVERLAY_LAYOUT_GROUPED;
+}
+
+/* The same control on another page: what input_overlay_next_move_touch_masks
+ * matches, held to the binds as well. */
+static bool input_overlay_edit_same(const struct overlay_desc *a,
+      const struct overlay_desc *b)
+{
+   return   a->type          == b->type
+         && a->retro_key_idx == b->retro_key_idx
+         && fabs(a->x - b->x) < 0.001f
+         && fabs(a->y - b->y) < 0.001f
+         && !memcmp(&a->button_mask, &b->button_mask,
+               sizeof(a->button_mask));
+}
+
+static bool input_overlay_page_has(const struct overlay *page,
+      const struct overlay_desc *desc)
+{
+   size_t i;
+   for (i = 0; i < page->size; i++)
+      if (input_overlay_edit_same(&page->descs[i], desc))
+         return true;
+   return false;
+}
+
+static bool input_overlay_page_alike(const struct overlay *a,
+      const struct overlay *b)
+{
+   return fabs(a->aspect_ratio - b->aspect_ratio) <= 0.01f;
+}
+
+/* Hides or shows @group of the active page, and the same descs on the
+ * pages of its shape */
+static void input_overlay_layout_set_hidden(input_overlay_t *ol,
+      uint16_t group, bool hidden)
+{
+   size_t i, j, k;
+   size_t index           = (size_t)(ol->active - ol->overlays);
+   struct overlay *active = &ol->overlays[index];
+
+   for (i = 0; i < active->size; i++)
+   {
+      struct overlay_desc *desc = &active->descs[i];
+      if (desc->layout_group != group)
+         continue;
+      for (j = 0; j < ol->size; j++)
+      {
+         struct overlay *page = &ol->overlays[j];
+         if (j != index && !input_overlay_page_alike(page, active))
+            continue;
+         for (k = 0; k < page->size; k++)
+         {
+            struct overlay_desc *d = &page->descs[k];
+            if (d != desc && (j == index || !input_overlay_edit_same(d, desc)))
+               continue;
+            if (hidden)
+               d->flags |=  OVERLAY_DESC_LAYOUT_HIDDEN;
+            else
+               d->flags &= ~OVERLAY_DESC_LAYOUT_HIDDEN;
+            d->flags |= OVERLAY_DESC_LAYOUT_HIDE_EDITED;
+         }
+      }
+   }
 }
 
 static void input_overlay_edit_drop(input_overlay_t *ol)
@@ -7158,34 +7438,14 @@ static bool input_overlay_edit_push(unsigned page, unsigned desc,
    return true;
 }
 
-static bool input_overlay_edit_overlap(const struct overlay_desc *a,
-      const struct overlay_desc *b)
-{
-   return   fabs(a->x_shift - b->x_shift) < a->range_x + b->range_x
-         && fabs(a->y_shift - b->y_shift) < a->range_y + b->range_y;
-}
-
-/* The same control on another page: what input_overlay_next_move_touch_masks
- * matches, held to the binds as well. */
-static bool input_overlay_edit_same(const struct overlay_desc *a,
-      const struct overlay_desc *b)
-{
-   return   a->type          == b->type
-         && a->retro_key_idx == b->retro_key_idx
-         && fabs(a->x - b->x) < 0.001f
-         && fabs(a->y - b->y) < 0.001f
-         && !memcmp(&a->button_mask, &b->button_mask,
-               sizeof(a->button_mask));
-}
-
 static void input_overlay_edit_grab(input_overlay_t *ol, float x, float y)
 {
    size_t i, j, k;
-   uint8_t *in_group;
-   bool grew;
-   const struct overlay *active = ol->active;
-   size_t first                 = active->size;
-   float first_area             = 0.0f;
+   uint16_t group;
+   size_t index           = (size_t)(ol->active - ol->overlays);
+   struct overlay *active = &ol->overlays[index];
+   size_t first           = active->size;
+   float first_area       = 0.0f;
 
    /* The smallest drawn desc under the finger */
    for (i = 0; i < active->size; i++)
@@ -7193,6 +7453,7 @@ static void input_overlay_edit_grab(input_overlay_t *ol, float x, float y)
       const struct overlay_desc *desc = &active->descs[i];
       float area = desc->range_x * desc->range_y;
       if (     !OVERLAY_HAS_IMAGE(&desc->image)
+            || (desc->flags & OVERLAY_DESC_LAYOUT_HIDDEN)
             || fabs(x - desc->x_shift) > desc->range_x
             || fabs(y - desc->y_shift) > desc->range_y)
          continue;
@@ -7203,40 +7464,20 @@ static void input_overlay_edit_grab(input_overlay_t *ol, float x, float y)
       }
    }
 
-   if (     first == active->size
-         || !(in_group = (uint8_t*)calloc(active->size, sizeof(*in_group))))
+   if (first == active->size)
       return;
 
-   in_group[first] = 1;
-   do
-   {
-      grew = false;
-      for (i = 0; i < active->size; i++)
-      {
-         if (in_group[i])
-            continue;
-         for (j = 0; j < active->size; j++)
-         {
-            if (     in_group[j]
-                  && input_overlay_edit_overlap(
-                     &active->descs[i], &active->descs[j]))
-            {
-               in_group[i] = 1;
-               grew        = true;
-               break;
-            }
-         }
-      }
-   } while (grew);
+   input_overlay_layout_group(active);
+   group = active->descs[first].layout_group;
 
    input_overlay_edit.count = 0;
    for (i = 0; i < active->size; i++)
    {
       struct overlay_desc *desc = &active->descs[i];
 
-      if (!in_group[i])
+      if (desc->layout_group != group)
          continue;
-      if (!input_overlay_edit_push((unsigned)ol->index, (unsigned)i, desc))
+      if (!input_overlay_edit_push((unsigned)index, (unsigned)i, desc))
          break;
       /* Lit as pressed while dragged */
       desc->touch_mask = 1;
@@ -7251,8 +7492,7 @@ static void input_overlay_edit_grab(input_overlay_t *ol, float x, float y)
       for (j = 0; j < ol->size; j++)
       {
          const struct overlay *page = &ol->overlays[j];
-         if (     j == ol->index
-               || fabs(page->aspect_ratio - active->aspect_ratio) > 0.01f)
+         if (j == index || !input_overlay_page_alike(page, active))
             continue;
          for (k = 0; k < page->size; k++)
             if (input_overlay_edit_same(&page->descs[k], desc))
@@ -7260,9 +7500,8 @@ static void input_overlay_edit_grab(input_overlay_t *ol, float x, float y)
                      &page->descs[k]);
       }
    }
-   free(in_group);
 
-   input_overlay_edit.page     = (unsigned)ol->index;
+   input_overlay_edit.page     = (unsigned)index;
    input_overlay_edit.start_x  = x;
    input_overlay_edit.start_y  = y;
    input_overlay_edit.flags   |= OVERLAY_EDIT_DRAGGING;
@@ -7306,12 +7545,23 @@ static void input_overlay_edit_move(input_overlay_t *ol, float x, float y)
    command_event(CMD_EVENT_OVERLAY_SET_SCALE_FACTOR, NULL);
 }
 
+/* No content runs behind the editor: the menu it came from comes back */
+static void input_overlay_edit_return(void)
+{
+#ifdef HAVE_MENU
+   if (     runloop_state_get_ptr()->current_core_type == CORE_TYPE_DUMMY
+         && !(menu_state_get_ptr()->flags & MENU_ST_FLAG_ALIVE))
+      retroarch_menu_running();
+#endif
+}
+
 static void input_overlay_edit_poll(input_overlay_t *ol, float opacity)
 {
    input_driver_state_t *input_st    = &input_driver_st;
    input_driver_t *input             = (input_driver_t*)input_st->current_driver;
    void *input_data                  = input_st->current_data;
    const video_views_layout_t *views = video_driver_get_views_layout();
+   unsigned index                    = (unsigned)(ol->active - ol->overlays);
    bool pressed                      = false;
    float x                           = 0.0f;
    float y                           = 0.0f;
@@ -7319,11 +7569,11 @@ static void input_overlay_edit_poll(input_overlay_t *ol, float opacity)
 
    /* The pack was replaced under the drag */
    if (     input_overlay_edit.ol != ol
-         || input_overlay_edit.page != ol->index)
+         || input_overlay_edit.page != index)
    {
       input_overlay_edit_drop(ol);
       input_overlay_edit.ol   = ol;
-      input_overlay_edit.page = (unsigned)ol->index;
+      input_overlay_edit.page = index;
    }
 
    input_st->flags |= INP_FLAG_BLOCK_POINTER_INPUT;
@@ -7384,6 +7634,7 @@ static void input_overlay_edit_poll(input_overlay_t *ol, float opacity)
          input_overlay_edit_finish(ol, true);
          input_overlay_alpha_pass(ol, opacity, false, opacity,
                input_st->overlay_leds_lit, input_overlay_led_map());
+         input_overlay_edit_return();
          return;
       }
 
@@ -7418,7 +7669,8 @@ void input_overlay_edit_begin(void)
    /* Held: a finger still down from the menu grabs nothing */
    input_overlay_edit.flags = OVERLAY_EDIT_ACTIVE | OVERLAY_EDIT_HELD;
 
-   if (!(runloop_st->flags & RUNLOOP_FLAG_PAUSED))
+   if (     runloop_st->current_core_type != CORE_TYPE_DUMMY
+         && !(runloop_st->flags & RUNLOOP_FLAG_PAUSED))
    {
       command_event(CMD_EVENT_PAUSE, NULL);
       if (runloop_st->flags & RUNLOOP_FLAG_PAUSED)
@@ -7445,9 +7697,225 @@ bool input_overlay_edit_active(void)
    return (input_overlay_edit.flags & OVERLAY_EDIT_ACTIVE) != 0;
 }
 
-void input_overlay_edit_end(void)
+void input_overlay_edit_stop(void)
 {
    input_overlay_edit_finish(input_driver_st.overlay_ptr, true);
+}
+
+void input_overlay_edit_end(void)
+{
+   if (!(input_overlay_edit.flags & OVERLAY_EDIT_ACTIVE))
+      return;
+   input_overlay_edit_finish(input_driver_st.overlay_ptr, true);
+   input_overlay_edit_return();
+}
+
+/* The @i-th control of the active page that shows anything, or 0 */
+static uint16_t input_overlay_layout_nth_control(input_overlay_t *ol,
+      unsigned i)
+{
+   uint16_t group;
+   struct overlay *page = &ol->overlays[ol->active - ol->overlays];
+
+   input_overlay_layout_group(page);
+   for (group = 1; ; group++)
+   {
+      size_t d;
+      bool any   = false;
+      bool shown = false;
+      for (d = 0; d < page->size; d++)
+      {
+         if (page->descs[d].layout_group != group)
+            continue;
+         any = true;
+         if (OVERLAY_HAS_IMAGE(&page->descs[d].image))
+            shown = true;
+      }
+      if (!any)
+         return 0;
+      if (shown && i-- == 0)
+         return group;
+   }
+}
+
+static size_t input_overlay_layout_name(const struct overlay *page,
+      uint16_t group, char *s, size_t len)
+{
+   size_t d;
+   unsigned b;
+   size_t _len                      = 0;
+   const struct overlay_desc *named = NULL;
+
+   *s = '\0';
+   for (d = 0; d < page->size; d++)
+   {
+      const struct overlay_desc *desc = &page->descs[d];
+      if (desc->layout_group != group)
+         continue;
+      switch (desc->type)
+      {
+         case OVERLAY_TYPE_DPAD_AREA:
+            return strlcpy(s, msg_hash_to_str(MSG_OVERLAY_CONTROL_DPAD), len);
+         case OVERLAY_TYPE_ABXY_AREA:
+            return strlcpy(s, msg_hash_to_str(MSG_OVERLAY_CONTROL_FACE_BUTTONS), len);
+         case OVERLAY_TYPE_ANALOG_LEFT:
+            return strlcpy(s, msg_hash_to_str(MSG_OVERLAY_CONTROL_LEFT_STICK), len);
+         case OVERLAY_TYPE_ANALOG_RIGHT:
+            return strlcpy(s, msg_hash_to_str(MSG_OVERLAY_CONTROL_RIGHT_STICK), len);
+         default:
+            break;
+      }
+      if (!named && OVERLAY_HAS_IMAGE(&desc->image))
+         named = desc;
+   }
+
+   if (!named)
+      return 0;
+   if (named->type == OVERLAY_TYPE_KEYBOARD)
+      return strlcpy(s, msg_hash_to_str(MSG_OVERLAY_CONTROL_KEY), len);
+   if (     BIT256_GET(named->button_mask, RARCH_OVERLAY_NEXT)
+         && *named->next_index_name)
+      return snprintf(s, len, msg_hash_to_str(MSG_OVERLAY_CONTROL_PAGE),
+            named->next_index_name);
+
+   for (b = 0; b < RARCH_BIND_LIST_END && _len < len; b++)
+   {
+      const char *bind;
+      if (     !BIT256_GET(named->button_mask, b)
+            || !(bind = input_config_bind_map_get_desc(b)))
+         continue;
+      if (_len)
+         _len += strlcpy(s + _len, " + ", len - _len);
+      if (_len < len)
+         _len += strlcpy(s + _len, bind, len - _len);
+   }
+   return _len;
+}
+
+unsigned input_overlay_layout_control_count(void)
+{
+   unsigned n          = 0;
+   input_overlay_t *ol = input_overlay_layout_target();
+   if (ol)
+      while (input_overlay_layout_nth_control(ol, n))
+         n++;
+   return n;
+}
+
+bool input_overlay_layout_control_get(unsigned i, char *s, size_t len,
+      bool *shown)
+{
+   size_t d;
+   const struct overlay *page;
+   input_overlay_t *ol = input_overlay_layout_target();
+   uint16_t group      = ol ? input_overlay_layout_nth_control(ol, i) : 0;
+
+   if (!group)
+      return false;
+   page   = ol->active;
+   *shown = false;
+   for (d = 0; d < page->size; d++)
+      if (     page->descs[d].layout_group == group
+            && OVERLAY_HAS_IMAGE(&page->descs[d].image)
+            && !(page->descs[d].flags & OVERLAY_DESC_LAYOUT_HIDDEN))
+         *shown = true;
+   if (s)
+      input_overlay_layout_name(page, group, s, len);
+   return true;
+}
+
+bool input_overlay_layout_control_toggle(unsigned i)
+{
+   bool shown;
+   input_overlay_t *ol = input_overlay_layout_target();
+   uint16_t group      = ol ? input_overlay_layout_nth_control(ol, i) : 0;
+
+   if (!group || !input_overlay_layout_control_get(i, NULL, 0, &shown))
+      return false;
+   input_overlay_layout_set_hidden(ol, group, shown);
+   if (ol->iface && (ol->flags & INPUT_OVERLAY_ENABLE))
+      command_event(CMD_EVENT_OVERLAY_SET_ALPHA_MOD, NULL);
+   return input_overlay_layout_save(ol);
+}
+
+/* The @i-th control, on a page of the shape of the active one, that the
+ * active page has not: the page and the control there */
+static bool input_overlay_layout_nth_addable(input_overlay_t *ol,
+      unsigned i, size_t *page_out, uint16_t *group_out)
+{
+   size_t p;
+   size_t index           = (size_t)(ol->active - ol->overlays);
+   struct overlay *active = &ol->overlays[index];
+
+   for (p = 0; p < ol->size; p++)
+   {
+      uint16_t group;
+      struct overlay *page = &ol->overlays[p];
+
+      if (p == index || !input_overlay_page_alike(page, active))
+         continue;
+      input_overlay_layout_group(page);
+
+      for (group = 1; ; group++)
+      {
+         size_t d;
+         bool any   = false;
+         bool shown = false;
+         bool have  = false;
+
+         for (d = 0; d < page->size && !have; d++)
+         {
+            size_t q;
+            const struct overlay_desc *desc = &page->descs[d];
+            if (desc->layout_group != group)
+               continue;
+            any = true;
+            if (OVERLAY_HAS_IMAGE(&desc->image))
+               shown = true;
+            /* On the active page, or listed from an earlier one */
+            for (q = 0; q <= p && !have; q++)
+               if (     (q == index || (q < p && q != index
+                        && input_overlay_page_alike(&ol->overlays[q], active)))
+                     && input_overlay_page_has(&ol->overlays[q], desc))
+                  have = true;
+         }
+         if (!any)
+            break;
+         if (!shown || have)
+            continue;
+         if (i-- == 0)
+         {
+            *page_out  = p;
+            *group_out = group;
+            return true;
+         }
+      }
+   }
+   return false;
+}
+
+unsigned input_overlay_layout_addable_count(void)
+{
+   size_t p;
+   uint16_t g;
+   unsigned n          = 0;
+   input_overlay_t *ol = input_overlay_layout_target();
+   if (ol)
+      while (input_overlay_layout_nth_addable(ol, n, &p, &g))
+         n++;
+   return n;
+}
+
+bool input_overlay_layout_addable_name(unsigned i, char *s, size_t len)
+{
+   size_t p;
+   uint16_t g;
+   input_overlay_t *ol = input_overlay_layout_target();
+
+   if (!ol || !input_overlay_layout_nth_addable(ol, i, &p, &g))
+      return false;
+   input_overlay_layout_name(&ol->overlays[p], g, s, len);
+   return true;
 }
 
 /*
@@ -11526,6 +11994,7 @@ static void input_overlay_loaded(retro_task_t *task,
    ol->size        = data->size;
    ol->active      = data->active;
    ol->path        = data->overlay_path;
+   ol->layout_key  = input_overlay_layout_key();
    ol->num_images  = data->image_list->size;
    ol->next_index  = (unsigned)((ol->index + 1) % ol->size);
    ol->flags      |= INPUT_OVERLAY_ALIVE;
@@ -11716,9 +12185,12 @@ void input_overlay_init(void)
          && *settings->paths.path_osk_overlay;
    const char *path_overlay       = input_overlay_path(want_osk);
    bool want_hidden               = input_overlay_want_hidden();
+   /* Other content can have other layouts */
+   uint32_t layout_key            = input_overlay_layout_key();
    bool overlay_shown             = ol
          && (ol->flags & INPUT_OVERLAY_ENABLE)
-         && string_is_equal(path_overlay, ol->path);
+         && string_is_equal(path_overlay, ol->path)
+         && ol->layout_key == layout_key;
    /* A cached pack is reusable only while it still has something to
     * upload from: the pixels are released once they are on the GPU,
     * so a pack whose textures went with a video reinit is reloaded
@@ -11726,6 +12198,7 @@ void input_overlay_init(void)
    bool overlay_cached            = ol_cache
          && (ol_cache->flags & INPUT_OVERLAY_ALIVE)
          && string_is_equal(path_overlay, ol_cache->path)
+         && ol_cache->layout_key == layout_key
          && input_overlay_has_source(ol_cache);
    bool overlay_hidden            = !ol && overlay_cached;
 
@@ -11766,16 +12239,159 @@ void input_overlay_layout_reset(void)
 
    input_overlay_edit_finish(input_driver_st.overlay_ptr, false);
 
-   input_overlay_layout_path(path, sizeof(path), input_overlay_path(false));
+   input_overlay_layout_path(path, sizeof(path), input_overlay_path(false),
+         input_overlay_layout_scope());
    if (*path && path_is_valid(path))
       filestream_delete(path);
 
-   /* Loaded again, with the pack's own positions */
+   /* Loaded again, with what the other layouts and the pack say */
    input_overlay_deinit();
    input_overlay_init();
 
    runloop_msg_queue_push(_msg, strlen(_msg), 1, 120, true, NULL,
          MESSAGE_QUEUE_ICON_DEFAULT, MESSAGE_QUEUE_CATEGORY_INFO);
+}
+
+/* The overlay's config as it loads, with the user layouts over it */
+static config_file_t *input_overlay_layout_open(const char *overlay_path)
+{
+   unsigned scope;
+   char path[PATH_MAX_LENGTH];
+   config_file_t *conf = config_file_new_from_path_to_string(overlay_path);
+
+   for (scope = 0; conf && scope < OVERLAY_LAYOUT_SCOPE_LAST; scope++)
+   {
+      config_file_t *layout;
+      input_overlay_layout_path(path, sizeof(path), overlay_path,
+            (enum overlay_layout_scope)scope);
+      if (     *path && path_is_valid(path)
+            && (layout = config_file_new_from_path_to_string(path)))
+         config_file_append_conf(conf, layout);
+   }
+   return conf;
+}
+
+/* Copies the @i-th addable control (input_overlay_layout_addable_name)
+ * onto the active page, in the middle of the screen, as descs the
+ * layout of the scope chosen adds, and loads the overlay again. */
+bool input_overlay_layout_add(unsigned i)
+{
+   size_t d, src;
+   uint16_t group, added = 0;
+   char key[64];
+   char val[32];
+   char prefix[32];
+   char path[PATH_MAX_LENGTH];
+   const struct overlay *from;
+   const struct overlay *active;
+   struct config_entry_list *entry;
+   unsigned dst, count     = 0;
+   float x0 = 1e9f, x1 = -1e9f, y0 = 1e9f, y1 = -1e9f;
+   float dx, dy;
+   bool ret                = false;
+   config_file_t *merged   = NULL;
+   config_file_t *layout   = NULL;
+   input_overlay_t *ol     = input_overlay_layout_target();
+
+   if (     !ol
+         || !input_overlay_layout_nth_addable(ol, i, &src, &group))
+      return false;
+
+   input_overlay_layout_path(path, sizeof(path), ol->path,
+         input_overlay_layout_scope());
+   if (     !*path
+         || !(merged = input_overlay_layout_open(ol->path)))
+      return false;
+   if (     !path_is_valid(path)
+         || !(layout = config_file_new_from_path_to_string(path)))
+      layout = config_file_new_alloc();
+   if (!layout)
+   {
+      config_file_free(merged);
+      return false;
+   }
+
+   from   = &ol->overlays[src];
+   active = ol->active;
+   dst    = (unsigned)(active - ol->overlays);
+
+   for (d = 0; d < active->size; d++)
+      if (active->descs[d].layout_added > added)
+         added = active->descs[d].layout_added;
+   added++;
+
+   for (d = 0; d < from->size; d++)
+   {
+      const struct overlay_desc *desc = &from->descs[d];
+      if (desc->layout_group != group)
+         continue;
+      x0 = MIN(x0, desc->x_shift - desc->range_x);
+      x1 = MAX(x1, desc->x_shift + desc->range_x);
+      y0 = MIN(y0, desc->y_shift - desc->range_y);
+      y1 = MAX(y1, desc->y_shift + desc->range_y);
+   }
+   /* To the middle of the screen, where nothing is meant to be */
+   dx = (0.5f - active->mod_x) / active->mod_w - (x0 + x1) * 0.5f;
+   dy = (0.5f - active->mod_y) / active->mod_h - (y0 + y1) * 0.5f;
+
+   for (d = 0; d < from->size; d++)
+   {
+      size_t _len;
+      const struct overlay_desc *desc = &from->descs[d];
+      unsigned to                     = (unsigned)active->size + count;
+
+      if (desc->layout_group != group)
+         continue;
+
+      _len = snprintf(prefix, sizeof(prefix), "overlay%u_desc%u",
+            (unsigned)src, (unsigned)d);
+      for (entry = merged->entries; entry; entry = entry->next)
+      {
+         const char *suffix;
+         if (     !entry->key || !entry->value
+               || strncmp(entry->key, prefix, _len))
+            continue;
+         suffix = entry->key + _len;
+         if (     (*suffix && *suffix != '_')
+               || string_starts_with(suffix, "_layout_"))
+            continue;
+         snprintf(key, sizeof(key), "overlay%u_desc%u%s", dst, to, suffix);
+         config_set_string(layout, key, entry->value);
+      }
+
+      snprintf(key, sizeof(key), "overlay%u_desc%u_layout_x", dst, to);
+      snprintf(val, sizeof(val), "%.6f", desc->x_shift + dx);
+      config_set_string(layout, key, val);
+      snprintf(key, sizeof(key), "overlay%u_desc%u_layout_y", dst, to);
+      snprintf(val, sizeof(val), "%.6f", desc->y_shift + dy);
+      config_set_string(layout, key, val);
+      snprintf(key, sizeof(key), "overlay%u_desc%u_layout_added", dst, to);
+      snprintf(val, sizeof(val), "%u", (unsigned)added);
+      config_set_string(layout, key, val);
+      count++;
+   }
+
+   snprintf(key, sizeof(key), "overlay%u_descs", dst);
+   snprintf(val, sizeof(val), "%u", (unsigned)active->size + count);
+   config_set_string(layout, key, val);
+
+   {
+      char dir[DIR_MAX_LENGTH];
+      fill_pathname_basedir(dir, path, sizeof(dir));
+      if (!path_is_directory(dir))
+         path_mkdir(dir);
+   }
+   ret = config_file_write(layout, path, true);
+   config_file_free(layout);
+   config_file_free(merged);
+
+   if (ret)
+   {
+      input_overlay_edit_finish(input_driver_st.overlay_ptr, true);
+      input_overlay_deinit();
+      input_overlay_init();
+   }
+   return ret;
 }
 #endif
 

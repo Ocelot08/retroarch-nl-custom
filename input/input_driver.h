@@ -2152,13 +2152,36 @@ void input_overlay_init(void);
 
 void input_overlay_check_mouse_cursor(void);
 
-/* Layout editor: drag the overlay's controls, the core paused. Ended
- * by input_overlay_edit_end(), which saves the layout. */
+/* Layout editor: drag the overlay's controls, the core paused, or over
+ * a blank screen with no content. input_overlay_edit_end() saves the
+ * layout and, with no content, brings the menu back;
+ * input_overlay_edit_stop() only saves. */
 void input_overlay_edit_begin(void);
 bool input_overlay_edit_active(void);
 void input_overlay_edit_end(void);
+void input_overlay_edit_stop(void);
 
-/* Forgets the saved layout of the current overlay and reloads it. */
+/* The scope edits, removals and additions are saved for: all content,
+ * the running core or the running content. Starts from the most
+ * specific layout the running content has. */
+enum overlay_layout_scope input_overlay_layout_scope(void);
+void input_overlay_layout_scope_step(int dir);
+size_t input_overlay_layout_scope_name(char *s, size_t len);
+
+/* The controls of the overlay page shown, each one the user layout can
+ * remove or bring back. */
+unsigned input_overlay_layout_control_count(void);
+bool input_overlay_layout_control_get(unsigned i, char *s, size_t len,
+      bool *shown);
+bool input_overlay_layout_control_toggle(unsigned i);
+
+/* Controls the overlay has on its other pages of the same shape, which
+ * the page shown has not: input_overlay_layout_add() puts one on it. */
+unsigned input_overlay_layout_addable_count(void);
+bool input_overlay_layout_addable_name(unsigned i, char *s, size_t len);
+bool input_overlay_layout_add(unsigned i);
+
+/* Forgets the layout of the scope chosen and reloads the overlay. */
 void input_overlay_layout_reset(void);
 #endif
 

@@ -1558,6 +1558,39 @@ static size_t menu_action_setting_disp_set_label_playlist_associations(file_list
    return strlcpy(s, msg_hash_to_str(MENU_ENUM_LABEL_VALUE_NOT_AVAILABLE), len);
 }
 
+#ifdef HAVE_OVERLAY
+static size_t menu_action_setting_disp_set_label_overlay_layout_scope(
+      file_list_t* list,
+      unsigned *w, unsigned type, unsigned i,
+      const char *label,
+      char *s, size_t len,
+      const char *path,
+      char *s2, size_t len2)
+{
+   *w = 19;
+   strlcpy(s2, path, len2);
+   return input_overlay_layout_scope_name(s, len);
+}
+
+static size_t menu_action_setting_disp_set_label_overlay_layout_control(
+      file_list_t* list,
+      unsigned *w, unsigned type, unsigned i,
+      const char *label,
+      char *s, size_t len,
+      const char *path,
+      char *s2, size_t len2)
+{
+   bool shown       = false;
+   size_t entry_idx = (list && i < list->size) ? list->list[i].entry_idx : i;
+
+   *w = 19;
+   strlcpy(s2, path, len2);
+   input_overlay_layout_control_get((unsigned)entry_idx, NULL, 0, &shown);
+   return strlcpy(s, msg_hash_to_str(shown
+         ? MENU_ENUM_LABEL_VALUE_ON : MENU_ENUM_LABEL_VALUE_OFF), len);
+}
+#endif
+
 static size_t menu_action_setting_disp_set_label_playlist_label_display_mode(
       file_list_t* list,
       unsigned *w, unsigned type, unsigned i,
@@ -2195,6 +2228,16 @@ static int menu_cbs_init_bind_get_string_representation_compare_label(
             BIND_ACTION_GET_VALUE(cbs,
                   menu_action_setting_disp_set_label_playlist_label_display_mode);
             break;
+#ifdef HAVE_OVERLAY
+         case MENU_ENUM_LABEL_OVERLAY_LAYOUT_SCOPE:
+            BIND_ACTION_GET_VALUE(cbs,
+                  menu_action_setting_disp_set_label_overlay_layout_scope);
+            break;
+         case MENU_ENUM_LABEL_OVERLAY_LAYOUT_CONTROL:
+            BIND_ACTION_GET_VALUE(cbs,
+                  menu_action_setting_disp_set_label_overlay_layout_control);
+            break;
+#endif
          case MENU_ENUM_LABEL_PLAYLIST_MANAGER_RIGHT_THUMBNAIL_MODE:
             BIND_ACTION_GET_VALUE(cbs,
                   menu_action_setting_disp_set_label_playlist_right_thumbnail_mode);

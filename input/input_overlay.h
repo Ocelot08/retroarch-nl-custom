@@ -143,7 +143,9 @@ enum OVERLAY_FLAGS
    /* At least one desc on the page does something when pressed. A
     * page of nothing but "nul" buttons (an LED or decoration overlay)
     * takes no input, so it has no claim on the menu's mouse. */
-   OVERLAY_TAKES_INPUT        = (1 << 8)
+   OVERLAY_TAKES_INPUT        = (1 << 8),
+   /* overlay_desc::layout_group is set for every desc */
+   OVERLAY_LAYOUT_GROUPED     = (1 << 9)
 };
 
 enum OVERLAY_DESC_FLAGS
@@ -156,7 +158,11 @@ enum OVERLAY_DESC_FLAGS
    /* Moved in the layout editor and not yet saved */
    OVERLAY_DESC_LAYOUT_EDITED       = (1 << 3),
    /* Where the user layout put it: no separation moves it */
-   OVERLAY_DESC_LAYOUT_PLACED       = (1 << 4)
+   OVERLAY_DESC_LAYOUT_PLACED       = (1 << 4),
+   /* Removed by the user layout: not drawn, takes no input */
+   OVERLAY_DESC_LAYOUT_HIDDEN       = (1 << 5),
+   /* Shown or hidden in the layout editor and not yet saved */
+   OVERLAY_DESC_LAYOUT_HIDE_EDITED  = (1 << 6)
 };
 
 enum overlay_lightgun_action
@@ -269,6 +275,9 @@ struct overlay_desc
     * will be equal to x/y */
    float x_shift;
    float y_shift;
+   /* Where the pack itself puts it, before any user layout */
+   float pack_x;
+   float pack_y;
 
    /* These values are used only for hitbox
     * detection. A hitbox can be stretched in
@@ -294,6 +303,14 @@ struct overlay_desc
 
    /* The LED (1-based, as ledN_map counts) whose state this desc's
     * image shows under the overlay LED driver; 0 for none. */
+   /* The control this desc is part of on its page, 1-based: descs
+    * that overlap where the pack puts them, or that the user layout
+    * added together (layout_added). Valid with OVERLAY_LAYOUT_GROUPED. */
+   uint16_t layout_group;
+   /* Nonzero for a desc the user layout added: the descs added together
+    * share it. */
+   uint16_t layout_added;
+
    uint8_t led;
    uint8_t flags;
 };
@@ -473,6 +490,9 @@ struct input_overlay
    size_t size;
 
    unsigned next_index;
+   /* input_overlay_layout_key() of the content the layouts were
+    * applied for */
+   uint32_t layout_key;
 
    uint8_t flags;
 };
@@ -532,12 +552,25 @@ typedef struct
 
 void input_overlay_free_overlay(struct overlay *overlay);
 
-/* Where the user layout of the overlay at @overlay_path is kept: a
- * config of overlayN_descM_layout_x/_y entries (positions on the page
- * with no separation applied), merged over the overlay's own config
- * when it loads. */
+enum overlay_layout_scope
+{
+   OVERLAY_LAYOUT_SCOPE_ALL = 0,
+   OVERLAY_LAYOUT_SCOPE_CORE,
+   OVERLAY_LAYOUT_SCOPE_CONTENT,
+   OVERLAY_LAYOUT_SCOPE_LAST
+};
+
+/* Where the user layout of the overlay at @overlay_path is kept for
+ * @scope: a config of overlayN_descM_layout_* entries merged over the
+ * overlay's own config when it loads, all content's first, then the
+ * running core's, then the running content's. Empty when @scope does
+ * not apply (no core or no content running). */
 void input_overlay_layout_path(char *s, size_t len,
-      const char *overlay_path);
+      const char *overlay_path, enum overlay_layout_scope scope);
+
+/* Tells apart what the running core and content are, as far as which
+ * layouts apply. */
+uint32_t input_overlay_layout_key(void);
 
 /* The overlay LED driver's entry points: whether it is the LED
  * driver, and a core's LED going on or off. */

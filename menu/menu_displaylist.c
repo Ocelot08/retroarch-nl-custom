@@ -12792,24 +12792,12 @@ unsigned menu_displaylist_build_list(
                         false) == 0)
                   count++;
 
-               /* The layout of the preset follows it. Editing needs
-                * running content to show the overlay over. */
-               if (build_list[i].enum_idx != MENU_ENUM_LABEL_OVERLAY_PRESET)
-                  continue;
-
-               if (     (flags & RUNLOOP_FLAG_CORE_RUNNING)
-                     && !retroarch_ctl(RARCH_CTL_IS_DUMMY_CORE, NULL)
+               /* The layout of the preset follows it */
+               if (     build_list[i].enum_idx == MENU_ENUM_LABEL_OVERLAY_PRESET
                      && menu_entries_append(list,
-                        msg_hash_to_str(MENU_ENUM_LABEL_VALUE_OVERLAY_EDIT_LAYOUT),
-                        MENU_ENUM_LABEL_OVERLAY_EDIT_LAYOUT_STR,
-                        MENU_ENUM_LABEL_OVERLAY_EDIT_LAYOUT,
-                        MENU_SETTING_ACTION, 0, 0, NULL))
-                  count++;
-
-               if (menu_entries_append(list,
-                        msg_hash_to_str(MENU_ENUM_LABEL_VALUE_OVERLAY_RESET_LAYOUT),
-                        MENU_ENUM_LABEL_OVERLAY_RESET_LAYOUT_STR,
-                        MENU_ENUM_LABEL_OVERLAY_RESET_LAYOUT,
+                        msg_hash_to_str(MENU_ENUM_LABEL_VALUE_OVERLAY_TOUCH_LAYOUT),
+                        MENU_ENUM_LABEL_OVERLAY_TOUCH_LAYOUT_STR,
+                        MENU_ENUM_LABEL_OVERLAY_TOUCH_LAYOUT,
                         MENU_SETTING_ACTION, 0, 0, NULL))
                   count++;
             }
@@ -12839,6 +12827,59 @@ unsigned menu_displaylist_build_list(
             };
             count += menu_displaylist_parse_settings_rows(list, settings,
                   dl_rows_14, (unsigned)ARRAY_SIZE(dl_rows_14));
+         }
+         break;
+      case DISPLAYLIST_OVERLAY_TOUCH_LAYOUT_LIST:
+         {
+            static const enum msg_hash_enums rows[][2] = {
+               { MENU_ENUM_LABEL_OVERLAY_LAYOUT_SCOPE,
+                  MENU_ENUM_LABEL_VALUE_OVERLAY_LAYOUT_SCOPE },
+               { MENU_ENUM_LABEL_OVERLAY_EDIT_LAYOUT,
+                  MENU_ENUM_LABEL_VALUE_OVERLAY_EDIT_LAYOUT },
+               { MENU_ENUM_LABEL_OVERLAY_LAYOUT_CONTROLS,
+                  MENU_ENUM_LABEL_VALUE_OVERLAY_LAYOUT_CONTROLS },
+               { MENU_ENUM_LABEL_OVERLAY_LAYOUT_ADD,
+                  MENU_ENUM_LABEL_VALUE_OVERLAY_LAYOUT_ADD },
+               { MENU_ENUM_LABEL_OVERLAY_RESET_LAYOUT,
+                  MENU_ENUM_LABEL_VALUE_OVERLAY_RESET_LAYOUT },
+            };
+
+            for (i = 0; i < ARRAY_SIZE(rows); i++)
+               if (menu_entries_append(list,
+                        msg_hash_to_str(rows[i][1]),
+                        msg_hash_to_str(rows[i][0]),
+                        rows[i][0], MENU_SETTING_ACTION, 0, 0, NULL))
+                  count++;
+         }
+         break;
+      case DISPLAYLIST_OVERLAY_LAYOUT_CONTROLS_LIST:
+         {
+            char name[128];
+            bool shown;
+            unsigned n = input_overlay_layout_control_count();
+
+            for (i = 0; i < n; i++)
+               if (     input_overlay_layout_control_get(i, name,
+                        sizeof(name), &shown)
+                     && menu_entries_append(list, name,
+                        MENU_ENUM_LABEL_OVERLAY_LAYOUT_CONTROL_STR,
+                        MENU_ENUM_LABEL_OVERLAY_LAYOUT_CONTROL,
+                        MENU_SETTING_ACTION, 0, i, NULL))
+                  count++;
+         }
+         break;
+      case DISPLAYLIST_OVERLAY_LAYOUT_ADD_LIST:
+         {
+            char name[128];
+            unsigned n = input_overlay_layout_addable_count();
+
+            for (i = 0; i < n; i++)
+               if (     input_overlay_layout_addable_name(i, name, sizeof(name))
+                     && menu_entries_append(list, name,
+                        MENU_ENUM_LABEL_OVERLAY_LAYOUT_ADD_ITEM_STR,
+                        MENU_ENUM_LABEL_OVERLAY_LAYOUT_ADD_ITEM,
+                        MENU_SETTING_ACTION, 0, i, NULL))
+                  count++;
          }
          break;
       case DISPLAYLIST_OVERLAY_MOUSE_SETTINGS_LIST:
@@ -16906,6 +16947,9 @@ static bool menu_displaylist_ctl_internal(
          case DISPLAYLIST_OSK_OVERLAY_SETTINGS_LIST:
          case DISPLAYLIST_OVERLAY_LIGHTGUN_SETTINGS_LIST:
          case DISPLAYLIST_OVERLAY_MOUSE_SETTINGS_LIST:
+         case DISPLAYLIST_OVERLAY_TOUCH_LAYOUT_LIST:
+         case DISPLAYLIST_OVERLAY_LAYOUT_CONTROLS_LIST:
+         case DISPLAYLIST_OVERLAY_LAYOUT_ADD_LIST:
 #endif
          case DISPLAYLIST_ACCOUNTS_CHEEVOS_LIST:
          case DISPLAYLIST_ACCOUNTS_LIST:

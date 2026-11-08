@@ -426,6 +426,12 @@ static enum msg_hash_enums action_ok_dl_to_enum(unsigned lbl)
          return MENU_ENUM_LABEL_DEFERRED_OVERLAY_LIGHTGUN_SETTINGS_LIST;
       case ACTION_OK_DL_OVERLAY_MOUSE_SETTINGS_LIST:
          return MENU_ENUM_LABEL_DEFERRED_OVERLAY_MOUSE_SETTINGS_LIST;
+      case ACTION_OK_DL_OVERLAY_TOUCH_LAYOUT_LIST:
+         return MENU_ENUM_LABEL_DEFERRED_OVERLAY_TOUCH_LAYOUT_LIST;
+      case ACTION_OK_DL_OVERLAY_LAYOUT_CONTROLS_LIST:
+         return MENU_ENUM_LABEL_DEFERRED_OVERLAY_LAYOUT_CONTROLS_LIST;
+      case ACTION_OK_DL_OVERLAY_LAYOUT_ADD_LIST:
+         return MENU_ENUM_LABEL_DEFERRED_OVERLAY_LAYOUT_ADD_LIST;
       case ACTION_OK_DL_MENU_SETTINGS_LIST:
          return MENU_ENUM_LABEL_DEFERRED_MENU_SETTINGS_LIST;
 #ifdef _3DS
@@ -1832,6 +1838,9 @@ int generic_action_ok_displaylist_push(
       case ACTION_OK_DL_OSK_OVERLAY_SETTINGS_LIST:
       case ACTION_OK_DL_OVERLAY_LIGHTGUN_SETTINGS_LIST:
       case ACTION_OK_DL_OVERLAY_MOUSE_SETTINGS_LIST:
+      case ACTION_OK_DL_OVERLAY_TOUCH_LAYOUT_LIST:
+      case ACTION_OK_DL_OVERLAY_LAYOUT_CONTROLS_LIST:
+      case ACTION_OK_DL_OVERLAY_LAYOUT_ADD_LIST:
       case ACTION_OK_DL_MENU_SETTINGS_LIST:
 #ifdef _3DS
       case ACTION_OK_DL_MENU_BOTTOM_SETTINGS_LIST:
@@ -2044,6 +2053,9 @@ static const ok_dl_map_t ok_dl_map[] = {
    { MENU_ENUM_LABEL_ONSCREEN_OVERLAY_SETTINGS, ACTION_OK_DL_ONSCREEN_OVERLAY_SETTINGS_LIST },
    { MENU_ENUM_LABEL_OVERLAY_LIGHTGUN_SETTINGS, ACTION_OK_DL_OVERLAY_LIGHTGUN_SETTINGS_LIST },
    { MENU_ENUM_LABEL_OVERLAY_MOUSE_SETTINGS, ACTION_OK_DL_OVERLAY_MOUSE_SETTINGS_LIST },
+   { MENU_ENUM_LABEL_OVERLAY_TOUCH_LAYOUT, ACTION_OK_DL_OVERLAY_TOUCH_LAYOUT_LIST },
+   { MENU_ENUM_LABEL_OVERLAY_LAYOUT_CONTROLS, ACTION_OK_DL_OVERLAY_LAYOUT_CONTROLS_LIST },
+   { MENU_ENUM_LABEL_OVERLAY_LAYOUT_ADD, ACTION_OK_DL_OVERLAY_LAYOUT_ADD_LIST },
    { MENU_ENUM_LABEL_OSK_OVERLAY_SETTINGS, ACTION_OK_DL_OSK_OVERLAY_SETTINGS_LIST },
    { MENU_ENUM_LABEL_MENU_SETTINGS, ACTION_OK_DL_MENU_SETTINGS_LIST },
    { MENU_ENUM_LABEL_MENU_VIEWS_SETTINGS, ACTION_OK_DL_MENU_VIEWS_SETTINGS_LIST },
@@ -6424,6 +6436,30 @@ static int action_ok_overlay_reset_layout(const char *path,
    input_overlay_layout_reset();
    return 0;
 }
+
+static int action_ok_overlay_layout_scope(const char *path,
+      const char *label, unsigned type, size_t idx, size_t entry_idx)
+{
+   input_overlay_layout_scope_step(1);
+   return 0;
+}
+
+static int action_ok_overlay_layout_control(const char *path,
+      const char *label, unsigned type, size_t idx, size_t entry_idx)
+{
+   return input_overlay_layout_control_toggle((unsigned)entry_idx) ? 0 : -1;
+}
+
+/* Added in the middle of the screen, then dragged into place */
+static int action_ok_overlay_layout_add_item(const char *path,
+      const char *label, unsigned type, size_t idx, size_t entry_idx)
+{
+   if (!input_overlay_layout_add((unsigned)entry_idx))
+      return -1;
+   menu_state_get_ptr()->flags |= MENU_ST_FLAG_ENTRIES_NEED_REFRESH;
+   input_overlay_edit_begin();
+   return generic_action_ok_command(CMD_EVENT_RESUME);
+}
 #endif
 
 static int action_ok_set_core_association(const char *path,
@@ -9809,6 +9845,9 @@ static int menu_cbs_init_bind_ok_compare_label(menu_file_list_cbs_t *cbs,
 #ifdef HAVE_OVERLAY
          {MENU_ENUM_LABEL_OVERLAY_EDIT_LAYOUT,                 action_ok_overlay_edit_layout},
          {MENU_ENUM_LABEL_OVERLAY_RESET_LAYOUT,                action_ok_overlay_reset_layout},
+         {MENU_ENUM_LABEL_OVERLAY_LAYOUT_SCOPE,                action_ok_overlay_layout_scope},
+         {MENU_ENUM_LABEL_OVERLAY_LAYOUT_CONTROL,              action_ok_overlay_layout_control},
+         {MENU_ENUM_LABEL_OVERLAY_LAYOUT_ADD_ITEM,             action_ok_overlay_layout_add_item},
 #endif
          {MENU_ENUM_LABEL_ADD_TO_FAVORITES_PLAYLIST,           action_ok_add_to_favorites_playlist},
          {MENU_ENUM_LABEL_ADD_ENTRY_TO_PLAYLIST,               action_ok_add_entry_to_playlist},

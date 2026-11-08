@@ -388,6 +388,15 @@ static int action_right_shader_filter_default(unsigned type, const char *label,
          wraparound);
 }
 
+#ifdef HAVE_OVERLAY
+static int action_right_overlay_layout_scope(unsigned type, const char *label,
+      bool wraparound)
+{
+   input_overlay_layout_scope_step(1);
+   return 0;
+}
+#endif
+
 static int action_right_shader_num_passes(unsigned type, const char *label,
       bool wraparound)
 {
@@ -1441,6 +1450,11 @@ static int menu_cbs_init_bind_right_compare_label(menu_file_list_cbs_t *cbs,
             case MENU_ENUM_LABEL_PLAYLIST_MANAGER_LABEL_DISPLAY_MODE:
                BIND_ACTION_RIGHT(cbs, playlist_label_display_mode_right);
                break;
+#ifdef HAVE_OVERLAY
+            case MENU_ENUM_LABEL_OVERLAY_LAYOUT_SCOPE:
+               BIND_ACTION_RIGHT(cbs, action_right_overlay_layout_scope);
+               break;
+#endif
             case MENU_ENUM_LABEL_PLAYLIST_MANAGER_RIGHT_THUMBNAIL_MODE:
                BIND_ACTION_RIGHT(cbs, playlist_right_thumbnail_mode_right);
                break;

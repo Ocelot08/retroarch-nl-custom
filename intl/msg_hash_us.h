@@ -15186,7 +15186,39 @@ MSG_HASH(
    )
 MSG_HASH(
    MENU_ENUM_SUBLABEL_OVERLAY_EDIT_LAYOUT,
-   "Pause the content and drag the overlay's controls to new positions. Tapping a page button turns the page. Press Back when done."
+   "Drag the overlay's controls to new positions, with or without content running. Tapping a page button turns the page. Press Back when done."
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_VALUE_OVERLAY_TOUCH_LAYOUT,
+   "Touch Layout"
+   )
+MSG_HASH(
+   MENU_ENUM_SUBLABEL_OVERLAY_TOUCH_LAYOUT,
+   "Move, remove and add the overlay's controls, for all content, a core or one piece of content."
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_VALUE_OVERLAY_LAYOUT_SCOPE,
+   "Layout For"
+   )
+MSG_HASH(
+   MENU_ENUM_SUBLABEL_OVERLAY_LAYOUT_SCOPE,
+   "Which layout changes are saved to. A content's layout applies over its core's, which applies over the one for all content."
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_VALUE_OVERLAY_LAYOUT_CONTROLS,
+   "Controls"
+   )
+MSG_HASH(
+   MENU_ENUM_SUBLABEL_OVERLAY_LAYOUT_CONTROLS,
+   "Remove controls from the overlay page shown, or bring removed ones back."
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_VALUE_OVERLAY_LAYOUT_ADD,
+   "Add Control"
+   )
+MSG_HASH(
+   MENU_ENUM_SUBLABEL_OVERLAY_LAYOUT_ADD,
+   "Add a control from the overlay's other pages. It appears in the middle of the screen, ready to be dragged into place."
    )
 MSG_HASH(
    MENU_ENUM_LABEL_VALUE_OVERLAY_RESET_LAYOUT,
@@ -15194,7 +15226,7 @@ MSG_HASH(
    )
 MSG_HASH(
    MENU_ENUM_SUBLABEL_OVERLAY_RESET_LAYOUT,
-   "Discard the edited layout of the current overlay and restore its original positions."
+   "Discard the layout chosen in 'Layout For', going back to the layout under it."
    )
 MSG_HASH(
    MENU_ENUM_LABEL_VALUE_OVERLAY,
@@ -32518,6 +32550,42 @@ MSG_HASH(
 MSG_HASH(
    MSG_OVERLAY_LAYOUT_RESET,
    "Overlay layout reset."
+   )
+MSG_HASH(
+   MSG_OVERLAY_LAYOUT_SCOPE_ALL,
+   "All Content"
+   )
+MSG_HASH(
+   MSG_OVERLAY_LAYOUT_SCOPE_CORE,
+   "Core: %s"
+   )
+MSG_HASH(
+   MSG_OVERLAY_LAYOUT_SCOPE_CONTENT,
+   "Content: %s"
+   )
+MSG_HASH(
+   MSG_OVERLAY_CONTROL_DPAD,
+   "D-Pad"
+   )
+MSG_HASH(
+   MSG_OVERLAY_CONTROL_FACE_BUTTONS,
+   "Face Buttons"
+   )
+MSG_HASH(
+   MSG_OVERLAY_CONTROL_LEFT_STICK,
+   "Left Analog Stick"
+   )
+MSG_HASH(
+   MSG_OVERLAY_CONTROL_RIGHT_STICK,
+   "Right Analog Stick"
+   )
+MSG_HASH(
+   MSG_OVERLAY_CONTROL_KEY,
+   "Keyboard Key"
+   )
+MSG_HASH(
+   MSG_OVERLAY_CONTROL_PAGE,
+   "Page: %s"
    )
 MSG_HASH(
    MSG_FAILED_TO_LOAD_STATE,
