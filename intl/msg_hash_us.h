@@ -15210,15 +15210,7 @@ MSG_HASH(
    )
 MSG_HASH(
    MENU_ENUM_SUBLABEL_OVERLAY_LAYOUT_CONTROLS,
-   "Remove controls from the overlay page shown, or bring removed ones back."
-   )
-MSG_HASH(
-   MENU_ENUM_LABEL_VALUE_OVERLAY_LAYOUT_ADD,
-   "Add Control"
-   )
-MSG_HASH(
-   MENU_ENUM_SUBLABEL_OVERLAY_LAYOUT_ADD,
-   "Add a control from the overlay's other pages. It appears in the middle of the screen, ready to be dragged into place."
+   "Show or hide the controls of the overlay page shown. Below them are those of its other pages, then each D-pad and face button on its own: switching one on adds it, in the middle of the screen."
    )
 MSG_HASH(
    MENU_ENUM_LABEL_VALUE_OVERLAY_LAYOUT_PROFILE_SAVE,

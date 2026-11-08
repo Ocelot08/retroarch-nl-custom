@@ -2168,18 +2168,15 @@ enum overlay_layout_scope input_overlay_layout_scope(void);
 void input_overlay_layout_scope_step(int dir);
 size_t input_overlay_layout_scope_name(char *s, size_t len);
 
-/* The controls of the overlay page shown, each one the user layout can
- * remove or bring back. */
+/* The controls of the overlay page shown, which the user layout can
+ * hide or show again, then those it can add: its other pages' of the
+ * same shape, then each button of its D-pad and face buttons on its
+ * own. Shown or not, and switched, alike; switching one on that is
+ * not there yet adds it, in the middle of the screen. */
 unsigned input_overlay_layout_control_count(void);
 bool input_overlay_layout_control_get(unsigned i, char *s, size_t len,
       bool *shown);
 bool input_overlay_layout_control_toggle(unsigned i);
-
-/* Controls the overlay has on its other pages of the same shape, which
- * the page shown has not: input_overlay_layout_add() puts one on it. */
-unsigned input_overlay_layout_addable_count(void);
-bool input_overlay_layout_addable_name(unsigned i, char *s, size_t len);
-bool input_overlay_layout_add(unsigned i);
 
 /* Forgets the layout of the scope chosen and reloads the overlay. */
 void input_overlay_layout_reset(void);

@@ -12838,8 +12838,6 @@ unsigned menu_displaylist_build_list(
                   MENU_ENUM_LABEL_VALUE_OVERLAY_EDIT_LAYOUT },
                { MENU_ENUM_LABEL_OVERLAY_LAYOUT_CONTROLS,
                   MENU_ENUM_LABEL_VALUE_OVERLAY_LAYOUT_CONTROLS },
-               { MENU_ENUM_LABEL_OVERLAY_LAYOUT_ADD,
-                  MENU_ENUM_LABEL_VALUE_OVERLAY_LAYOUT_ADD },
                { MENU_ENUM_LABEL_OVERLAY_LAYOUT_PROFILE_SAVE,
                   MENU_ENUM_LABEL_VALUE_OVERLAY_LAYOUT_PROFILE_SAVE },
                { MENU_ENUM_LABEL_OVERLAY_LAYOUT_PROFILE_LOAD,
@@ -12870,20 +12868,6 @@ unsigned menu_displaylist_build_list(
                      && menu_entries_append(list, name,
                         MENU_ENUM_LABEL_OVERLAY_LAYOUT_CONTROL_STR,
                         MENU_ENUM_LABEL_OVERLAY_LAYOUT_CONTROL,
-                        MENU_SETTING_ACTION, 0, i, NULL))
-                  count++;
-         }
-         break;
-      case DISPLAYLIST_OVERLAY_LAYOUT_ADD_LIST:
-         {
-            char name[128];
-            unsigned n = input_overlay_layout_addable_count();
-
-            for (i = 0; i < n; i++)
-               if (     input_overlay_layout_addable_name(i, name, sizeof(name))
-                     && menu_entries_append(list, name,
-                        MENU_ENUM_LABEL_OVERLAY_LAYOUT_ADD_ITEM_STR,
-                        MENU_ENUM_LABEL_OVERLAY_LAYOUT_ADD_ITEM,
                         MENU_SETTING_ACTION, 0, i, NULL))
                   count++;
          }
@@ -16974,7 +16958,6 @@ static bool menu_displaylist_ctl_internal(
          case DISPLAYLIST_OVERLAY_MOUSE_SETTINGS_LIST:
          case DISPLAYLIST_OVERLAY_TOUCH_LAYOUT_LIST:
          case DISPLAYLIST_OVERLAY_LAYOUT_CONTROLS_LIST:
-         case DISPLAYLIST_OVERLAY_LAYOUT_ADD_LIST:
          case DISPLAYLIST_OVERLAY_LAYOUT_PROFILE_LOAD_LIST:
          case DISPLAYLIST_OVERLAY_LAYOUT_PROFILE_DELETE_LIST:
 #endif

@@ -7422,6 +7422,56 @@ static void input_overlay_edit_drop(input_overlay_t *ol)
    input_overlay_edit.flags &= ~(OVERLAY_EDIT_DRAGGING | OVERLAY_EDIT_MOVED);
 }
 
+static void input_overlay_layout_reload(const input_overlay_t *ol);
+/* The page shown when the layout changed, to show again once it has
+ * loaded */
+static int input_overlay_layout_reload_page = -1;
+
+/* The layout file of the scope edited as it was before the editor
+ * first added a control to it, for Cancel to put back */
+static struct
+{
+   void *buf;
+   int64_t len;
+   char path[PATH_MAX_LENGTH];
+   bool taken;
+   bool existed;
+} input_overlay_edit_undo;
+
+static void input_overlay_edit_undo_drop(void)
+{
+   free(input_overlay_edit_undo.buf);
+   memset(&input_overlay_edit_undo, 0, sizeof(input_overlay_edit_undo));
+}
+
+#ifdef HAVE_GFX_WIDGETS
+static void input_overlay_edit_undo_take(const input_overlay_t *ol)
+{
+   if (input_overlay_edit_undo.taken)
+      return;
+   input_overlay_layout_path(input_overlay_edit_undo.path,
+         sizeof(input_overlay_edit_undo.path), ol->path,
+         input_overlay_layout_scope());
+   input_overlay_edit_undo.taken   = true;
+   input_overlay_edit_undo.existed =
+         *input_overlay_edit_undo.path
+      && path_is_valid(input_overlay_edit_undo.path)
+      && filestream_read_file(input_overlay_edit_undo.path,
+            &input_overlay_edit_undo.buf, &input_overlay_edit_undo.len);
+}
+
+static void input_overlay_edit_undo_put_back(void)
+{
+   if (!input_overlay_edit_undo.taken || !*input_overlay_edit_undo.path)
+      return;
+   if (input_overlay_edit_undo.existed)
+      filestream_write_file(input_overlay_edit_undo.path,
+            input_overlay_edit_undo.buf, input_overlay_edit_undo.len);
+   else if (path_is_valid(input_overlay_edit_undo.path))
+      filestream_delete(input_overlay_edit_undo.path);
+}
+#endif
+
 static void input_overlay_edit_finish(input_overlay_t *ol, bool save)
 {
    uint16_t flags = input_overlay_edit.flags;
@@ -7432,6 +7482,7 @@ static void input_overlay_edit_finish(input_overlay_t *ol, bool save)
    input_overlay_edit_drop(ol);
    free(input_overlay_edit.items);
    memset(&input_overlay_edit, 0, sizeof(input_overlay_edit));
+   input_overlay_edit_undo_drop();
 #ifdef HAVE_GFX_WIDGETS
    gfx_widgets_set_overlay_bar(NULL);
 #endif
@@ -7644,8 +7695,32 @@ static void input_overlay_edit_return(void)
 }
 
 static void input_overlay_deinit(void);
-static uint16_t input_overlay_layout_nth_control(input_overlay_t *ol,
-      unsigned i);
+
+/* A control that can be added: control @group of page @page, or only
+ * its desc @desc when that is not negative */
+typedef struct
+{
+   size_t page;
+   int desc;
+   uint16_t group;
+} input_overlay_addable_t;
+
+/* A row of the list of controls of the page shown: control @have of
+ * it, or when that is 0 one to add, as in input_overlay_addable_t */
+typedef struct
+{
+   uint16_t page;
+   int16_t desc;
+   uint16_t group;
+   uint16_t have;
+} input_overlay_layout_entry_t;
+
+static bool input_overlay_layout_entry(input_overlay_t *ol, unsigned i,
+      input_overlay_layout_entry_t *out);
+static bool input_overlay_layout_add_entry(input_overlay_t *ol,
+      const input_overlay_layout_entry_t *e);
+static bool input_overlay_layout_add_control(input_overlay_t *ol,
+      const input_overlay_addable_t *add_in);
 
 #ifdef HAVE_GFX_WIDGETS
 /* Out of the editor into the menu: saved, or back to what was saved */
@@ -7653,12 +7728,11 @@ static void input_overlay_edit_leave(input_overlay_t *ol, bool save)
 {
    bool changed = (input_overlay_edit.flags & OVERLAY_EDIT_CHANGED) != 0;
 
+   if (!save)
+      input_overlay_edit_undo_put_back();
    input_overlay_edit_finish(ol, save);
    if (!save && changed)
-   {
-      input_overlay_deinit();
-      input_overlay_init();
-   }
+      input_overlay_layout_reload(ol);
 #ifdef HAVE_MENU
    if (!(menu_state_get_ptr()->flags & MENU_ST_FLAG_ALIVE))
       retroarch_menu_running();
@@ -7805,7 +7879,35 @@ static int input_overlay_edit_bar_hit(float px, float py)
    return -1;
 }
 
-/* A tap on @item of the bar. True when it ended the editing. */
+/* Adds @e while editing: what was laid out so far is written first,
+ * the overlay loads again with it and the editor goes on over it. The
+ * layout as it was is kept for Cancel. True, as @ol is gone. */
+static bool input_overlay_edit_add(input_overlay_t *ol,
+      const input_overlay_layout_entry_t *e)
+{
+   uint16_t flags = input_overlay_edit.flags;
+   unsigned first = input_overlay_edit.panel_first;
+
+   input_overlay_edit_undo_take(ol);
+   input_overlay_layout_save(ol);
+   if (!input_overlay_layout_add_entry(ol, e))
+      return false;
+
+   /* Not editing while it reloads, so that nothing finishes */
+   input_overlay_edit_drop(ol);
+   free(input_overlay_edit.items);
+   memset(&input_overlay_edit, 0, sizeof(input_overlay_edit));
+   input_overlay_layout_reload(ol);
+
+   input_overlay_edit.flags       = OVERLAY_EDIT_ACTIVE | OVERLAY_EDIT_CHANGED
+         | (flags & (OVERLAY_EDIT_PAUSED | OVERLAY_EDIT_PANEL));
+   input_overlay_edit.panel_first = first;
+   input_overlay_edit.bar_item    = -1;
+   return true;
+}
+
+/* A tap on @item of the bar. True when it ended the editing, or @ol is
+ * no more. */
 static bool input_overlay_edit_bar_tap(input_overlay_t *ol, int item)
 {
    switch (item)
@@ -7843,14 +7945,19 @@ static bool input_overlay_edit_bar_tap(input_overlay_t *ol, int item)
          if (item >= GFX_OVERLAY_BAR_ROW && item < GFX_OVERLAY_BAR_ITEMS)
          {
             bool shown;
-            unsigned i     = input_overlay_edit.panel_first
+            input_overlay_layout_entry_t e;
+            unsigned i = input_overlay_edit.panel_first
                   + (unsigned)(item - GFX_OVERLAY_BAR_ROW);
-            uint16_t group = input_overlay_layout_nth_control(ol, i);
-            if (group && input_overlay_layout_control_get(i, NULL, 0, &shown))
+            if (     !input_overlay_layout_entry(ol, i, &e)
+                  || !input_overlay_layout_control_get(i, NULL, 0, &shown))
+               break;
+            if (e.have)
             {
-               input_overlay_layout_set_hidden(ol, group, shown);
+               input_overlay_layout_set_hidden(ol, e.have, shown);
                input_overlay_edit.flags |= OVERLAY_EDIT_CHANGED;
             }
+            else
+               return input_overlay_edit_add(ol, &e);
          }
          break;
    }
@@ -8052,6 +8159,7 @@ void input_overlay_edit_begin(void)
       return;
 
    memset(&input_overlay_edit, 0, sizeof(input_overlay_edit));
+   input_overlay_edit_undo_drop();
    /* Held: a finger still down from the menu grabs nothing, a Back
     * still down from it finishes nothing */
    input_overlay_edit.flags = OVERLAY_EDIT_ACTIVE | OVERLAY_EDIT_HELD
@@ -8191,69 +8299,12 @@ static size_t input_overlay_layout_name(const struct overlay *page,
    return input_overlay_layout_desc_name(named, s, len);
 }
 
-unsigned input_overlay_layout_control_count(void)
-{
-   unsigned n          = 0;
-   input_overlay_t *ol = input_overlay_layout_target();
-   if (ol)
-      while (input_overlay_layout_nth_control(ol, n))
-         n++;
-   return n;
-}
-
-bool input_overlay_layout_control_get(unsigned i, char *s, size_t len,
-      bool *shown)
-{
-   size_t d;
-   const struct overlay *page;
-   input_overlay_t *ol = input_overlay_layout_target();
-   uint16_t group      = ol ? input_overlay_layout_nth_control(ol, i) : 0;
-
-   if (!group)
-      return false;
-   page   = ol->active;
-   *shown = false;
-   for (d = 0; d < page->size; d++)
-      if (     page->descs[d].layout_group == group
-            && OVERLAY_HAS_IMAGE(&page->descs[d].image)
-            && !(page->descs[d].flags & OVERLAY_DESC_LAYOUT_HIDDEN))
-         *shown = true;
-   if (s)
-      input_overlay_layout_name(page, group, s, len);
-   return true;
-}
-
-bool input_overlay_layout_control_toggle(unsigned i)
-{
-   bool shown;
-   input_overlay_t *ol = input_overlay_layout_target();
-   uint16_t group      = ol ? input_overlay_layout_nth_control(ol, i) : 0;
-
-   if (!group || !input_overlay_layout_control_get(i, NULL, 0, &shown))
-      return false;
-   input_overlay_layout_set_hidden(ol, group, shown);
-   if (ol->iface && (ol->flags & INPUT_OVERLAY_ENABLE))
-      command_event(CMD_EVENT_OVERLAY_SET_ALPHA_MOD, NULL);
-   return input_overlay_layout_save(ol);
-}
-
-/* A control that can be added: control @group of page @page, or only
- * its desc @desc when that is not negative */
-typedef struct
-{
-   size_t page;
-   int desc;
-   uint16_t group;
-} input_overlay_addable_t;
-
-/* The @i-th control that can be added to the active page: first those
- * on pages of its shape that it has not, then each drawn button of its
- * own controls of more than one (a face button or a D-pad arrow), to
- * stand alone, that does not stand alone yet */
-static bool input_overlay_layout_nth_addable(input_overlay_t *ol,
+/* The @i-th control the active page lacks of those on its other pages
+ * of the same shape */
+static bool input_overlay_layout_nth_other(input_overlay_t *ol,
       unsigned i, input_overlay_addable_t *out)
 {
-   size_t p, d, k;
+   size_t p;
    size_t index           = (size_t)(ol->active - ol->overlays);
    struct overlay *active = &ol->overlays[index];
 
@@ -8302,67 +8353,220 @@ static bool input_overlay_layout_nth_addable(input_overlay_t *ol,
          }
       }
    }
-
-   input_overlay_layout_group(active);
-   for (d = 0; d < active->size; d++)
-   {
-      unsigned drawn                  = 0;
-      bool alone                      = false;
-      const struct overlay_desc *desc = &active->descs[d];
-
-      if (     desc->type != OVERLAY_TYPE_BUTTONS
-            || desc->layout_added
-            || !OVERLAY_HAS_IMAGE(&desc->image))
-         continue;
-      for (k = 0; k < active->size; k++)
-      {
-         const struct overlay_desc *other = &active->descs[k];
-         if (     other->layout_group == desc->layout_group
-               && OVERLAY_HAS_IMAGE(&other->image))
-            drawn++;
-         if (     other->layout_added
-               && other->type == desc->type
-               && !memcmp(&other->button_mask, &desc->button_mask,
-                  sizeof(desc->button_mask)))
-            alone = true;
-      }
-      if (drawn < 2 || alone)
-         continue;
-      if (i-- == 0)
-      {
-         out->page  = index;
-         out->group = desc->layout_group;
-         out->desc  = (int)d;
-         return true;
-      }
-   }
    return false;
 }
 
-unsigned input_overlay_layout_addable_count(void)
+static bool input_overlay_layout_same_buttons(const struct overlay_desc *a,
+      const struct overlay_desc *b)
 {
-   input_overlay_addable_t add;
-   unsigned n          = 0;
-   input_overlay_t *ol = input_overlay_layout_target();
-   if (ol)
-      while (input_overlay_layout_nth_addable(ol, n, &add))
-         n++;
-   return n;
+   return   a->type == b->type
+         && !memcmp(&a->button_mask, &b->button_mask, sizeof(a->button_mask));
 }
 
-bool input_overlay_layout_addable_name(unsigned i, char *s, size_t len)
+/* Whether @desc is a drawn button of a control of more than one, as a
+ * D-pad's arrows and the face buttons are, and the first of its
+ * buttons there */
+static bool input_overlay_layout_in_cluster(const struct overlay *page,
+      size_t d)
+{
+   size_t k;
+   unsigned drawn                  = 0;
+   const struct overlay_desc *desc = &page->descs[d];
+
+   if (     desc->type != OVERLAY_TYPE_BUTTONS
+         || desc->layout_added
+         || !OVERLAY_HAS_IMAGE(&desc->image))
+      return false;
+   for (k = 0; k < page->size; k++)
+   {
+      const struct overlay_desc *other = &page->descs[k];
+      if (     other->layout_group == desc->layout_group
+            && OVERLAY_HAS_IMAGE(&other->image))
+         drawn++;
+      if (     k < d
+            && !other->layout_added
+            && other->layout_group == desc->layout_group
+            && input_overlay_layout_same_buttons(other, desc))
+         return false;
+   }
+   return drawn >= 2;
+}
+
+/* The control standing alone that has the buttons of @desc, or 0 */
+static uint16_t input_overlay_layout_alone(const struct overlay *page,
+      const struct overlay_desc *desc)
+{
+   size_t k;
+   for (k = 0; k < page->size; k++)
+   {
+      const struct overlay_desc *other = &page->descs[k];
+      if (     other->layout_added
+            && OVERLAY_HAS_IMAGE(&other->image)
+            && input_overlay_layout_same_buttons(other, desc))
+         return other->layout_group;
+   }
+   return 0;
+}
+
+#define OVERLAY_LAYOUT_ENTRIES 64
+
+/* The list of controls of the page shown, made again only when the
+ * overlay or its page changes */
+static struct
+{
+   const struct overlay *page;
+   uint32_t loads;
+   unsigned count;
+   input_overlay_layout_entry_t entries[OVERLAY_LAYOUT_ENTRIES];
+} input_overlay_layout_list;
+
+/* Overlays loaded so far, to tell one from an earlier at the same
+ * address */
+static uint32_t input_overlay_loads;
+
+/* The controls of the page shown, then those of its other pages it
+ * lacks, then each button of its D-pad and face buttons on its own */
+static void input_overlay_layout_list_make(input_overlay_t *ol)
+{
+   unsigned i;
+   size_t d;
+   uint16_t group;
+   input_overlay_addable_t add;
+   unsigned n           = 0;
+   struct overlay *page = &ol->overlays[ol->active - ol->overlays];
+   input_overlay_layout_entry_t *out = input_overlay_layout_list.entries;
+
+   input_overlay_layout_list.page  = ol->active;
+   input_overlay_layout_list.loads = input_overlay_loads;
+
+   for (i = 0; n < OVERLAY_LAYOUT_ENTRIES
+         && (group = input_overlay_layout_nth_control(ol, i)); i++)
+   {
+      bool single = false;
+      for (d = 0; d < page->size && !single; d++)
+         single = input_overlay_layout_in_cluster(page, d)
+            && input_overlay_layout_alone(page, &page->descs[d]) == group;
+      if (single)
+         continue;
+      out[n].have  = group;
+      out[n].group = group;
+      out[n].page  = (uint16_t)(ol->active - ol->overlays);
+      out[n].desc  = -1;
+      n++;
+   }
+
+   for (i = 0; n < OVERLAY_LAYOUT_ENTRIES
+         && input_overlay_layout_nth_other(ol, i, &add); i++)
+   {
+      out[n].have  = 0;
+      out[n].group = add.group;
+      out[n].page  = (uint16_t)add.page;
+      out[n].desc  = -1;
+      n++;
+   }
+
+   for (d = 0; n < OVERLAY_LAYOUT_ENTRIES && d < page->size; d++)
+   {
+      if (!input_overlay_layout_in_cluster(page, d))
+         continue;
+      out[n].have  = input_overlay_layout_alone(page, &page->descs[d]);
+      out[n].group = page->descs[d].layout_group;
+      out[n].page  = (uint16_t)(ol->active - ol->overlays);
+      out[n].desc  = (int16_t)d;
+      n++;
+   }
+
+   input_overlay_layout_list.count = n;
+}
+
+static unsigned input_overlay_layout_list_count(input_overlay_t *ol)
+{
+   if (     input_overlay_layout_list.page  != ol->active
+         || input_overlay_layout_list.loads != input_overlay_loads)
+      input_overlay_layout_list_make(ol);
+   return input_overlay_layout_list.count;
+}
+
+static bool input_overlay_layout_entry(input_overlay_t *ol, unsigned i,
+      input_overlay_layout_entry_t *out)
+{
+   if (i >= input_overlay_layout_list_count(ol))
+      return false;
+   *out = input_overlay_layout_list.entries[i];
+   return true;
+}
+
+static bool input_overlay_layout_add_entry(input_overlay_t *ol,
+      const input_overlay_layout_entry_t *e)
 {
    input_overlay_addable_t add;
+   add.page  = e->page;
+   add.desc  = e->desc;
+   add.group = e->group;
+   return input_overlay_layout_add_control(ol, &add);
+}
+
+unsigned input_overlay_layout_control_count(void)
+{
+   input_overlay_t *ol = input_overlay_layout_target();
+   return ol ? input_overlay_layout_list_count(ol) : 0;
+}
+
+bool input_overlay_layout_control_get(unsigned i, char *s, size_t len,
+      bool *shown)
+{
+   size_t d;
+   input_overlay_layout_entry_t e;
+   const struct overlay *page;
    input_overlay_t *ol = input_overlay_layout_target();
 
-   if (!ol || !input_overlay_layout_nth_addable(ol, i, &add))
+   if (!ol || !input_overlay_layout_entry(ol, i, &e))
       return false;
-   if (add.desc >= 0)
-      input_overlay_layout_desc_name(
-            &ol->overlays[add.page].descs[add.desc], s, len);
-   else
-      input_overlay_layout_name(&ol->overlays[add.page], add.group, s, len);
+   *shown = false;
+   page   = ol->active;
+   if (e.have)
+      for (d = 0; d < page->size; d++)
+         if (     page->descs[d].layout_group == e.have
+               && OVERLAY_HAS_IMAGE(&page->descs[d].image)
+               && !(page->descs[d].flags & OVERLAY_DESC_LAYOUT_HIDDEN))
+            *shown = true;
+   if (s)
+   {
+      if (e.have)
+         input_overlay_layout_name(page, e.have, s, len);
+      else if (e.desc >= 0)
+         input_overlay_layout_desc_name(
+               &ol->overlays[e.page].descs[e.desc], s, len);
+      else
+         input_overlay_layout_name(&ol->overlays[e.page], e.group, s, len);
+   }
    return true;
+}
+
+/* Shows or hides a control of the page shown, saved at once, or adds
+ * one to it */
+bool input_overlay_layout_control_toggle(unsigned i)
+{
+   bool shown;
+   input_overlay_layout_entry_t e;
+   input_overlay_t *ol = input_overlay_layout_target();
+
+   if (     !ol
+         || !input_overlay_layout_entry(ol, i, &e)
+         || !input_overlay_layout_control_get(i, NULL, 0, &shown))
+      return false;
+   if (!e.have)
+   {
+      input_overlay_edit_finish(input_driver_st.overlay_ptr, true);
+      if (!input_overlay_layout_add_entry(ol, &e))
+         return false;
+      input_overlay_layout_reload(ol);
+      return true;
+   }
+   input_overlay_layout_set_hidden(ol, e.have, shown);
+   if (ol->iface && (ol->flags & INPUT_OVERLAY_ENABLE))
+      command_event(CMD_EVENT_OVERLAY_SET_ALPHA_MOD, NULL);
+   return input_overlay_layout_save(ol);
 }
 
 /*
@@ -12443,6 +12647,7 @@ static void input_overlay_loaded(retro_task_t *task,
    ol->active      = data->active;
    ol->path        = data->overlay_path;
    ol->layout_key  = input_overlay_layout_key();
+   input_overlay_loads++;
    ol->num_images  = data->image_list->size;
    ol->next_index  = (unsigned)((ol->index + 1) % ol->size);
    ol->flags      |= INPUT_OVERLAY_ALIVE;
@@ -12516,6 +12721,25 @@ static void input_overlay_loaded(retro_task_t *task,
 
    /* Trigger viewport recalculation - overlay may have viewport override */
    command_event(CMD_EVENT_VIDEO_SET_ASPECT_RATIO, NULL);
+
+   /* Back on the page it was on before its layout changed */
+   if (     !(ol->flags & INPUT_OVERLAY_IS_OSK)
+         && input_overlay_layout_reload_page >= 0)
+   {
+      unsigned page = (unsigned)input_overlay_layout_reload_page;
+      input_overlay_layout_reload_page = -1;
+      if (     input_st->overlay_ptr == ol
+            && page < ol->size
+            && ol->active != &ol->overlays[page])
+      {
+         bool rotate    = false;
+         ol->next_index = page;
+         command_event(CMD_EVENT_OVERLAY_NEXT, &rotate);
+      }
+#ifdef HAVE_MENU
+      menu_state_get_ptr()->flags |= MENU_ST_FLAG_ENTRIES_NEED_REFRESH;
+#endif
+   }
 
 #ifdef HAVE_MENU
    /* Update menu entries if this is the main overlay */
@@ -12680,6 +12904,16 @@ void input_overlay_init(void)
          input_overlay_loaded, path_overlay, want_osk, NULL);
 }
 
+/* Loads the overlay again for a layout changed under it, on the page
+ * it was on. The menu's lists of it are made again then. */
+static void input_overlay_layout_reload(const input_overlay_t *ol)
+{
+   input_overlay_layout_reload_page = (ol && ol->active)
+      ? (int)(ol->active - ol->overlays) : -1;
+   input_overlay_deinit();
+   input_overlay_init();
+}
+
 void input_overlay_layout_reset(void)
 {
    char path[PATH_MAX_LENGTH];
@@ -12693,8 +12927,7 @@ void input_overlay_layout_reset(void)
       filestream_delete(path);
 
    /* Loaded again, with what the other layouts and the pack say */
-   input_overlay_deinit();
-   input_overlay_init();
+   input_overlay_layout_reload(input_overlay_layout_target());
 
    runloop_msg_queue_push(_msg, strlen(_msg), 1, 120, true, NULL,
          MESSAGE_QUEUE_ICON_DEFAULT, MESSAGE_QUEUE_CATEGORY_INFO);
@@ -12826,8 +13059,7 @@ bool input_overlay_layout_profile_load(const char *name)
             path, layout);
    free(buf);
 
-   input_overlay_deinit();
-   input_overlay_init();
+   input_overlay_layout_reload(ol);
    return ret;
 }
 
@@ -12884,12 +13116,13 @@ static config_file_t *input_overlay_layout_open(const char *overlay_path)
    return conf;
 }
 
-/* Copies the @i-th addable control (input_overlay_layout_addable_name)
- * onto the active page, in the middle of the screen, as descs the
- * layout of the scope chosen adds, and loads the overlay again. */
-bool input_overlay_layout_add(unsigned i)
+/* Copies control @add onto the active page, in the middle of the
+ * screen, as descs the layout of the scope chosen adds. The overlay
+ * has them once loaded again. */
+static bool input_overlay_layout_add_control(input_overlay_t *ol,
+      const input_overlay_addable_t *add_in)
 {
-   input_overlay_addable_t add;
+   input_overlay_addable_t add = *add_in;
    size_t d, src;
    uint16_t group, added = 0;
    char key[64];
@@ -12905,11 +13138,7 @@ bool input_overlay_layout_add(unsigned i)
    bool ret                = false;
    config_file_t *merged   = NULL;
    config_file_t *layout   = NULL;
-   input_overlay_t *ol     = input_overlay_layout_target();
 
-   if (     !ol
-         || !input_overlay_layout_nth_addable(ol, i, &add))
-      return false;
    src   = add.page;
    group = add.group;
 
@@ -13000,13 +13229,6 @@ bool input_overlay_layout_add(unsigned i)
    ret = config_file_write(layout, path, true);
    config_file_free(layout);
    config_file_free(merged);
-
-   if (ret)
-   {
-      input_overlay_edit_finish(input_driver_st.overlay_ptr, true);
-      input_overlay_deinit();
-      input_overlay_init();
-   }
    return ret;
 }
 #endif

@@ -430,8 +430,6 @@ static enum msg_hash_enums action_ok_dl_to_enum(unsigned lbl)
          return MENU_ENUM_LABEL_DEFERRED_OVERLAY_TOUCH_LAYOUT_LIST;
       case ACTION_OK_DL_OVERLAY_LAYOUT_CONTROLS_LIST:
          return MENU_ENUM_LABEL_DEFERRED_OVERLAY_LAYOUT_CONTROLS_LIST;
-      case ACTION_OK_DL_OVERLAY_LAYOUT_ADD_LIST:
-         return MENU_ENUM_LABEL_DEFERRED_OVERLAY_LAYOUT_ADD_LIST;
       case ACTION_OK_DL_OVERLAY_LAYOUT_PROFILE_LOAD_LIST:
          return MENU_ENUM_LABEL_DEFERRED_OVERLAY_LAYOUT_PROFILE_LOAD_LIST;
       case ACTION_OK_DL_OVERLAY_LAYOUT_PROFILE_DELETE_LIST:
@@ -1844,7 +1842,6 @@ int generic_action_ok_displaylist_push(
       case ACTION_OK_DL_OVERLAY_MOUSE_SETTINGS_LIST:
       case ACTION_OK_DL_OVERLAY_TOUCH_LAYOUT_LIST:
       case ACTION_OK_DL_OVERLAY_LAYOUT_CONTROLS_LIST:
-      case ACTION_OK_DL_OVERLAY_LAYOUT_ADD_LIST:
       case ACTION_OK_DL_OVERLAY_LAYOUT_PROFILE_LOAD_LIST:
       case ACTION_OK_DL_OVERLAY_LAYOUT_PROFILE_DELETE_LIST:
       case ACTION_OK_DL_MENU_SETTINGS_LIST:
@@ -2061,7 +2058,6 @@ static const ok_dl_map_t ok_dl_map[] = {
    { MENU_ENUM_LABEL_OVERLAY_MOUSE_SETTINGS, ACTION_OK_DL_OVERLAY_MOUSE_SETTINGS_LIST },
    { MENU_ENUM_LABEL_OVERLAY_TOUCH_LAYOUT, ACTION_OK_DL_OVERLAY_TOUCH_LAYOUT_LIST },
    { MENU_ENUM_LABEL_OVERLAY_LAYOUT_CONTROLS, ACTION_OK_DL_OVERLAY_LAYOUT_CONTROLS_LIST },
-   { MENU_ENUM_LABEL_OVERLAY_LAYOUT_ADD, ACTION_OK_DL_OVERLAY_LAYOUT_ADD_LIST },
    { MENU_ENUM_LABEL_OVERLAY_LAYOUT_PROFILE_LOAD, ACTION_OK_DL_OVERLAY_LAYOUT_PROFILE_LOAD_LIST },
    { MENU_ENUM_LABEL_OVERLAY_LAYOUT_PROFILE_DELETE, ACTION_OK_DL_OVERLAY_LAYOUT_PROFILE_DELETE_LIST },
    { MENU_ENUM_LABEL_OSK_OVERLAY_SETTINGS, ACTION_OK_DL_OSK_OVERLAY_SETTINGS_LIST },
@@ -6458,17 +6454,6 @@ static int action_ok_overlay_layout_control(const char *path,
    return input_overlay_layout_control_toggle((unsigned)entry_idx) ? 0 : -1;
 }
 
-/* Added in the middle of the screen, then dragged into place */
-static int action_ok_overlay_layout_add_item(const char *path,
-      const char *label, unsigned type, size_t idx, size_t entry_idx)
-{
-   if (!input_overlay_layout_add((unsigned)entry_idx))
-      return -1;
-   menu_state_get_ptr()->flags |= MENU_ST_FLAG_ENTRIES_NEED_REFRESH;
-   input_overlay_edit_begin();
-   return generic_action_ok_command(CMD_EVENT_RESUME);
-}
-
 static void action_ok_overlay_layout_profile_msg(enum msg_hash_enums msg,
       const char *name, const char *scope)
 {
@@ -9918,7 +9903,6 @@ static int menu_cbs_init_bind_ok_compare_label(menu_file_list_cbs_t *cbs,
          {MENU_ENUM_LABEL_OVERLAY_RESET_LAYOUT,                action_ok_overlay_reset_layout},
          {MENU_ENUM_LABEL_OVERLAY_LAYOUT_SCOPE,                action_ok_overlay_layout_scope},
          {MENU_ENUM_LABEL_OVERLAY_LAYOUT_CONTROL,              action_ok_overlay_layout_control},
-         {MENU_ENUM_LABEL_OVERLAY_LAYOUT_ADD_ITEM,             action_ok_overlay_layout_add_item},
          {MENU_ENUM_LABEL_OVERLAY_LAYOUT_PROFILE_SAVE,         action_ok_overlay_layout_profile_save},
          {MENU_ENUM_LABEL_OVERLAY_LAYOUT_PROFILE_LOAD_ITEM,    action_ok_overlay_layout_profile_load_item},
          {MENU_ENUM_LABEL_OVERLAY_LAYOUT_PROFILE_DELETE_ITEM,  action_ok_overlay_layout_profile_delete_item},
