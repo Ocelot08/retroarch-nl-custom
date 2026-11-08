@@ -81,9 +81,12 @@ not lose them. Profiles are in
 - RGUI is the default menu, with the bundled **Highlighter** theme
   (**My Theme** is also included), without the menu border.
 - The touch controls stay shown over the menu.
-- Nintendo DS (and DSi) content gets this build's DS controls: the
-  layout of RetroArch's own DS overlay, drawn with the same buttons as
-  the rest, and laid out with the touch layout editor like them.
+- Every system uses the main touch controls (Neo RetroPad) and their
+  layouts, but for DS, DSi and 3DS, which get controls of their own:
+  RetroArch's 3DS overlay, and for DS the layout of RetroArch's DS
+  overlay drawn with the same buttons as the rest. Upstream picks a
+  system overlay for some 75 systems; this build only from
+  `overlays/gamepads/Named_Overlays_Custom`.
 - Menu assets, overlays, controller profiles and core info files are
   bundled in the APK.
 

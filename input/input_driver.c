@@ -12756,7 +12756,13 @@ static void input_overlay_loaded(retro_task_t *task,
 #endif
 }
 
+#ifdef ANDROID
+/* This build's own, for the few systems the main overlay does not fit;
+ * every other system has the main overlay and its touch layouts */
+#define SYSTEM_OVERLAY_DIR "gamepads/Named_Overlays_Custom"
+#else
 #define SYSTEM_OVERLAY_DIR "gamepads/Named_Overlays"
+#endif
 
 static const char *input_overlay_path(bool want_osk)
 {
