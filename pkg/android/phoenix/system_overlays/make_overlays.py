@@ -127,12 +127,16 @@ def extras(lines, page, y, xs, hot):
 
 
 def stick(lines, page, n, action, x, y, bg, knob, knob_image):
-    """A neo-retropad analog stick: its ring, and the knob that moves"""
+    """A neo-retropad analog stick: its ring, and the knob that moves,
+    labelled C when it is the C-stick (for when buttons are drawn)"""
     desc(lines, page, n, spec(action, x, y, "radial", *bg),
          NEO + "analog_bg.png", saturate_pct=1000000.0, reach_x=0)
+    extra = dict(movable="true", reach_x=1.3, reach_y=1.3,
+                 range_mod=3.0, range_mod_exclusive="true")
+    if knob_image.endswith("_c.png"):
+        extra["label"] = '"C"'
     desc(lines, page, n + 1, spec(action, x, y, "radial", *knob),
-         knob_image, movable="true", reach_x=1.3, reach_y=1.3,
-         range_mod=3.0, range_mod_exclusive="true")
+         knob_image, **extra)
     return n + 2
 
 
@@ -215,8 +219,8 @@ def ds(out):
         (0.12500, 0.77778), (0.85938, 0.75000), (
             ("start", 0.93750, 0.28889, "rect", L_BIG, NEO + "button_start.png", L_MIDDLE),
             ("select", 0.06250, 0.28889, "rect", L_BIG, NEO + "button_select.png", L_MIDDLE),
-            ("l", 0.03011, 0.50556, "rect", L_LR, OWN + "button_l.png", L_SHOULDER),
-            ("r", 0.96989, 0.50556, "rect", L_LR, OWN + "button_r.png", L_SHOULDER),
+            ("l", 0.03011, 0.50556, "rect", L_LR, OWN + "button_l.png", dict(L_SHOULDER, label='"L"')),
+            ("r", 0.96989, 0.50556, "rect", L_LR, OWN + "button_r.png", dict(L_SHOULDER, label='"R"')),
             ("menu_toggle", 0.93750, 0.08889, "radial", L_HOT, NEO + "hotkey_menu.png", HOT),
             ("rotate",),
             hide(0.80000, 0.08889),
@@ -225,8 +229,8 @@ def ds(out):
         (0.21606, 0.90440), (0.78393, 0.90440), (
             ("select", 0.5, 0.895, "rect", P_BIG, NEO + "button_select.png", P_MIDDLE),
             ("start", 0.5, 0.96, "rect", P_BIG, NEO + "button_start.png", P_MIDDLE),
-            ("l", 0.1, 0.77, "rect", P_LR, OWN + "button_l.png", P_SHOULDER),
-            ("r", 0.9, 0.77, "rect", P_LR, OWN + "button_r.png", P_SHOULDER),
+            ("l", 0.1, 0.77, "rect", P_LR, OWN + "button_l.png", dict(P_SHOULDER, label='"L"')),
+            ("r", 0.9, 0.77, "rect", P_LR, OWN + "button_r.png", dict(P_SHOULDER, label='"R"')),
             ("menu_toggle", 0.5, 0.77, "radial", P_HOT, NEO + "hotkey_menu.png", HOT_X),
             ("rotate",),
             ("r2|r3", 0.37, 0.77, "radial", P_HOT, OWN + "hotkey_swap_screens.png", HOT_X),
@@ -238,10 +242,10 @@ def n3ds(out):
         (0.12500, 0.77778), (0.85938, 0.75000), (
             ("start", 0.4, 0.93, "rect", L_BIG, NEO + "button_start.png", L_MIDDLE),
             ("select", 0.6, 0.93, "rect", L_BIG, NEO + "button_select.png", L_MIDDLE),
-            ("l", 0.03011, 0.08889, "rect", L_LR, OWN + "button_l.png", L_SHOULDER),
-            ("l2", 0.12917, 0.08889, "rect", L_LR, OWN + "button_zl.png", L_SHOULDER),
-            ("r", 0.96989, 0.08889, "rect", L_LR, OWN + "button_r.png", L_SHOULDER),
-            ("r2", 0.87083, 0.08889, "rect", L_LR, OWN + "button_zr.png", L_SHOULDER),
+            ("l", 0.03011, 0.08889, "rect", L_LR, OWN + "button_l.png", dict(L_SHOULDER, label='"L"')),
+            ("l2", 0.12917, 0.08889, "rect", L_LR, OWN + "button_zl.png", dict(L_SHOULDER, label='"ZL"')),
+            ("r", 0.96989, 0.08889, "rect", L_LR, OWN + "button_r.png", dict(L_SHOULDER, label='"R"')),
+            ("r2", 0.87083, 0.08889, "rect", L_LR, OWN + "button_zr.png", dict(L_SHOULDER, label='"ZR"')),
             ("menu_toggle", 0.5, 0.93, "radial", L_HOT, NEO + "hotkey_menu.png", HOT),
             hide(0.80000, 0.08889),
             ("toggle_fast_forward", 0.20000, 0.08889, "radial", L_HOT, NEO + "hotkey_fast_forward.png", HOT),
@@ -253,10 +257,10 @@ def n3ds(out):
         (0.21606, 0.90440), (0.78393, 0.90440), (
             ("select", 0.5, 0.895, "rect", P_BIG, NEO + "button_select.png", P_MIDDLE),
             ("start", 0.5, 0.96, "rect", P_BIG, NEO + "button_start.png", P_MIDDLE),
-            ("l", 0.1, 0.77, "rect", P_LR, OWN + "button_l.png", P_SHOULDER),
-            ("l2", 0.25, 0.77, "rect", P_LR, OWN + "button_zl.png", P_SHOULDER2),
-            ("r", 0.9, 0.77, "rect", P_LR, OWN + "button_r.png", P_SHOULDER),
-            ("r2", 0.75, 0.77, "rect", P_LR, OWN + "button_zr.png", P_SHOULDER2),
+            ("l", 0.1, 0.77, "rect", P_LR, OWN + "button_l.png", dict(P_SHOULDER, label='"L"')),
+            ("l2", 0.25, 0.77, "rect", P_LR, OWN + "button_zl.png", dict(P_SHOULDER2, label='"ZL"')),
+            ("r", 0.9, 0.77, "rect", P_LR, OWN + "button_r.png", dict(P_SHOULDER, label='"R"')),
+            ("r2", 0.75, 0.77, "rect", P_LR, OWN + "button_zr.png", dict(P_SHOULDER2, label='"ZR"')),
             ("toggle_fast_forward", 0.5, 0.83, "radial", P_HOT, NEO + "hotkey_fast_forward.png", HOT_X),
             ("menu_toggle", 0.5, 0.77, "radial", P_HOT, NEO + "hotkey_menu.png", HOT_X),
             ("stick", "analog_left", 0.15, 0.625, (0.15488, 0.08710),
