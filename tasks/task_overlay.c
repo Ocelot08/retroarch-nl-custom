@@ -970,8 +970,18 @@ static bool task_overlay_load_desc(
          break;
    }
 
-   desc->range_x = (float)rstrtod(elems[4], NULL) * width_mod;
-   desc->range_y = (float)rstrtod(elems[5], NULL) * height_mod;
+   desc->range_x      = (float)rstrtod(elems[4], NULL) * width_mod;
+   desc->range_y      = (float)rstrtod(elems[5], NULL) * height_mod;
+   desc->pack_range_x = desc->range_x;
+   desc->pack_range_y = desc->range_y;
+
+   /* A user layout size, normalized whatever the desc uses */
+   strlcpy_lit(overlay_key + _len, "_layout_w", sizeof(overlay_key) - _len);
+   if (config_get_float(conf, overlay_key, &tmp_float) && tmp_float > 0.0f)
+      desc->range_x = tmp_float;
+   strlcpy_lit(overlay_key + _len, "_layout_h", sizeof(overlay_key) - _len);
+   if (config_get_float(conf, overlay_key, &tmp_float) && tmp_float > 0.0f)
+      desc->range_y = tmp_float;
 
    _len = strlcpy(conf_key, overlay_desc_key, sizeof(conf_key));
 
@@ -1435,7 +1445,10 @@ static void task_overlay_deferred_load(retro_task_t *task, void *budget)
       /* Parse viewport override (optional) */
       strlcpy_lit(conf_key + _len, "_viewport", sizeof(conf_key) - _len);
 
-      if (config_get_array(conf, conf_key, tmp_str, sizeof(tmp_str)))
+      /* "none": a user layout taking the pack's away */
+      overlay->flags &= ~OVERLAY_HAS_VIEWPORT;
+      if (     config_get_array(conf, conf_key, tmp_str, sizeof(tmp_str))
+            && !string_is_equal(tmp_str, "none"))
       {
          char cfg_vp_buf[256];
          char *elems[4]             = {NULL, NULL, NULL, NULL};

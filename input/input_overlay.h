@@ -145,7 +145,9 @@ enum OVERLAY_FLAGS
     * takes no input, so it has no claim on the menu's mouse. */
    OVERLAY_TAKES_INPUT        = (1 << 8),
    /* overlay_desc::layout_group is set for every desc */
-   OVERLAY_LAYOUT_GROUPED     = (1 << 9)
+   OVERLAY_LAYOUT_GROUPED     = (1 << 9),
+   /* Its game screen placed in the layout editor and not yet saved */
+   OVERLAY_LAYOUT_VIEWPORT_EDITED = (1 << 10)
 };
 
 enum OVERLAY_DESC_FLAGS
@@ -162,7 +164,9 @@ enum OVERLAY_DESC_FLAGS
    /* Removed by the user layout: not drawn, takes no input */
    OVERLAY_DESC_LAYOUT_HIDDEN       = (1 << 5),
    /* Shown or hidden in the layout editor and not yet saved */
-   OVERLAY_DESC_LAYOUT_HIDE_EDITED  = (1 << 6)
+   OVERLAY_DESC_LAYOUT_HIDE_EDITED  = (1 << 6),
+   /* Resized in the layout editor and not yet saved */
+   OVERLAY_DESC_LAYOUT_SIZE_EDITED  = (1 << 7)
 };
 
 enum overlay_lightgun_action
@@ -275,9 +279,12 @@ struct overlay_desc
     * will be equal to x/y */
    float x_shift;
    float y_shift;
-   /* Where the pack itself puts it, before any user layout */
+   /* Where the pack itself puts it and how big, before any user
+    * layout */
    float pack_x;
    float pack_y;
+   float pack_range_x;
+   float pack_range_y;
 
    /* These values are used only for hitbox
     * detection. A hitbox can be stretched in

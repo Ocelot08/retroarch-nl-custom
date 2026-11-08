@@ -7012,7 +7012,14 @@ enum input_overlay_edit_flags
    /* The bar is being moved by its grip */
    OVERLAY_EDIT_GRIP     = (1 << 9),
    /* The panel's list is being scrolled */
-   OVERLAY_EDIT_SCROLL   = (1 << 10)
+   OVERLAY_EDIT_SCROLL   = (1 << 10),
+   /* A control (sel_group of the page shown) is selected, or the game's
+    * screen is */
+   OVERLAY_EDIT_SELECTED = (1 << 11),
+   OVERLAY_EDIT_SEL_SCREEN = (1 << 12),
+   /* A finger went down on the game's screen, and has moved it */
+   OVERLAY_EDIT_SCREEN_HELD  = (1 << 13),
+   OVERLAY_EDIT_SCREEN_MOVED = (1 << 14)
 };
 
 /* Grid cells to the longer side of the screen, square, whose corners
@@ -7045,6 +7052,11 @@ static struct
    float scroll_y;
    /* gfx_overlay_bar_item held down, or -1 */
    int bar_item;
+   /* Where the game's screen was when the finger went down on it, as
+    * fractions of the screen */
+   float screen_x;
+   float screen_y;
+   uint16_t sel_group;
    uint16_t flags;
 } input_overlay_edit;
 
@@ -7249,9 +7261,32 @@ static bool input_overlay_layout_save(const input_overlay_t *ol)
    for (i = 0; i < ol->size; i++)
    {
       const struct overlay *page = &ol->overlays[i];
+      if (page->flags & OVERLAY_LAYOUT_VIEWPORT_EDITED)
+      {
+         char vp[96];
+         snprintf(key, sizeof(key), "overlay%u_viewport", (unsigned)i);
+         if (page->flags & OVERLAY_HAS_VIEWPORT)
+            snprintf(vp, sizeof(vp), "%.6f,%.6f,%.6f,%.6f",
+                  page->viewport.x, page->viewport.y,
+                  page->viewport.w, page->viewport.h);
+         else
+            strlcpy(vp, "none", sizeof(vp));
+         config_set_string(conf, key, vp);
+      }
       for (j = 0; j < page->size; j++)
       {
          const struct overlay_desc *desc = &page->descs[j];
+         if (desc->flags & OVERLAY_DESC_LAYOUT_SIZE_EDITED)
+         {
+            snprintf(key, sizeof(key), "overlay%u_desc%u_layout_w",
+                  (unsigned)i, (unsigned)j);
+            snprintf(val, sizeof(val), "%.6f", desc->range_x);
+            config_set_string(conf, key, val);
+            snprintf(key, sizeof(key), "overlay%u_desc%u_layout_h",
+                  (unsigned)i, (unsigned)j);
+            snprintf(val, sizeof(val), "%.6f", desc->range_y);
+            config_set_string(conf, key, val);
+         }
          if (desc->flags & OVERLAY_DESC_LAYOUT_EDITED)
          {
             snprintf(key, sizeof(key), "overlay%u_desc%u_layout_x",
@@ -7281,9 +7316,13 @@ static bool input_overlay_layout_save(const input_overlay_t *ol)
    if ((ret = config_file_write(conf, path, true)))
    {
       for (i = 0; i < ol->size; i++)
+      {
+         ol->overlays[i].flags &= ~OVERLAY_LAYOUT_VIEWPORT_EDITED;
          for (j = 0; j < ol->overlays[i].size; j++)
             ol->overlays[i].descs[j].flags &= ~(OVERLAY_DESC_LAYOUT_EDITED
-                  | OVERLAY_DESC_LAYOUT_HIDE_EDITED);
+                  | OVERLAY_DESC_LAYOUT_HIDE_EDITED
+                  | OVERLAY_DESC_LAYOUT_SIZE_EDITED);
+      }
       RARCH_LOG("[Overlay] Saved layout: \"%s\".\n", path);
    }
    else
@@ -7296,8 +7335,8 @@ static bool input_overlay_layout_save(const input_overlay_t *ol)
 static bool input_overlay_pack_overlap(const struct overlay_desc *a,
       const struct overlay_desc *b)
 {
-   return   fabs(a->pack_x - b->pack_x) < a->range_x + b->range_x
-         && fabs(a->pack_y - b->pack_y) < a->range_y + b->range_y;
+   return   fabs(a->pack_x - b->pack_x) < a->pack_range_x + b->pack_range_x
+         && fabs(a->pack_y - b->pack_y) < a->pack_range_y + b->pack_range_y;
 }
 
 /* Numbers the controls of @page (overlay_desc::layout_group). Where the
@@ -7423,6 +7462,9 @@ static void input_overlay_edit_drop(input_overlay_t *ol)
 }
 
 static void input_overlay_layout_reload(const input_overlay_t *ol);
+static void input_overlay_viewport_publish(void);
+static size_t input_overlay_layout_name(const struct overlay *page,
+      uint16_t group, char *s, size_t len);
 /* The page shown when the layout changed, to show again once it has
  * loaded */
 static int input_overlay_layout_reload_page = -1;
@@ -7742,6 +7784,351 @@ static void input_overlay_edit_leave(input_overlay_t *ol, bool save)
 /* What the widgets draw of the bar, made again at every poll */
 static gfx_overlay_bar_t input_overlay_edit_bar_drawn;
 
+/* The box of what is drawn of @group of @page, in the page's units:
+ * where the pack puts it and how big if @pack, else as it is shown */
+static bool input_overlay_edit_group_box(const struct overlay *page,
+      uint16_t group, bool pack, float *box)
+{
+   size_t i;
+   bool any = false;
+
+   box[0] = box[1] = box[2] = box[3] = 0.0f;
+   for (i = 0; i < page->size; i++)
+   {
+      const struct overlay_desc *desc = &page->descs[i];
+      float cx = pack ? desc->pack_x       : desc->x_shift;
+      float cy = pack ? desc->pack_y       : desc->y_shift;
+      float rx = pack ? desc->pack_range_x : desc->range_x;
+      float ry = pack ? desc->pack_range_y : desc->range_y;
+      if (     desc->layout_group != group
+            || !OVERLAY_HAS_IMAGE(&desc->image))
+         continue;
+      if (!any)
+      {
+         box[0] = cx - rx;
+         box[1] = cy - ry;
+         box[2] = cx + rx;
+         box[3] = cy + ry;
+         any    = true;
+         continue;
+      }
+      box[0] = MIN(box[0], cx - rx);
+      box[1] = MIN(box[1], cy - ry);
+      box[2] = MAX(box[2], cx + rx);
+      box[3] = MAX(box[3], cy + ry);
+   }
+   return any;
+}
+
+/* How many times what the pack makes it @group is, across and down */
+static void input_overlay_edit_group_scale(const struct overlay *page,
+      uint16_t group, float *fx, float *fy)
+{
+   size_t i;
+   *fx = *fy = 1.0f;
+   for (i = 0; i < page->size; i++)
+   {
+      const struct overlay_desc *desc = &page->descs[i];
+      if (     desc->layout_group == group
+            && OVERLAY_HAS_IMAGE(&desc->image)
+            && desc->pack_range_x > 0.0f && desc->pack_range_y > 0.0f)
+      {
+         *fx = desc->range_x / desc->pack_range_x;
+         *fy = desc->range_y / desc->pack_range_y;
+         return;
+      }
+   }
+}
+
+/* Sizes @group of the page shown to @fx and @fy times what the pack
+ * makes it, spacing and all, about its middle; the same descs on the
+ * pages of its shape along with it */
+static void input_overlay_edit_resize(input_overlay_t *ol, uint16_t group,
+      float fx, float fy)
+{
+   size_t i, j, k;
+   float pack[4], now[4], pcx, pcy, ccx, ccy;
+   size_t index         = (size_t)(ol->active - ol->overlays);
+   struct overlay *page = &ol->overlays[index];
+
+   if (     !input_overlay_edit_group_box(page, group, true, pack)
+         || !input_overlay_edit_group_box(page, group, false, now))
+      return;
+   pcx = (pack[0] + pack[2]) * 0.5f;
+   pcy = (pack[1] + pack[3]) * 0.5f;
+   ccx = (now[0] + now[2]) * 0.5f;
+   ccy = (now[1] + now[3]) * 0.5f;
+
+   for (i = 0; i < page->size; i++)
+   {
+      struct overlay_desc *desc = &page->descs[i];
+      float nx, ny;
+      if (desc->layout_group != group)
+         continue;
+      nx = ccx + (desc->pack_x - pcx) * fx;
+      ny = ccy + (desc->pack_y - pcy) * fy;
+
+      for (j = 0; j < ol->size; j++)
+      {
+         struct overlay *other = &ol->overlays[j];
+         if (j == index || !input_overlay_page_alike(other, page))
+            continue;
+         for (k = 0; k < other->size; k++)
+         {
+            struct overlay_desc *twin = &other->descs[k];
+            if (!input_overlay_edit_same(twin, desc))
+               continue;
+            twin->x       = twin->x_shift + (nx - desc->x_shift);
+            twin->y       = twin->y_shift + (ny - desc->y_shift);
+            twin->range_x = twin->pack_range_x * fx;
+            twin->range_y = twin->pack_range_y * fy;
+            twin->flags  |= OVERLAY_DESC_LAYOUT_EDITED
+               | OVERLAY_DESC_LAYOUT_PLACED | OVERLAY_DESC_LAYOUT_SIZE_EDITED;
+         }
+      }
+
+      desc->x       = nx;
+      desc->y       = ny;
+      desc->range_x = desc->pack_range_x * fx;
+      desc->range_y = desc->pack_range_y * fy;
+      desc->flags  |= OVERLAY_DESC_LAYOUT_EDITED
+         | OVERLAY_DESC_LAYOUT_PLACED | OVERLAY_DESC_LAYOUT_SIZE_EDITED;
+   }
+
+   input_overlay_edit.flags |= OVERLAY_EDIT_CHANGED;
+   command_event(CMD_EVENT_OVERLAY_SET_SCALE_FACTOR, NULL);
+}
+
+/* The game's screen as the page shown places it, or where the video
+ * driver has it, as x, y, w and h fractions of the screen */
+static bool input_overlay_edit_screen(const input_overlay_t *ol, float *box)
+{
+   struct video_viewport vp;
+
+   if (ol->active->flags & OVERLAY_HAS_VIEWPORT)
+   {
+      box[0] = ol->active->viewport.x;
+      box[1] = ol->active->viewport.y;
+      box[2] = ol->active->viewport.w;
+      box[3] = ol->active->viewport.h;
+      return true;
+   }
+   if (     !video_driver_get_viewport_info(&vp)
+         || !VIDEO_SCALE_W(vp.full_dims) || !VIDEO_SCALE_H(vp.full_dims)
+         || !VIDEO_SCALE_W(vp.dims) || !VIDEO_SCALE_H(vp.dims))
+      return false;
+   box[0] = (float)VIDEO_POS_X(vp.pos) / VIDEO_SCALE_W(vp.full_dims);
+   box[1] = (float)VIDEO_POS_Y(vp.pos) / VIDEO_SCALE_H(vp.full_dims);
+   box[2] = (float)VIDEO_SCALE_W(vp.dims) / VIDEO_SCALE_W(vp.full_dims);
+   box[3] = (float)VIDEO_SCALE_H(vp.dims) / VIDEO_SCALE_H(vp.full_dims);
+   return true;
+}
+
+/* Places the game's screen at @box on the pages of the shape of the
+ * page shown, or, @box NULL, leaves it where the video driver puts it */
+static void input_overlay_edit_set_screen(input_overlay_t *ol,
+      const float *box)
+{
+   size_t j;
+   for (j = 0; j < ol->size; j++)
+   {
+      struct overlay *page = &ol->overlays[j];
+      if (!input_overlay_page_alike(page, ol->active))
+         continue;
+      if (box)
+      {
+         page->viewport.x = clamp_float(box[0], 0.0f, 1.0f - box[2]);
+         page->viewport.y = clamp_float(box[1], 0.0f, 1.0f - box[3]);
+         page->viewport.w = box[2];
+         page->viewport.h = box[3];
+         page->flags     |= OVERLAY_HAS_VIEWPORT;
+      }
+      else
+         page->flags     &= ~OVERLAY_HAS_VIEWPORT;
+      page->flags |= OVERLAY_LAYOUT_VIEWPORT_EDITED;
+   }
+   input_overlay_edit.flags |= OVERLAY_EDIT_CHANGED;
+   input_overlay_viewport_publish();
+   command_event(CMD_EVENT_VIDEO_SET_ASPECT_RATIO, NULL);
+}
+
+/* Grid cells, square, the longer side of the screen being
+ * OVERLAY_EDIT_GRID of them, in pixels; and the screen's size */
+static float input_overlay_edit_cell(float *w, float *h)
+{
+   unsigned dims = video_driver_get_output_dims();
+   *w = (float)VIDEO_SCALE_W(dims);
+   *h = (float)VIDEO_SCALE_H(dims);
+   return MAX(*w, *h) / OVERLAY_EDIT_GRID;
+}
+
+#define OVERLAY_EDIT_SIZE_MIN    1.0f
+#define OVERLAY_EDIT_SIZE_MAX   12.0f
+#define OVERLAY_EDIT_SIZE_STEP   0.5f
+#define OVERLAY_EDIT_SHAPE_STEPS 4
+#define OVERLAY_EDIT_SCREEN_MIN  2
+
+/* The size, in cells, of what is drawn of @group (its longer side),
+ * and its shape: the steps it is wider (or, negative, taller) than the
+ * pack makes it, 2^(1/OVERLAY_EDIT_SHAPE_STEPS) times a step */
+static bool input_overlay_edit_group_measure(const struct overlay *page,
+      uint16_t group, float *pack_w, float *pack_h, float *size,
+      float *shape)
+{
+   float pack[4], fx, fy, w, h;
+   float cell = input_overlay_edit_cell(&w, &h);
+
+   if (     cell < 1.0f
+         || !input_overlay_edit_group_box(page, group, true, pack))
+      return false;
+   input_overlay_edit_group_scale(page, group, &fx, &fy);
+   *pack_w = (pack[2] - pack[0]) * page->mod_w * w;
+   *pack_h = (pack[3] - pack[1]) * page->mod_h * h;
+   *size   = MAX(*pack_w * fx, *pack_h * fy) / cell;
+   *shape  = (fy > 0.0f) ? OVERLAY_EDIT_SHAPE_STEPS
+      * (float)(log(fx / fy) / log(2.0)) : 0.0f;
+   return *pack_w > 0.0f && *pack_h > 0.0f;
+}
+
+/* Sets slider @i of the selection to notch @notch */
+static void input_overlay_edit_slide(input_overlay_t *ol, unsigned i,
+      unsigned notch)
+{
+   float w, h;
+   float cell = input_overlay_edit_cell(&w, &h);
+
+   if (cell < 1.0f)
+      return;
+
+   if (input_overlay_edit.flags & OVERLAY_EDIT_SEL_SCREEN)
+   {
+      float box[4];
+      if (!input_overlay_edit_screen(ol, box))
+         return;
+      if (i == 0)
+         box[2] = MIN(1.0f, (OVERLAY_EDIT_SCREEN_MIN + notch) * cell / w);
+      else
+         box[3] = MIN(1.0f, (OVERLAY_EDIT_SCREEN_MIN + notch) * cell / h);
+      input_overlay_edit_set_screen(ol, box);
+   }
+   else
+   {
+      float pack_w, pack_h, size, shape, ratio, f, fx, fy;
+      uint16_t group = input_overlay_edit.sel_group;
+      if (!input_overlay_edit_group_measure(ol->active, group,
+               &pack_w, &pack_h, &size, &shape))
+         return;
+      if (i == 0)
+         size  = OVERLAY_EDIT_SIZE_MIN + notch * OVERLAY_EDIT_SIZE_STEP;
+      else
+         shape = (float)notch - OVERLAY_EDIT_SHAPE_STEPS;
+      ratio = (float)pow(2.0, shape / OVERLAY_EDIT_SHAPE_STEPS);
+      /* Across ratio times what it is down, the longer side size */
+      f     = size * cell / MAX(pack_w * ratio, pack_h);
+      fx    = f * ratio;
+      fy    = f;
+      input_overlay_edit_resize(ol, group, fx, fy);
+   }
+}
+
+/* Slider @i of the selection: its notches, where it is and its value */
+static unsigned input_overlay_edit_slider(input_overlay_t *ol, unsigned i,
+      char *label, size_t label_len, char *value, size_t value_len,
+      float *pos)
+{
+   float w, h;
+   char num[16];
+   unsigned notches = 0;
+   float cell       = input_overlay_edit_cell(&w, &h);
+
+   *label = *value = '\0';
+   *pos   = 0.0f;
+   if (cell < 1.0f)
+      return 0;
+
+   if (input_overlay_edit.flags & OVERLAY_EDIT_SEL_SCREEN)
+   {
+      float box[4], cells;
+      unsigned most = (unsigned)((i == 0 ? w : h) / cell);
+      if (!input_overlay_edit_screen(ol, box) || most <= OVERLAY_EDIT_SCREEN_MIN)
+         return 0;
+      notches = most - OVERLAY_EDIT_SCREEN_MIN + 1;
+      cells   = box[i == 0 ? 2 : 3] * (i == 0 ? w : h) / cell;
+      *pos    = clamp_float((cells - OVERLAY_EDIT_SCREEN_MIN)
+            / (most - OVERLAY_EDIT_SCREEN_MIN), 0.0f, 1.0f);
+      strlcpy(label, msg_hash_to_str(i == 0
+               ? MSG_OVERLAY_EDIT_WIDTH : MSG_OVERLAY_EDIT_HEIGHT), label_len);
+      snprintf(num, sizeof(num), "%u", (unsigned)(cells + 0.5f));
+      snprintf(value, value_len, msg_hash_to_str(MSG_OVERLAY_EDIT_CELLS), num);
+   }
+   else
+   {
+      float pack_w, pack_h, size, shape;
+      if (!input_overlay_edit_group_measure(ol->active,
+               input_overlay_edit.sel_group, &pack_w, &pack_h, &size, &shape))
+         return 0;
+      if (i == 0)
+      {
+         float half = (float)floor(size / OVERLAY_EDIT_SIZE_STEP + 0.5f)
+            * OVERLAY_EDIT_SIZE_STEP;
+         notches = (unsigned)((OVERLAY_EDIT_SIZE_MAX - OVERLAY_EDIT_SIZE_MIN)
+               / OVERLAY_EDIT_SIZE_STEP) + 1;
+         *pos    = clamp_float((size - OVERLAY_EDIT_SIZE_MIN)
+               / (OVERLAY_EDIT_SIZE_MAX - OVERLAY_EDIT_SIZE_MIN), 0.0f, 1.0f);
+         strlcpy(label, msg_hash_to_str(MSG_OVERLAY_EDIT_SIZE), label_len);
+         if (half == (float)(int)half)
+            snprintf(num, sizeof(num), "%d", (int)half);
+         else
+            snprintf(num, sizeof(num), "%.1f", half);
+         snprintf(value, value_len, msg_hash_to_str(MSG_OVERLAY_EDIT_CELLS), num);
+      }
+      else
+      {
+         int step = (int)floor(shape + 0.5f);
+         notches  = 2 * OVERLAY_EDIT_SHAPE_STEPS + 1;
+         *pos     = clamp_float((shape + OVERLAY_EDIT_SHAPE_STEPS)
+               / (2 * OVERLAY_EDIT_SHAPE_STEPS), 0.0f, 1.0f);
+         strlcpy(label, msg_hash_to_str(MSG_OVERLAY_EDIT_SHAPE), label_len);
+         if (step == 0)
+            strlcpy(value, msg_hash_to_str(MSG_OVERLAY_EDIT_SHAPE_ORIGINAL),
+                  value_len);
+         else
+            snprintf(value, value_len, msg_hash_to_str(step > 0
+                     ? MSG_OVERLAY_EDIT_SHAPE_WIDER
+                     : MSG_OVERLAY_EDIT_SHAPE_TALLER), step > 0 ? step : -step);
+      }
+   }
+   return notches;
+}
+
+/* The notch of slider @i nearest the finger at @px */
+static void input_overlay_edit_slide_to(input_overlay_t *ol, unsigned i,
+      float px)
+{
+   int x, y, w, h;
+   unsigned dims    = video_driver_get_output_dims();
+   unsigned notches = input_overlay_edit_bar_drawn.sel_notches[i];
+   float t;
+
+   if (     notches < 2
+         || !gfx_widgets_overlay_bar_rect(dims, &input_overlay_edit_bar_drawn,
+            GFX_OVERLAY_BAR_SEL_TRACK0 + i, &x, &y, &w, &h)
+         || w <= h / 2)
+      return;
+   /* As the widgets draw it: inset a quarter of its height each end */
+   t = clamp_float((px - (x + h / 4)) / (float)(w - h / 2), 0.0f, 1.0f);
+   input_overlay_edit_slide(ol, i,
+         (unsigned)floor(t * (notches - 1) + 0.5f));
+}
+
+static void input_overlay_edit_deselect(void)
+{
+   input_overlay_edit.flags &= ~(OVERLAY_EDIT_SELECTED
+         | OVERLAY_EDIT_SEL_SCREEN);
+   input_overlay_edit.sel_group = 0;
+}
+
+
 /* Rows the panel shows, each @row_h high */
 static unsigned input_overlay_edit_panel_rows(const gfx_overlay_bar_t *bar,
       int *row_h)
@@ -7848,6 +8235,49 @@ static gfx_overlay_bar_t *input_overlay_edit_bar_make(input_overlay_t *ol)
             sizeof(bar->names[i]), &shown);
       bar->shown[i] = shown;
    }
+
+   if (!input_overlay_edit_screen(ol, bar->screen))
+      bar->screen[2] = bar->screen[3] = 0.0f;
+   bar->sel[2] = bar->sel[3] = 0.0f;
+   if (input_overlay_edit.flags & OVERLAY_EDIT_SELECTED)
+   {
+      bar->flags |= GFX_OVERLAY_BAR_FLAG_SELECTED;
+      if (input_overlay_edit.flags & OVERLAY_EDIT_SEL_SCREEN)
+      {
+         bar->flags |= GFX_OVERLAY_BAR_FLAG_SEL_SCREEN;
+         strlcpy(bar->sel_name, msg_hash_to_str(MSG_OVERLAY_EDIT_SCREEN),
+               sizeof(bar->sel_name));
+      }
+      else
+      {
+         float x0 = 1.0f, y0 = 1.0f, x1 = 0.0f, y1 = 0.0f;
+         for (i = 0; i < ol->active->size; i++)
+         {
+            const struct overlay_desc *desc = &ol->active->descs[i];
+            if (     desc->layout_group != input_overlay_edit.sel_group
+                  || !OVERLAY_HAS_IMAGE(&desc->image))
+               continue;
+            x0 = MIN(x0, desc->mod_x);
+            y0 = MIN(y0, desc->mod_y);
+            x1 = MAX(x1, desc->mod_x + desc->mod_w);
+            y1 = MAX(y1, desc->mod_y + desc->mod_h);
+         }
+         if (x1 > x0 && y1 > y0)
+         {
+            bar->sel[0] = x0;
+            bar->sel[1] = y0;
+            bar->sel[2] = x1 - x0;
+            bar->sel[3] = y1 - y0;
+         }
+         input_overlay_layout_name(ol->active, input_overlay_edit.sel_group,
+               bar->sel_name, sizeof(bar->sel_name));
+      }
+      for (i = 0; i < 2; i++)
+         bar->sel_notches[i] = input_overlay_edit_slider(ol, i,
+               bar->sel_label[i], sizeof(bar->sel_label[i]),
+               bar->sel_value[i], sizeof(bar->sel_value[i]),
+               &bar->sel_pos[i]);
+   }
    return bar;
 }
 
@@ -7857,7 +8287,9 @@ static int input_overlay_edit_bar_hit(float px, float py)
 {
    static const unsigned order[] = {
       GFX_OVERLAY_BAR_PANEL_DONE, GFX_OVERLAY_BAR_PANEL,
-      GFX_OVERLAY_BAR_GRIP, GFX_OVERLAY_BAR_SAVE, GFX_OVERLAY_BAR_CANCEL,
+      GFX_OVERLAY_BAR_SEL_RESET, GFX_OVERLAY_BAR_SEL_DONE,
+      GFX_OVERLAY_BAR_SEL_ROW0, GFX_OVERLAY_BAR_SEL_ROW1,
+      GFX_OVERLAY_BAR_SEL, GFX_OVERLAY_BAR_GRIP, GFX_OVERLAY_BAR_SAVE, GFX_OVERLAY_BAR_CANCEL,
       GFX_OVERLAY_BAR_CONTROLS_BUTTON, GFX_OVERLAY_BAR_HALF,
       GFX_OVERLAY_BAR_ANALOG, GFX_OVERLAY_BAR_BAR };
    unsigned i;
@@ -7921,6 +8353,17 @@ static bool input_overlay_edit_bar_tap(input_overlay_t *ol, int item)
       case GFX_OVERLAY_BAR_CONTROLS_BUTTON:
          input_overlay_edit.flags      ^= OVERLAY_EDIT_PANEL;
          input_overlay_edit.panel_first = 0;
+         input_overlay_edit_deselect();
+         break;
+      case GFX_OVERLAY_BAR_SEL_DONE:
+         input_overlay_edit_deselect();
+         break;
+      case GFX_OVERLAY_BAR_SEL_RESET:
+         if (input_overlay_edit.flags & OVERLAY_EDIT_SEL_SCREEN)
+            input_overlay_edit_set_screen(ol, NULL);
+         else if (input_overlay_edit.flags & OVERLAY_EDIT_SELECTED)
+            input_overlay_edit_resize(ol, input_overlay_edit.sel_group,
+                  1.0f, 1.0f);
          break;
       case GFX_OVERLAY_BAR_HALF:
          input_overlay_edit_bar.half = !input_overlay_edit_bar.half;
@@ -7985,6 +8428,10 @@ static void input_overlay_edit_poll(input_overlay_t *ol, float opacity)
          || input_overlay_edit.page != index)
    {
       input_overlay_edit_drop(ol);
+#ifdef HAVE_GFX_WIDGETS
+      if (input_overlay_edit.page != index)
+         input_overlay_edit_deselect();
+#endif
       input_overlay_edit.ol   = ol;
       input_overlay_edit.page = index;
    }
@@ -8037,8 +8484,37 @@ static void input_overlay_edit_poll(input_overlay_t *ol, float opacity)
          item = input_overlay_edit_bar_hit(sx, sy);
 #endif
          if (item < 0)
+         {
             input_overlay_edit_grab(ol, x, y);
 #ifdef HAVE_GFX_WIDGETS
+            /* Not on a control: on the game's screen, perhaps */
+            if (     !(input_overlay_edit.flags & OVERLAY_EDIT_DRAGGING)
+                  && VIDEO_SCALE_W(dims) && VIDEO_SCALE_H(dims))
+            {
+               float box[4];
+               float fx = sx / VIDEO_SCALE_W(dims);
+               float fy = sy / VIDEO_SCALE_H(dims);
+               if (     input_overlay_edit_screen(ol, box)
+                     && fx >= box[0] && fx < box[0] + box[2]
+                     && fy >= box[1] && fy < box[1] + box[3])
+               {
+                  input_overlay_edit.flags   |= OVERLAY_EDIT_SCREEN_HELD;
+                  input_overlay_edit.screen_x = box[0];
+                  input_overlay_edit.screen_y = box[1];
+                  input_overlay_edit.grip_x   = sx;
+                  input_overlay_edit.grip_y   = sy;
+               }
+            }
+#endif
+         }
+#ifdef HAVE_GFX_WIDGETS
+         else if (     item == GFX_OVERLAY_BAR_SEL_ROW0
+                  || item == GFX_OVERLAY_BAR_SEL_ROW1)
+         {
+            input_overlay_edit.bar_item = item;
+            input_overlay_edit_slide_to(ol,
+                  (unsigned)(item - GFX_OVERLAY_BAR_SEL_ROW0), sx);
+         }
          else if (item == GFX_OVERLAY_BAR_GRIP && VIDEO_SCALE_W(dims))
          {
             input_overlay_edit.flags |= OVERLAY_EDIT_GRIP;
@@ -8063,6 +8539,33 @@ static void input_overlay_edit_poll(input_overlay_t *ol, float opacity)
             / VIDEO_SCALE_H(dims);
       }
 #ifdef HAVE_GFX_WIDGETS
+      else if (     input_overlay_edit.bar_item == GFX_OVERLAY_BAR_SEL_ROW0
+               || input_overlay_edit.bar_item == GFX_OVERLAY_BAR_SEL_ROW1)
+         input_overlay_edit_slide_to(ol, (unsigned)(input_overlay_edit.bar_item
+                  - GFX_OVERLAY_BAR_SEL_ROW0), sx);
+      else if (input_overlay_edit.flags & OVERLAY_EDIT_SCREEN_HELD)
+      {
+         /* Once selected, the screen moves with the finger, its top
+          * left on a grid corner */
+         float w, h, box[4];
+         float cell = input_overlay_edit_cell(&w, &h)
+            / (input_overlay_edit_bar.half ? 2 : 1);
+         float dx   = sx - input_overlay_edit.grip_x;
+         float dy   = sy - input_overlay_edit.grip_y;
+         if (     (input_overlay_edit.flags & OVERLAY_EDIT_SEL_SCREEN)
+               && cell >= 1.0f
+               && (     (input_overlay_edit.flags & OVERLAY_EDIT_SCREEN_MOVED)
+                     || fabs(dx) > 0.015f * w || fabs(dy) > 0.015f * h)
+               && input_overlay_edit_screen(ol, box))
+         {
+            input_overlay_edit.flags |= OVERLAY_EDIT_SCREEN_MOVED;
+            box[0] = (float)floor((input_overlay_edit.screen_x * w + dx)
+                  / cell + 0.5f) * cell / w;
+            box[1] = (float)floor((input_overlay_edit.screen_y * h + dy)
+                  / cell + 0.5f) * cell / h;
+            input_overlay_edit_set_screen(ol, box);
+         }
+      }
       else if (     (input_overlay_edit.flags & OVERLAY_EDIT_SCROLL)
                || input_overlay_edit.bar_item >= GFX_OVERLAY_BAR_ROW
                || input_overlay_edit.bar_item == GFX_OVERLAY_BAR_PANEL)
@@ -8095,13 +8598,23 @@ static void input_overlay_edit_poll(input_overlay_t *ol, float opacity)
    }
    else if (input_overlay_edit.flags & OVERLAY_EDIT_HELD)
    {
-      int item = input_overlay_edit.bar_item;
+      int item       = input_overlay_edit.bar_item;
+      uint16_t flags = input_overlay_edit.flags;
+      uint16_t group = 0;
+
+      if (     (flags & OVERLAY_EDIT_DRAGGING)
+            && input_overlay_edit.count
+            && input_overlay_edit.items[0].page == index
+            && input_overlay_edit.items[0].desc < ol->active->size)
+         group = ol->active->descs[input_overlay_edit.items[0].desc]
+            .layout_group;
 
       /* Only placed: a control does nothing while it is laid out */
       input_overlay_edit_drop(ol);
       input_overlay_edit.bar_item = -1;
       input_overlay_edit.flags   &= ~(OVERLAY_EDIT_HELD | OVERLAY_EDIT_GRIP
-            | OVERLAY_EDIT_SCROLL);
+            | OVERLAY_EDIT_SCROLL | OVERLAY_EDIT_SCREEN_HELD
+            | OVERLAY_EDIT_SCREEN_MOVED);
 
 #ifdef HAVE_GFX_WIDGETS
       /* The bar's parts act on a lift over them */
@@ -8110,8 +8623,27 @@ static void input_overlay_edit_poll(input_overlay_t *ol, float opacity)
                input_overlay_edit.ptr_y) == item
             && input_overlay_edit_bar_tap(ol, item))
          return;
+
+      /* A tap selects the control or the screen it is on, and nothing
+       * when on neither */
+      if (item < 0 && !(flags & (OVERLAY_EDIT_MOVED
+                  | OVERLAY_EDIT_SCREEN_MOVED)))
+      {
+         input_overlay_edit_deselect();
+         if (group)
+         {
+            input_overlay_edit.flags    |= OVERLAY_EDIT_SELECTED;
+            input_overlay_edit.sel_group = group;
+         }
+         else if (flags & OVERLAY_EDIT_SCREEN_HELD)
+            input_overlay_edit.flags    |= OVERLAY_EDIT_SELECTED
+               | OVERLAY_EDIT_SEL_SCREEN;
+         if (input_overlay_edit.flags & OVERLAY_EDIT_SELECTED)
+            input_overlay_edit.flags    &= ~OVERLAY_EDIT_PANEL;
+      }
 #else
       (void)item;
+      (void)group;
 #endif
    }
 

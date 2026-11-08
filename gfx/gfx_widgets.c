@@ -2065,6 +2065,50 @@ bool gfx_widgets_overlay_bar_rect(unsigned dims,
       return true;
    }
 
+   /* The selection's panel, three rows: under the bar, or over it
+    * where there is no room */
+   if (     (bar->flags & GFX_OVERLAY_BAR_FLAG_SELECTED)
+         && item >= GFX_OVERLAY_BAR_SEL
+         && item <= GFX_OVERLAY_BAR_SEL_TRACK1)
+   {
+      int pw    = MIN(sw, (int)(u * 15.0f));
+      int ph    = row_h * 3;
+      int px    = MAX(0, MIN(bx, sw - pw));
+      int py    = (by + bar_h + ph <= sh) ? by + bar_h : MAX(0, by - ph);
+      int btn   = (int)(u * 3.5f);
+      int label = (int)(u * 3.0f);
+      int value = (int)(u * 3.5f);
+
+      *h = row_h;
+      switch (item)
+      {
+         case GFX_OVERLAY_BAR_SEL:
+            *x = px;
+            *y = py;
+            *w = pw;
+            *h = ph;
+            break;
+         case GFX_OVERLAY_BAR_SEL_DONE:
+         case GFX_OVERLAY_BAR_SEL_RESET:
+            *w = btn;
+            *x = px + pw - btn * (item == GFX_OVERLAY_BAR_SEL_DONE ? 1 : 2);
+            *y = py;
+            break;
+         case GFX_OVERLAY_BAR_SEL_ROW0:
+         case GFX_OVERLAY_BAR_SEL_ROW1:
+            *x = px;
+            *y = py + row_h * (1 + (int)(item - GFX_OVERLAY_BAR_SEL_ROW0));
+            *w = pw;
+            break;
+         default:
+            *x = px + label;
+            *y = py + row_h * (1 + (int)(item - GFX_OVERLAY_BAR_SEL_TRACK0));
+            *w = MAX(1, pw - label - value);
+            break;
+      }
+      return true;
+   }
+
    if (!(bar->flags & GFX_OVERLAY_BAR_FLAG_PANEL_OPEN))
       return false;
 
@@ -2243,6 +2287,48 @@ static void gfx_widgets_draw_overlay_bar(dispgfx_widget_t *p_dispwidget,
             0, (int)(pos + 0.5f), w, 1, 0xFFFFFF,
             (half && (n & 1)) ? 0.15f : 0.3f);
 
+   /* The game's screen, dashed, and what is selected */
+   if (bar->screen[2] > 0.0f && bar->screen[3] > 0.0f)
+   {
+      bool on = (bar->flags & GFX_OVERLAY_BAR_FLAG_SEL_SCREEN) != 0;
+      int sx  = (int)(bar->screen[0] * w);
+      int sy  = (int)(bar->screen[1] * h);
+      int sw  = (int)(bar->screen[2] * w);
+      int sh  = (int)(bar->screen[3] * h);
+      int dash;
+      for (dash = 0; dash < sw; dash += 12)
+      {
+         int len = MIN(6, sw - dash);
+         gfx_widgets_overlay_rect(p_disp, userdata, video_dims,
+               sx + dash, sy, len, on ? 2 : 1,
+               on ? OVERLAY_BAR_CHECK : OVERLAY_BAR_LINE, 0.8f);
+         gfx_widgets_overlay_rect(p_disp, userdata, video_dims,
+               sx + dash, sy + sh - (on ? 2 : 1), len, on ? 2 : 1,
+               on ? OVERLAY_BAR_CHECK : OVERLAY_BAR_LINE, 0.8f);
+      }
+      for (dash = 0; dash < sh; dash += 12)
+      {
+         int len = MIN(6, sh - dash);
+         gfx_widgets_overlay_rect(p_disp, userdata, video_dims,
+               sx, sy + dash, on ? 2 : 1, len,
+               on ? OVERLAY_BAR_CHECK : OVERLAY_BAR_LINE, 0.8f);
+         gfx_widgets_overlay_rect(p_disp, userdata, video_dims,
+               sx + sw - (on ? 2 : 1), sy + dash, on ? 2 : 1, len,
+               on ? OVERLAY_BAR_CHECK : OVERLAY_BAR_LINE, 0.8f);
+      }
+      gfx_widgets_overlay_text(p_dispwidget,
+            video_dims, msg_hash_to_str(MSG_OVERLAY_EDIT_SCREEN),
+            sx + 8, sy + 4, sw, (int)(cell * 2.0f), scale, false,
+            OVERLAY_BAR_TEXT_DIM);
+   }
+   if (     (bar->flags & GFX_OVERLAY_BAR_FLAG_SELECTED)
+         && !(bar->flags & GFX_OVERLAY_BAR_FLAG_SEL_SCREEN)
+         && bar->sel[2] > 0.0f)
+      gfx_widgets_overlay_frame(p_disp, userdata, video_dims,
+            (int)(bar->sel[0] * w) - 3, (int)(bar->sel[1] * h) - 3,
+            (int)(bar->sel[2] * w) + 6, (int)(bar->sel[3] * h) + 6,
+            OVERLAY_BAR_CHECK, 1.0f);
+
    /* The bar */
    gfx_widgets_overlay_bar_rect(video_dims, bar, GFX_OVERLAY_BAR_BAR,
          &x, &y, &iw, &ih);
@@ -2323,7 +2409,8 @@ static void gfx_widgets_draw_overlay_bar(dispgfx_widget_t *p_dispwidget,
 
       for (i = GFX_OVERLAY_BAR_PANEL_DONE; i < GFX_OVERLAY_BAR_ITEMS; i++)
       {
-         if (!gfx_widgets_overlay_bar_rect(video_dims, bar, i,
+         if (     (i > GFX_OVERLAY_BAR_PANEL_DONE && i < GFX_OVERLAY_BAR_ROW)
+               || !gfx_widgets_overlay_bar_rect(video_dims, bar, i,
                   &x, &y, &iw, &ih))
             continue;
          if (bar->pressed == (int)i)
@@ -2361,6 +2448,80 @@ static void gfx_widgets_draw_overlay_bar(dispgfx_widget_t *p_dispwidget,
                   px + pw - 6, py + ih + 2 + top, 3, thumb,
                   OVERLAY_BAR_CHECK, 1.0f);
          }
+      }
+   }
+
+   /* The selection's panel */
+   if (gfx_widgets_overlay_bar_rect(video_dims, bar, GFX_OVERLAY_BAR_SEL,
+            &x, &y, &iw, &ih))
+   {
+      int px = x, pw = iw;
+
+      gfx_widgets_overlay_rect(p_disp, userdata, video_dims,
+            x, y, iw, ih, OVERLAY_BAR_BG, 0.85f);
+      gfx_widgets_overlay_frame(p_disp, userdata, video_dims,
+            x, y, iw, ih, OVERLAY_BAR_LINE, 1.0f);
+
+      for (i = GFX_OVERLAY_BAR_SEL_RESET; i <= GFX_OVERLAY_BAR_SEL_DONE; i++)
+      {
+         gfx_widgets_overlay_bar_rect(video_dims, bar, i, &x, &y, &iw, &ih);
+         if (bar->pressed == (int)i)
+            gfx_widgets_overlay_rect(p_disp, userdata, video_dims,
+                  x, y, iw, ih, OVERLAY_BAR_LINE, 0.3f);
+         gfx_widgets_overlay_rect(p_disp, userdata, video_dims,
+               x, y + ih / 5, 1, ih - 2 * (ih / 5), OVERLAY_BAR_LINE, 0.5f);
+         gfx_widgets_overlay_text(p_dispwidget, video_dims,
+               msg_hash_to_str(i == GFX_OVERLAY_BAR_SEL_DONE
+                  ? MSG_OVERLAY_EDIT_DONE : MSG_OVERLAY_EDIT_RESET),
+               x, y, iw, ih, scale, true, OVERLAY_BAR_TEXT);
+      }
+      /* The name, up to Reset */
+      gfx_widgets_overlay_bar_rect(video_dims, bar, GFX_OVERLAY_BAR_SEL_RESET,
+            &x, &y, &iw, &ih);
+      gfx_widgets_overlay_text(p_dispwidget, video_dims, bar->sel_name,
+            px + ih / 4, y, x - px - ih / 4, ih,
+            MIN(scale, gfx_widgets_overlay_fit(p_dispwidget, bar->sel_name,
+                  x - px - ih / 4, ih)), false, OVERLAY_BAR_TEXT);
+      gfx_widgets_overlay_rect(p_disp, userdata, video_dims,
+            px, y + ih - 1, pw, 1, OVERLAY_BAR_LINE, 0.5f);
+
+      for (n = 0; n < 2; n++)
+      {
+         int tx, ty, tw, th, mid, left, span;
+         unsigned notches = bar->sel_notches[n];
+         gfx_widgets_overlay_bar_rect(video_dims, bar,
+               GFX_OVERLAY_BAR_SEL_TRACK0 + n, &tx, &ty, &tw, &th);
+         mid  = ty + th / 2;
+         left = tx + th / 4;
+         span = MAX(1, tw - th / 2);
+
+         gfx_widgets_overlay_text(p_dispwidget, video_dims,
+               bar->sel_label[n], px + th / 4, ty, tx - px - th / 4, th,
+               scale, false, OVERLAY_BAR_TEXT);
+         gfx_widgets_overlay_text(p_dispwidget, video_dims,
+               bar->sel_value[n], tx + tw, ty, px + pw - tx - tw, th,
+               MIN(scale, gfx_widgets_overlay_fit(p_dispwidget,
+                     bar->sel_value[n], px + pw - tx - tw, th)),
+               true, OVERLAY_BAR_TEXT);
+
+         gfx_widgets_overlay_rect(p_disp, userdata, video_dims,
+               left, mid - 1, span, 2, OVERLAY_BAR_LINE, 0.6f);
+         /* A notch at each step, or every fifth where they crowd */
+         if (notches > 1)
+         {
+            unsigned k, every = (span / (int)(notches - 1) < 5) ? 5 : 1;
+            for (k = 0; k < notches; k += every)
+            {
+               int nx = left + (int)((float)span * k / (notches - 1));
+               gfx_widgets_overlay_rect(p_disp, userdata, video_dims,
+                     nx, mid - th / 8, 1, th / 4, OVERLAY_BAR_LINE, 0.8f);
+            }
+         }
+         gfx_widgets_overlay_rect(p_disp, userdata, video_dims,
+               left + (int)(span * bar->sel_pos[n]) - th / 10,
+               mid - th / 4, MAX(4, th / 5), th / 2, OVERLAY_BAR_CHECK,
+               bar->pressed == (int)(GFX_OVERLAY_BAR_SEL_ROW0 + n)
+               ? 1.0f : 0.85f);
       }
    }
 

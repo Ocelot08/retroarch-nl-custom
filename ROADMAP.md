@@ -10,8 +10,8 @@ how much work it is:
 
 | # | Feature | Needs first | Effort |
 |---|---------|-------------|--------|
-| 1 | Screen placement (in progress) | - | Medium |
-| 2 | Button size (in progress) | - | Medium |
+| 1 | Screen placement (built) | - | Medium |
+| 2 | Button size (built) | - | Medium |
 | 3 | Drawn buttons | - | Large |
 | 4 | Button shapes and styles | 3 | Small |
 | 5 | Custom buttons | 3 | Medium |
@@ -35,7 +35,9 @@ away from what is being sized, with Reset and Done. Built together.
 - Saved with Layout For (all content, core or game) and with profiles,
   like the controls. It is written as the overlay page's own viewport
   setting (`overlayN_viewport`) in the layout file.
-- To check: the Vulkan video driver places the menu as OpenGL does.
+- The Vulkan video driver places the menu through the same viewport
+  code as OpenGL, so it follows the box there too (read in the code,
+  not yet seen on a device).
 
 ## 2. Button size
 

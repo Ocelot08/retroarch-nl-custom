@@ -199,7 +199,8 @@ typedef struct disp_widget_msg
    bool alternative_look;
 } disp_widget_msg_t;
 
-/* The overlay layout editor's bar and its panel of controls */
+/* The overlay layout editor's bar, its panel of controls, and the
+ * panel that sizes what is selected */
 #define GFX_OVERLAY_BAR_GRID       50
 #define GFX_OVERLAY_BAR_CONTROLS   64
 /* Most rows the panel shows at once; it scrolls through the rest */
@@ -217,6 +218,15 @@ enum gfx_overlay_bar_item
    GFX_OVERLAY_BAR_BAR,
    GFX_OVERLAY_BAR_PANEL,
    GFX_OVERLAY_BAR_PANEL_DONE,
+   /* The selection's panel: a title row with Reset and Done, then two
+    * rows of a slider each */
+   GFX_OVERLAY_BAR_SEL,
+   GFX_OVERLAY_BAR_SEL_RESET,
+   GFX_OVERLAY_BAR_SEL_DONE,
+   GFX_OVERLAY_BAR_SEL_ROW0,
+   GFX_OVERLAY_BAR_SEL_ROW1,
+   GFX_OVERLAY_BAR_SEL_TRACK0,
+   GFX_OVERLAY_BAR_SEL_TRACK1,
    /* Then the panel's rows, GFX_OVERLAY_BAR_ROWS of them */
    GFX_OVERLAY_BAR_ROW,
    GFX_OVERLAY_BAR_ITEMS = GFX_OVERLAY_BAR_ROW + GFX_OVERLAY_BAR_ROWS
@@ -230,7 +240,10 @@ enum gfx_overlay_bar_flags
    GFX_OVERLAY_BAR_FLAG_PANEL_OPEN = (1 << 2),
    /* The page shown has an analog stick; there is no page to switch to */
    GFX_OVERLAY_BAR_FLAG_ANALOG     = (1 << 3),
-   GFX_OVERLAY_BAR_FLAG_ANALOG_OFF = (1 << 4)
+   GFX_OVERLAY_BAR_FLAG_ANALOG_OFF = (1 << 4),
+   /* Something is selected, and it is the game's screen */
+   GFX_OVERLAY_BAR_FLAG_SELECTED   = (1 << 5),
+   GFX_OVERLAY_BAR_FLAG_SEL_SCREEN = (1 << 6)
 };
 
 typedef struct
@@ -246,6 +259,17 @@ typedef struct
    uint8_t flags;
    uint8_t shown[GFX_OVERLAY_BAR_CONTROLS];
    char names[GFX_OVERLAY_BAR_CONTROLS][GFX_OVERLAY_BAR_NAME_LEN];
+   /* The game's screen, and what is selected, as x, y, w and h
+    * fractions of the screen */
+   float screen[4];
+   float sel[4];
+   /* The selection's name, and for each slider its name, its value
+    * as shown, where it is (0 to 1) and how many notches it has */
+   char sel_name[GFX_OVERLAY_BAR_NAME_LEN];
+   char sel_label[2][16];
+   char sel_value[2][24];
+   float sel_pos[2];
+   unsigned sel_notches[2];
 } gfx_overlay_bar_t;
 
 typedef struct dispgfx_widget

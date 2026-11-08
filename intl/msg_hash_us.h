@@ -32648,6 +32648,46 @@ MSG_HASH(
    "Analog"
    )
 MSG_HASH(
+   MSG_OVERLAY_EDIT_SCREEN,
+   "Screen"
+   )
+MSG_HASH(
+   MSG_OVERLAY_EDIT_RESET,
+   "Reset"
+   )
+MSG_HASH(
+   MSG_OVERLAY_EDIT_SIZE,
+   "Size"
+   )
+MSG_HASH(
+   MSG_OVERLAY_EDIT_SHAPE,
+   "Shape"
+   )
+MSG_HASH(
+   MSG_OVERLAY_EDIT_WIDTH,
+   "Width"
+   )
+MSG_HASH(
+   MSG_OVERLAY_EDIT_HEIGHT,
+   "Height"
+   )
+MSG_HASH(
+   MSG_OVERLAY_EDIT_SHAPE_ORIGINAL,
+   "Original"
+   )
+MSG_HASH(
+   MSG_OVERLAY_EDIT_SHAPE_WIDER,
+   "Wider %d"
+   )
+MSG_HASH(
+   MSG_OVERLAY_EDIT_SHAPE_TALLER,
+   "Taller %d"
+   )
+MSG_HASH(
+   MSG_OVERLAY_EDIT_CELLS,
+   "%s cells"
+   )
+MSG_HASH(
    MSG_FAILED_TO_LOAD_STATE,
    "Failed to load state from"
    )

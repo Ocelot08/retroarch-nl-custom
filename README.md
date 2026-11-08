@@ -24,6 +24,16 @@ Layout**, or **Quick Menu → On-Screen Overlay → Touch Layout** in a game.
   nothing while being edited.
 - **Grid**: the middle of a control snaps to a grid of 50 square cells
   along the long side of the screen, drawn while editing.
+- **Sizing**: tap a control (or a whole D-pad or face-button cluster)
+  to select it; a panel opens under the editor bar with a **Size**
+  slider, notched in half grid cells, and a **Shape** slider from wider
+  to taller, original in the middle. **Reset** puts it back as the
+  overlay made it, **Done** closes the panel.
+- **Game screen**: the screen is the dashed box behind the controls.
+  Tap it to select it, then drag it (snapped to the grid) or set its
+  **Width** and **Height** in grid cells. The game keeps its shape
+  inside it, and the menu follows it too. **Reset** gives it back to
+  RetroArch's own placement.
 - **Editor bar**, movable by its grip:
   - **Save**: keep the changes and go to the menu.
   - **Cancel**: go back to the last saved layout and go to the menu.
