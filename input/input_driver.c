@@ -8022,12 +8022,39 @@ static uint16_t input_overlay_layout_nth_control(input_overlay_t *ol,
    }
 }
 
+/* What a drawn desc of buttons or a key does, as its name */
+static size_t input_overlay_layout_desc_name(const struct overlay_desc *desc,
+      char *s, size_t len)
+{
+   unsigned b;
+   size_t _len = 0;
+
+   *s = '\0';
+   if (desc->type == OVERLAY_TYPE_KEYBOARD)
+      return strlcpy(s, msg_hash_to_str(MSG_OVERLAY_CONTROL_KEY), len);
+   if (     BIT256_GET(desc->button_mask, RARCH_OVERLAY_NEXT)
+         && *desc->next_index_name)
+      return snprintf(s, len, msg_hash_to_str(MSG_OVERLAY_CONTROL_PAGE),
+            desc->next_index_name);
+
+   for (b = 0; b < RARCH_BIND_LIST_END && _len < len; b++)
+   {
+      const char *bind;
+      if (     !BIT256_GET(desc->button_mask, b)
+            || !(bind = input_config_bind_map_get_desc(b)))
+         continue;
+      if (_len)
+         _len += strlcpy(s + _len, " + ", len - _len);
+      if (_len < len)
+         _len += strlcpy(s + _len, bind, len - _len);
+   }
+   return _len;
+}
+
 static size_t input_overlay_layout_name(const struct overlay *page,
       uint16_t group, char *s, size_t len)
 {
    size_t d;
-   unsigned b;
-   size_t _len                      = 0;
    const struct overlay_desc *named = NULL;
 
    *s = '\0';
@@ -8055,25 +8082,7 @@ static size_t input_overlay_layout_name(const struct overlay *page,
 
    if (!named)
       return 0;
-   if (named->type == OVERLAY_TYPE_KEYBOARD)
-      return strlcpy(s, msg_hash_to_str(MSG_OVERLAY_CONTROL_KEY), len);
-   if (     BIT256_GET(named->button_mask, RARCH_OVERLAY_NEXT)
-         && *named->next_index_name)
-      return snprintf(s, len, msg_hash_to_str(MSG_OVERLAY_CONTROL_PAGE),
-            named->next_index_name);
-
-   for (b = 0; b < RARCH_BIND_LIST_END && _len < len; b++)
-   {
-      const char *bind;
-      if (     !BIT256_GET(named->button_mask, b)
-            || !(bind = input_config_bind_map_get_desc(b)))
-         continue;
-      if (_len)
-         _len += strlcpy(s + _len, " + ", len - _len);
-      if (_len < len)
-         _len += strlcpy(s + _len, bind, len - _len);
-   }
-   return _len;
+   return input_overlay_layout_desc_name(named, s, len);
 }
 
 unsigned input_overlay_layout_control_count(void)
@@ -8122,12 +8131,23 @@ bool input_overlay_layout_control_toggle(unsigned i)
    return input_overlay_layout_save(ol);
 }
 
-/* The @i-th control, on a page of the shape of the active one, that the
- * active page has not: the page and the control there */
-static bool input_overlay_layout_nth_addable(input_overlay_t *ol,
-      unsigned i, size_t *page_out, uint16_t *group_out)
+/* A control that can be added: control @group of page @page, or only
+ * its desc @desc when that is not negative */
+typedef struct
 {
-   size_t p;
+   size_t page;
+   int desc;
+   uint16_t group;
+} input_overlay_addable_t;
+
+/* The @i-th control that can be added to the active page: first those
+ * on pages of its shape that it has not, then each drawn button of its
+ * own controls of more than one (a face button or a D-pad arrow), to
+ * stand alone, that does not stand alone yet */
+static bool input_overlay_layout_nth_addable(input_overlay_t *ol,
+      unsigned i, input_overlay_addable_t *out)
+{
+   size_t p, d, k;
    size_t index           = (size_t)(ol->active - ol->overlays);
    struct overlay *active = &ol->overlays[index];
 
@@ -8169,10 +8189,45 @@ static bool input_overlay_layout_nth_addable(input_overlay_t *ol,
             continue;
          if (i-- == 0)
          {
-            *page_out  = p;
-            *group_out = group;
+            out->page  = p;
+            out->group = group;
+            out->desc  = -1;
             return true;
          }
+      }
+   }
+
+   input_overlay_layout_group(active);
+   for (d = 0; d < active->size; d++)
+   {
+      unsigned drawn                  = 0;
+      bool alone                      = false;
+      const struct overlay_desc *desc = &active->descs[d];
+
+      if (     desc->type != OVERLAY_TYPE_BUTTONS
+            || desc->layout_added
+            || !OVERLAY_HAS_IMAGE(&desc->image))
+         continue;
+      for (k = 0; k < active->size; k++)
+      {
+         const struct overlay_desc *other = &active->descs[k];
+         if (     other->layout_group == desc->layout_group
+               && OVERLAY_HAS_IMAGE(&other->image))
+            drawn++;
+         if (     other->layout_added
+               && other->type == desc->type
+               && !memcmp(&other->button_mask, &desc->button_mask,
+                  sizeof(desc->button_mask)))
+            alone = true;
+      }
+      if (drawn < 2 || alone)
+         continue;
+      if (i-- == 0)
+      {
+         out->page  = index;
+         out->group = desc->layout_group;
+         out->desc  = (int)d;
+         return true;
       }
    }
    return false;
@@ -8180,25 +8235,27 @@ static bool input_overlay_layout_nth_addable(input_overlay_t *ol,
 
 unsigned input_overlay_layout_addable_count(void)
 {
-   size_t p;
-   uint16_t g;
+   input_overlay_addable_t add;
    unsigned n          = 0;
    input_overlay_t *ol = input_overlay_layout_target();
    if (ol)
-      while (input_overlay_layout_nth_addable(ol, n, &p, &g))
+      while (input_overlay_layout_nth_addable(ol, n, &add))
          n++;
    return n;
 }
 
 bool input_overlay_layout_addable_name(unsigned i, char *s, size_t len)
 {
-   size_t p;
-   uint16_t g;
+   input_overlay_addable_t add;
    input_overlay_t *ol = input_overlay_layout_target();
 
-   if (!ol || !input_overlay_layout_nth_addable(ol, i, &p, &g))
+   if (!ol || !input_overlay_layout_nth_addable(ol, i, &add))
       return false;
-   input_overlay_layout_name(&ol->overlays[p], g, s, len);
+   if (add.desc >= 0)
+      input_overlay_layout_desc_name(
+            &ol->overlays[add.page].descs[add.desc], s, len);
+   else
+      input_overlay_layout_name(&ol->overlays[add.page], add.group, s, len);
    return true;
 }
 
@@ -12561,6 +12618,7 @@ static config_file_t *input_overlay_layout_open(const char *overlay_path)
  * layout of the scope chosen adds, and loads the overlay again. */
 bool input_overlay_layout_add(unsigned i)
 {
+   input_overlay_addable_t add;
    size_t d, src;
    uint16_t group, added = 0;
    char key[64];
@@ -12579,8 +12637,10 @@ bool input_overlay_layout_add(unsigned i)
    input_overlay_t *ol     = input_overlay_layout_target();
 
    if (     !ol
-         || !input_overlay_layout_nth_addable(ol, i, &src, &group))
+         || !input_overlay_layout_nth_addable(ol, i, &add))
       return false;
+   src   = add.page;
+   group = add.group;
 
    input_overlay_layout_path(path, sizeof(path), ol->path,
          input_overlay_layout_scope());
@@ -12608,7 +12668,7 @@ bool input_overlay_layout_add(unsigned i)
    for (d = 0; d < from->size; d++)
    {
       const struct overlay_desc *desc = &from->descs[d];
-      if (desc->layout_group != group)
+      if (add.desc >= 0 ? (int)d != add.desc : desc->layout_group != group)
          continue;
       x0 = MIN(x0, desc->x_shift - desc->range_x);
       x1 = MAX(x1, desc->x_shift + desc->range_x);
@@ -12625,7 +12685,7 @@ bool input_overlay_layout_add(unsigned i)
       const struct overlay_desc *desc = &from->descs[d];
       unsigned to                     = (unsigned)active->size + count;
 
-      if (desc->layout_group != group)
+      if (add.desc >= 0 ? (int)d != add.desc : desc->layout_group != group)
          continue;
 
       _len = snprintf(prefix, sizeof(prefix), "overlay%u_desc%u",
