@@ -1,5 +1,11 @@
 # RetroArch Custom
 
+> **Disclaimer:** this fork was made with [Claude Code](https://claude.com/claude-code),
+> Anthropic's AI coding tool. Its changes to RetroArch were written by
+> Claude Code at the repository owner's direction, and tested on Linux,
+> and on the owner's phone. It is not affiliated with or supported by
+> the RetroArch/libretro project.
+
 A fork of [RetroArch](https://github.com/libretro/RetroArch) for Android
 phones, built around editing the on-screen touch controls. Everything
 else is RetroArch as it is upstream; see the
@@ -42,6 +48,24 @@ Layout**, or **Quick Menu → On-Screen Overlay → Touch Layout** in a game.
 - **Delete Profile**: delete a saved profile. Layouts already loaded
   from it are not changed.
 - **Reset Layout**: drop the layout chosen in Layout For.
+
+#### Screenshots
+
+Portrait, with the bundled Neo RetroPad overlay and the Highlighter
+theme.
+
+<table>
+  <tr>
+    <td align="center"><img src="docs/touch-layout/touch-layout-menu.png" width="200" alt="Touch Layout menu"><br>Touch Layout menu</td>
+    <td align="center"><img src="docs/touch-layout/editor.png" width="200" alt="Layout editor with its bar and grid"><br>Editor, bar and grid</td>
+    <td align="center"><img src="docs/touch-layout/editor-controls.png" width="200" alt="Controls list in the editor"><br>Controls list</td>
+  </tr>
+  <tr>
+    <td align="center"><img src="docs/touch-layout/editor-analog.png" width="200" alt="Editor on the analog page"><br>Analog page</td>
+    <td align="center"><img src="docs/touch-layout/add-control.png" width="200" alt="Add Control menu"><br>Add Control</td>
+    <td></td>
+  </tr>
+</table>
 
 Layouts are saved apart from the overlay itself, in
 `config/overlay_layouts/` (all content), `config/overlay_layouts/<core>/`
