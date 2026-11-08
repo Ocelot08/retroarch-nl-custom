@@ -84,6 +84,10 @@ not lose them. Profiles are in
 - Menu assets, overlays, controller profiles and core info files are
   bundled in the APK.
 
+## Roadmap
+
+Planned features are listed in [ROADMAP.md](ROADMAP.md).
+
 ## Building the Android APK
 
 Needs the Android SDK and NDK 29.0.14206865.
