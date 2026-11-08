@@ -2071,9 +2071,9 @@ bool gfx_widgets_overlay_bar_rect(unsigned dims,
          && item >= GFX_OVERLAY_BAR_SEL
          && item <= GFX_OVERLAY_BAR_SEL_TRACK1)
    {
-      int pw    = MIN(sw, (int)(u * 15.0f));
+      int pw    = bar_w;
       int ph    = row_h * 3;
-      int px    = MAX(0, MIN(bx, sw - pw));
+      int px    = bx;
       int py    = (by + bar_h + ph <= sh) ? by + bar_h : MAX(0, by - ph);
       int btn   = (int)(u * 3.5f);
       int label = (int)(u * 3.0f);
