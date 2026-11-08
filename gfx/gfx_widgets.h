@@ -202,7 +202,8 @@ typedef struct disp_widget_msg
 /* The overlay layout editor's bar and its panel of controls */
 #define GFX_OVERLAY_BAR_GRID       50
 #define GFX_OVERLAY_BAR_CONTROLS   64
-#define GFX_OVERLAY_BAR_ROWS       7
+/* Most rows the panel shows at once; it scrolls through the rest */
+#define GFX_OVERLAY_BAR_ROWS       12
 #define GFX_OVERLAY_BAR_NAME_LEN   48
 
 enum gfx_overlay_bar_item
@@ -212,11 +213,10 @@ enum gfx_overlay_bar_item
    GFX_OVERLAY_BAR_CANCEL,
    GFX_OVERLAY_BAR_CONTROLS_BUTTON,
    GFX_OVERLAY_BAR_HALF,
+   GFX_OVERLAY_BAR_ANALOG,
    GFX_OVERLAY_BAR_BAR,
    GFX_OVERLAY_BAR_PANEL,
    GFX_OVERLAY_BAR_PANEL_DONE,
-   GFX_OVERLAY_BAR_PANEL_PREV,
-   GFX_OVERLAY_BAR_PANEL_NEXT,
    /* Then the panel's rows, GFX_OVERLAY_BAR_ROWS of them */
    GFX_OVERLAY_BAR_ROW,
    GFX_OVERLAY_BAR_ITEMS = GFX_OVERLAY_BAR_ROW + GFX_OVERLAY_BAR_ROWS
@@ -227,7 +227,10 @@ enum gfx_overlay_bar_flags
    GFX_OVERLAY_BAR_FLAG_SHOWN      = (1 << 0),
    /* Twice the cells, to snap to half cells */
    GFX_OVERLAY_BAR_FLAG_HALF_GRID  = (1 << 1),
-   GFX_OVERLAY_BAR_FLAG_PANEL_OPEN = (1 << 2)
+   GFX_OVERLAY_BAR_FLAG_PANEL_OPEN = (1 << 2),
+   /* The page shown has an analog stick; there is no page to switch to */
+   GFX_OVERLAY_BAR_FLAG_ANALOG     = (1 << 3),
+   GFX_OVERLAY_BAR_FLAG_ANALOG_OFF = (1 << 4)
 };
 
 typedef struct

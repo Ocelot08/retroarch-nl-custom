@@ -7009,7 +7009,9 @@ enum input_overlay_edit_flags
    /* The bar's panel of controls is open */
    OVERLAY_EDIT_PANEL    = (1 << 8),
    /* The bar is being moved by its grip */
-   OVERLAY_EDIT_GRIP     = (1 << 9)
+   OVERLAY_EDIT_GRIP     = (1 << 9),
+   /* The panel's list is being scrolled */
+   OVERLAY_EDIT_SCROLL   = (1 << 10)
 };
 
 /* Grid cells to the longer side of the screen, square, whose corners
@@ -7035,8 +7037,11 @@ static struct
    float grip_x;
    float grip_y;
    unsigned page;
-   /* First control the panel shows */
+   /* First control the panel shows, and the first and finger height
+    * a scroll of it started from */
    unsigned panel_first;
+   unsigned scroll_first;
+   float scroll_y;
    /* gfx_overlay_bar_item held down, or -1 */
    int bar_item;
    uint16_t flags;
@@ -7662,9 +7667,63 @@ static void input_overlay_edit_leave(input_overlay_t *ol, bool save)
 /* What the widgets draw of the bar, made again at every poll */
 static gfx_overlay_bar_t input_overlay_edit_bar_drawn;
 
-static gfx_overlay_bar_t *input_overlay_edit_bar_make(void)
+/* Rows the panel shows, each @row_h high */
+static unsigned input_overlay_edit_panel_rows(const gfx_overlay_bar_t *bar,
+      int *row_h)
 {
-   unsigned i;
+   int x, y, w, h;
+   unsigned dims = video_driver_get_output_dims();
+
+   *row_h = 0;
+   if (     !gfx_widgets_overlay_bar_rect(dims, bar, GFX_OVERLAY_BAR_PANEL,
+            &x, &y, &w, &h)
+         || !gfx_widgets_overlay_bar_rect(dims, bar,
+            GFX_OVERLAY_BAR_PANEL_DONE, &x, &y, &w, row_h)
+         || *row_h <= 0)
+      return 0;
+   return (unsigned)(h / *row_h) - 1;
+}
+
+static bool input_overlay_page_has_analog(const struct overlay *page)
+{
+   size_t i;
+   for (i = 0; i < page->size; i++)
+      if (     page->descs[i].type == OVERLAY_TYPE_ANALOG_LEFT
+            || page->descs[i].type == OVERLAY_TYPE_ANALOG_RIGHT)
+         return true;
+   return false;
+}
+
+/* The page the active one's own button switches to for the analog
+ * stick, or back from it, or -1: of those that differ from the active
+ * page in having a stick, the fullest, so not a page that only hides
+ * the pad */
+static int input_overlay_edit_analog_page(const input_overlay_t *ol)
+{
+   size_t i;
+   int found      = -1;
+   bool analog    = input_overlay_page_has_analog(ol->active);
+
+   for (i = 0; i < ol->active->size; i++)
+   {
+      const struct overlay_desc *desc = &ol->active->descs[i];
+      unsigned t                      = desc->next_index;
+      if (     desc->type != OVERLAY_TYPE_BUTTONS
+            || !BIT256_GET(desc->button_mask, RARCH_OVERLAY_NEXT)
+            || t >= ol->size
+            || &ol->overlays[t] == ol->active
+            || input_overlay_page_has_analog(&ol->overlays[t]) == analog)
+         continue;
+      if (found < 0 || ol->overlays[t].size > ol->overlays[found].size)
+         found = (int)t;
+   }
+   return found;
+}
+
+static gfx_overlay_bar_t *input_overlay_edit_bar_make(input_overlay_t *ol)
+{
+   unsigned i, rows;
+   int row_h;
    gfx_overlay_bar_t *bar = &input_overlay_edit_bar_drawn;
    unsigned count         = input_overlay_layout_control_count();
 
@@ -7689,12 +7748,24 @@ static gfx_overlay_bar_t *input_overlay_edit_bar_make(void)
    bar->y       = input_overlay_edit_bar.y;
    bar->pressed = input_overlay_edit.bar_item;
    bar->count   = MIN(count, GFX_OVERLAY_BAR_CONTROLS);
-   bar->first   = input_overlay_edit.panel_first;
+   bar->first   = 0;
    bar->flags   = GFX_OVERLAY_BAR_FLAG_SHOWN;
    if (input_overlay_edit_bar.half)
       bar->flags |= GFX_OVERLAY_BAR_FLAG_HALF_GRID;
+   if (input_overlay_page_has_analog(ol->active))
+      bar->flags |= GFX_OVERLAY_BAR_FLAG_ANALOG;
+   if (input_overlay_edit_analog_page(ol) < 0)
+      bar->flags |= GFX_OVERLAY_BAR_FLAG_ANALOG_OFF;
    if (input_overlay_edit.flags & OVERLAY_EDIT_PANEL)
+   {
       bar->flags |= GFX_OVERLAY_BAR_FLAG_PANEL_OPEN;
+      /* No further than the last row at the bottom */
+      rows = input_overlay_edit_panel_rows(bar, &row_h);
+      if (input_overlay_edit.panel_first + rows > bar->count)
+         input_overlay_edit.panel_first = (bar->count > rows)
+            ? bar->count - rows : 0;
+      bar->first = input_overlay_edit.panel_first;
+   }
    for (i = 0; i < bar->count; i++)
    {
       bool shown = false;
@@ -7710,11 +7781,10 @@ static gfx_overlay_bar_t *input_overlay_edit_bar_make(void)
 static int input_overlay_edit_bar_hit(float px, float py)
 {
    static const unsigned order[] = {
-      GFX_OVERLAY_BAR_PANEL_DONE, GFX_OVERLAY_BAR_PANEL_PREV,
-      GFX_OVERLAY_BAR_PANEL_NEXT, GFX_OVERLAY_BAR_PANEL,
+      GFX_OVERLAY_BAR_PANEL_DONE, GFX_OVERLAY_BAR_PANEL,
       GFX_OVERLAY_BAR_GRIP, GFX_OVERLAY_BAR_SAVE, GFX_OVERLAY_BAR_CANCEL,
       GFX_OVERLAY_BAR_CONTROLS_BUTTON, GFX_OVERLAY_BAR_HALF,
-      GFX_OVERLAY_BAR_BAR };
+      GFX_OVERLAY_BAR_ANALOG, GFX_OVERLAY_BAR_BAR };
    unsigned i;
    int x, y, w, h;
    unsigned dims          = video_driver_get_output_dims();
@@ -7755,15 +7825,17 @@ static bool input_overlay_edit_bar_tap(input_overlay_t *ol, int item)
       case GFX_OVERLAY_BAR_PANEL_DONE:
          input_overlay_edit.flags &= ~OVERLAY_EDIT_PANEL;
          break;
-      case GFX_OVERLAY_BAR_PANEL_PREV:
-         input_overlay_edit.panel_first =
-               (input_overlay_edit.panel_first > GFX_OVERLAY_BAR_ROWS)
-            ? input_overlay_edit.panel_first - GFX_OVERLAY_BAR_ROWS : 0;
-         break;
-      case GFX_OVERLAY_BAR_PANEL_NEXT:
-         if (     input_overlay_edit.panel_first + GFX_OVERLAY_BAR_ROWS
-               < input_overlay_edit_bar_drawn.count)
-            input_overlay_edit.panel_first += GFX_OVERLAY_BAR_ROWS;
+      case GFX_OVERLAY_BAR_ANALOG:
+         {
+            int page = input_overlay_edit_analog_page(ol);
+            if (page >= 0)
+            {
+               /* As the page's own button, which leaves the rotation be */
+               bool rotate    = false;
+               ol->next_index = (unsigned)page;
+               command_event(CMD_EVENT_OVERLAY_NEXT, &rotate);
+            }
+         }
          break;
       default:
          /* A control on or off, saved or not with the rest */
@@ -7869,7 +7941,11 @@ static void input_overlay_edit_poll(input_overlay_t *ol, float opacity)
          }
 #endif
          else
-            input_overlay_edit.bar_item = item;
+         {
+            input_overlay_edit.bar_item     = item;
+            input_overlay_edit.scroll_y     = sy;
+            input_overlay_edit.scroll_first = input_overlay_edit.panel_first;
+         }
       }
       else if (input_overlay_edit.flags & OVERLAY_EDIT_GRIP)
       {
@@ -7878,6 +7954,34 @@ static void input_overlay_edit_poll(input_overlay_t *ol, float opacity)
          input_overlay_edit_bar.y = (sy - input_overlay_edit.grip_y)
             / VIDEO_SCALE_H(dims);
       }
+#ifdef HAVE_GFX_WIDGETS
+      else if (     (input_overlay_edit.flags & OVERLAY_EDIT_SCROLL)
+               || input_overlay_edit.bar_item >= GFX_OVERLAY_BAR_ROW
+               || input_overlay_edit.bar_item == GFX_OVERLAY_BAR_PANEL)
+      {
+         /* A drag up or down the panel scrolls it, a row a row height;
+          * past a third of one it is no longer a tap */
+         int row_h;
+         unsigned rows = input_overlay_edit_panel_rows(
+               &input_overlay_edit_bar_drawn, &row_h);
+         float d       = sy - input_overlay_edit.scroll_y;
+         if (     !(input_overlay_edit.flags & OVERLAY_EDIT_SCROLL)
+               && row_h > 0
+               && (d > row_h / 3.0f || d < -row_h / 3.0f))
+         {
+            input_overlay_edit.flags   |= OVERLAY_EDIT_SCROLL;
+            input_overlay_edit.bar_item = -1;
+         }
+         if ((input_overlay_edit.flags & OVERLAY_EDIT_SCROLL) && row_h > 0)
+         {
+            unsigned count = input_overlay_edit_bar_drawn.count;
+            int last       = (count > rows) ? (int)(count - rows) : 0;
+            int first      = (int)input_overlay_edit.scroll_first
+               - (int)floorf(d / row_h + 0.5f);
+            input_overlay_edit.panel_first = (unsigned)MAX(0, MIN(first, last));
+         }
+      }
+#endif
       else if (input_overlay_edit.flags & OVERLAY_EDIT_DRAGGING)
          input_overlay_edit_move(ol, x, y);
    }
@@ -7888,7 +7992,8 @@ static void input_overlay_edit_poll(input_overlay_t *ol, float opacity)
       /* Only placed: a control does nothing while it is laid out */
       input_overlay_edit_drop(ol);
       input_overlay_edit.bar_item = -1;
-      input_overlay_edit.flags   &= ~(OVERLAY_EDIT_HELD | OVERLAY_EDIT_GRIP);
+      input_overlay_edit.flags   &= ~(OVERLAY_EDIT_HELD | OVERLAY_EDIT_GRIP
+            | OVERLAY_EDIT_SCROLL);
 
 #ifdef HAVE_GFX_WIDGETS
       /* The bar's parts act on a lift over them */
@@ -7933,7 +8038,7 @@ static void input_overlay_edit_poll(input_overlay_t *ol, float opacity)
             input_st->overlay_leds_lit, input_overlay_led_map());
 
 #ifdef HAVE_GFX_WIDGETS
-   gfx_widgets_set_overlay_bar(input_overlay_edit_bar_make());
+   gfx_widgets_set_overlay_bar(input_overlay_edit_bar_make(ol));
 #endif
 }
 

@@ -32608,12 +32608,8 @@ MSG_HASH(
    "Done"
    )
 MSG_HASH(
-   MSG_OVERLAY_EDIT_PREV,
-   "Prev"
-   )
-MSG_HASH(
-   MSG_OVERLAY_EDIT_NEXT,
-   "Next"
+   MSG_OVERLAY_EDIT_ANALOG,
+   "Analog"
    )
 MSG_HASH(
    MSG_FAILED_TO_LOAD_STATE,

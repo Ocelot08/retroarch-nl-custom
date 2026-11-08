@@ -2026,33 +2026,34 @@ bool gfx_widgets_overlay_bar_rect(unsigned dims,
       const gfx_overlay_bar_t *bar, unsigned item,
       int *x, int *y, int *w, int *h)
 {
-   /* In grid cells: the bar is 3 high, its parts these wide */
-   static const float part[] = { 2.0f, 3.5f, 4.0f, 4.5f, 7.0f };
+   /* In grid cells: left, row (-1 for both) and width of each part of
+    * the bar, which is two rows of 2.5 */
+   static const float part[][3] = {
+      { 0.0f, -1.0f, 2.0f },
+      { 2.0f,  0.0f, 4.5f }, { 6.5f, 0.0f, 5.0f }, { 11.5f, 0.0f, 5.5f },
+      { 2.0f,  1.0f, 7.5f }, { 9.5f, 1.0f, 7.5f } };
    int sw    = (int)VIDEO_SCALE_W(dims);
    int sh    = (int)VIDEO_SCALE_H(dims);
    float u   = (float)MAX(sw, sh) / GFX_OVERLAY_BAR_GRID;
-   int bar_w, bar_h, bx, by;
-   unsigned i;
+   int bar_w, bar_h, row_h, bx, by;
 
    if (     !bar || !(bar->flags & GFX_OVERLAY_BAR_FLAG_SHOWN)
          || sw <= 0 || sh <= 0)
       return false;
-   if (u * 21.0f > (float)sw)
-      u = (float)sw / 21.0f;
-   bar_w = (int)(u * 21.0f);
-   bar_h = (int)(u * 3.0f);
+   if (u * 17.0f > (float)sw)
+      u = (float)sw / 17.0f;
+   row_h = (int)(u * 2.5f);
+   bar_w = (int)(u * 17.0f);
+   bar_h = row_h * 2;
    bx    = MAX(0, MIN((int)(bar->x * sw), sw - bar_w));
    by    = MAX(0, MIN((int)(bar->y * sh), sh - bar_h));
 
-   if (item <= GFX_OVERLAY_BAR_HALF)
+   if (item <= GFX_OVERLAY_BAR_ANALOG)
    {
-      float left = 0.0f;
-      for (i = 0; i < item; i++)
-         left += part[i];
-      *x = bx + (int)(left * u);
-      *y = by;
-      *w = (int)(part[item] * u);
-      *h = bar_h;
+      *x = bx + (int)(part[item][0] * u);
+      *w = (int)((part[item][0] + part[item][2]) * u) - (int)(part[item][0] * u);
+      *y = by + (part[item][1] > 0.0f ? row_h : 0);
+      *h = part[item][1] < 0.0f ? bar_h : row_h;
       return true;
    }
    if (item == GFX_OVERLAY_BAR_BAR)
@@ -2067,14 +2068,18 @@ bool gfx_widgets_overlay_bar_rect(unsigned dims,
    if (!(bar->flags & GFX_OVERLAY_BAR_FLAG_PANEL_OPEN))
       return false;
 
-   /* The panel: under the bar, or over it where there is no room */
+   /* The panel: under the bar, or over it when there is more room
+    * there, with as many rows as fit */
    {
-      unsigned rows = MIN(bar->count, GFX_OVERLAY_BAR_ROWS);
-      int row_h     = (int)(u * 2.5f);
+      int below     = (sh - by - bar_h) / row_h - 1;
+      int above     = by / row_h - 1;
+      int want      = (int)MIN(MAX(bar->count, 1), GFX_OVERLAY_BAR_ROWS);
+      bool under    = below >= want || below >= above;
+      int rows      = MAX(1, MIN(want, under ? below : above));
       int pw        = MIN(sw, (int)(u * 15.0f));
-      int ph        = row_h * (int)(rows + 1);
+      int ph        = row_h * (rows + 1);
       int px        = MAX(0, MIN(bx, sw - pw));
-      int py        = (by + bar_h + ph <= sh) ? by + bar_h : MAX(0, by - ph);
+      int py        = under ? by + bar_h : MAX(0, by - ph);
 
       switch (item)
       {
@@ -2090,20 +2095,11 @@ bool gfx_widgets_overlay_bar_rect(unsigned dims,
             *y = py;
             *h = row_h;
             return true;
-         case GFX_OVERLAY_BAR_PANEL_PREV:
-         case GFX_OVERLAY_BAR_PANEL_NEXT:
-            if (bar->count <= GFX_OVERLAY_BAR_ROWS)
-               return false;
-            *w = (int)(u * 4.0f);
-            *x = px + (item == GFX_OVERLAY_BAR_PANEL_NEXT ? *w : 0);
-            *y = py;
-            *h = row_h;
-            return true;
          default:
             break;
       }
       if (     item >= GFX_OVERLAY_BAR_ROW
-            && item - GFX_OVERLAY_BAR_ROW < rows
+            && (int)(item - GFX_OVERLAY_BAR_ROW) < rows
             && bar->first + (item - GFX_OVERLAY_BAR_ROW) < bar->count)
       {
          *x = px;
@@ -2140,6 +2136,7 @@ static void gfx_widgets_overlay_frame(gfx_display_t *p_disp,
 #define OVERLAY_BAR_LINE   0x00FCB8
 #define OVERLAY_BAR_CHECK  0xCCFF02
 #define OVERLAY_BAR_TEXT   0xFFFFFFFF
+#define OVERLAY_BAR_TEXT_DIM 0xFFFFFF59
 
 /* The scale at which @label fits in @w x @h, never over 1 */
 static float gfx_widgets_overlay_fit(dispgfx_widget_t *p_dispwidget,
@@ -2161,7 +2158,7 @@ static float gfx_widgets_overlay_fit(dispgfx_widget_t *p_dispwidget,
 
 static void gfx_widgets_overlay_text(dispgfx_widget_t *p_dispwidget,
       unsigned video_dims, const char *label, int x, int y, int w, int h,
-      float scale, bool centred)
+      float scale, bool centred, uint32_t color)
 {
    gfx_widget_font_data_t *font = &p_dispwidget->gfx_widget_fonts.regular;
 
@@ -2170,7 +2167,7 @@ static void gfx_widgets_overlay_text(dispgfx_widget_t *p_dispwidget,
    gfx_display_draw_text(font->font, label,
          centred ? x + w / 2.0f : (float)x,
          y + h / 2.0f + font->line_centre_offset * scale,
-         video_dims, OVERLAY_BAR_TEXT,
+         video_dims, color,
          centred ? TEXT_ALIGN_CENTER : TEXT_ALIGN_LEFT,
          scale, false, 0.0f, false);
    font->usage_count++;
@@ -2179,24 +2176,26 @@ static void gfx_widgets_overlay_text(dispgfx_widget_t *p_dispwidget,
 /* Where the label of a box goes, within @w x @h */
 #define OVERLAY_CHECK_LABEL_X(h)  ((h) / 4 + (h) / 2 + (h) / 4)
 
-/* A box, ticked or not, and @label after it, within @w x @h */
+/* A box, ticked or not, and @label after it, within @w x @h; dimmed
+ * when it cannot be changed */
 static void gfx_widgets_overlay_check(dispgfx_widget_t *p_dispwidget,
       gfx_display_t *p_disp, void *userdata, unsigned video_dims,
-      int x, int y, int w, int h, bool ticked, const char *label,
+      int x, int y, int w, int h, bool ticked, bool dim, const char *label,
       float scale)
 {
-   int box = h / 2;
-   int top = y + (h - box) / 2;
-   int pad = h / 4;
+   int box     = h / 2;
+   int top     = y + (h - box) / 2;
+   int pad     = h / 4;
+   float alpha = dim ? 0.35f : 1.0f;
 
    gfx_widgets_overlay_frame(p_disp, userdata, video_dims,
-         x + pad, top, box, box, OVERLAY_BAR_LINE, 1.0f);
+         x + pad, top, box, box, OVERLAY_BAR_LINE, alpha);
    if (ticked)
       gfx_widgets_overlay_rect(p_disp, userdata, video_dims,
-            x + pad + 3, top + 3, box - 6, box - 6, OVERLAY_BAR_CHECK, 1.0f);
+            x + pad + 3, top + 3, box - 6, box - 6, OVERLAY_BAR_CHECK, alpha);
    gfx_widgets_overlay_text(p_dispwidget, video_dims, label,
          x + OVERLAY_CHECK_LABEL_X(h), y, w - OVERLAY_CHECK_LABEL_X(h), h,
-         scale, false);
+         scale, false, dim ? OVERLAY_BAR_TEXT_DIM : OVERLAY_BAR_TEXT);
 }
 
 /* The grid, 1px white lines at 30% (at 15% between them for half
@@ -2207,7 +2206,8 @@ static void gfx_widgets_draw_overlay_bar(dispgfx_widget_t *p_dispwidget,
 {
    static const enum msg_hash_enums labels[] = {
       MSG_UNKNOWN, MSG_OVERLAY_EDIT_SAVE, MSG_OVERLAY_EDIT_CANCEL,
-      MSG_OVERLAY_EDIT_CONTROLS, MSG_OVERLAY_EDIT_HALF_GRID };
+      MSG_OVERLAY_EDIT_CONTROLS, MSG_OVERLAY_EDIT_HALF_GRID,
+      MSG_OVERLAY_EDIT_ANALOG };
    const gfx_overlay_bar_t *bar = &p_dispwidget->overlay_bar_drawn;
    unsigned w     = VIDEO_SCALE_W(video_dims);
    unsigned h     = VIDEO_SCALE_H(video_dims);
@@ -2223,10 +2223,10 @@ static void gfx_widgets_draw_overlay_bar(dispgfx_widget_t *p_dispwidget,
       return;
 
    /* One size for the bar's labels, the one the longest needs */
-   for (i = GFX_OVERLAY_BAR_SAVE; i <= GFX_OVERLAY_BAR_HALF; i++)
+   for (i = GFX_OVERLAY_BAR_SAVE; i <= GFX_OVERLAY_BAR_ANALOG; i++)
    {
       gfx_widgets_overlay_bar_rect(video_dims, bar, i, &x, &y, &iw, &ih);
-      if (i == GFX_OVERLAY_BAR_HALF)
+      if (i >= GFX_OVERLAY_BAR_HALF)
          iw -= OVERLAY_CHECK_LABEL_X(ih);
       scale = MIN(scale, gfx_widgets_overlay_fit(p_dispwidget,
                msg_hash_to_str(labels[i]), iw, ih));
@@ -2250,27 +2250,41 @@ static void gfx_widgets_draw_overlay_bar(dispgfx_widget_t *p_dispwidget,
          x, y, iw, ih, OVERLAY_BAR_BG, 0.85f);
    gfx_widgets_overlay_frame(p_disp, userdata, video_dims,
          x, y, iw, ih, OVERLAY_BAR_LINE, 1.0f);
-   for (i = GFX_OVERLAY_BAR_GRIP; i <= GFX_OVERLAY_BAR_HALF; i++)
+   for (i = GFX_OVERLAY_BAR_GRIP; i <= GFX_OVERLAY_BAR_ANALOG; i++)
    {
       gfx_widgets_overlay_bar_rect(video_dims, bar, i, &x, &y, &iw, &ih);
       if (bar->pressed == (int)i)
          gfx_widgets_overlay_rect(p_disp, userdata, video_dims,
                x, y, iw, ih, OVERLAY_BAR_LINE, 0.3f);
-      if (i > GFX_OVERLAY_BAR_GRIP)
+      if (i == GFX_OVERLAY_BAR_SAVE || i == GFX_OVERLAY_BAR_HALF)
+         gfx_widgets_overlay_rect(p_disp, userdata, video_dims,
+               x, y, 1, ih, OVERLAY_BAR_LINE, 0.5f);
+      else if (i > GFX_OVERLAY_BAR_GRIP)
          gfx_widgets_overlay_rect(p_disp, userdata, video_dims,
                x, y + ih / 5, 1, ih - 2 * (ih / 5), OVERLAY_BAR_LINE, 0.5f);
+      if (i >= GFX_OVERLAY_BAR_HALF)
+         gfx_widgets_overlay_rect(p_disp, userdata, video_dims,
+               x + (i == GFX_OVERLAY_BAR_HALF ? 0 : iw / 10), y,
+               iw - iw / 10, 1, OVERLAY_BAR_LINE, 0.5f);
       switch (i)
       {
          case GFX_OVERLAY_BAR_GRIP:
             /* Three lines to take hold of */
             for (n = 0; n < 3; n++)
                gfx_widgets_overlay_rect(p_disp, userdata, video_dims,
-                     x + iw / 4, y + ih / 3 + (int)n * (ih / 6) - 1,
+                     x + iw / 4, y + ih / 2 + ((int)n - 1) * (ih / 10) - 1,
                      iw / 2, 2, OVERLAY_BAR_LINE, 1.0f);
             break;
          case GFX_OVERLAY_BAR_HALF:
             gfx_widgets_overlay_check(p_dispwidget, p_disp, userdata,
-                  video_dims, x, y, iw, ih, half,
+                  video_dims, x, y, iw, ih, half, false,
+                  msg_hash_to_str(labels[i]), scale);
+            break;
+         case GFX_OVERLAY_BAR_ANALOG:
+            gfx_widgets_overlay_check(p_dispwidget, p_disp, userdata,
+                  video_dims, x, y, iw, ih,
+                  (bar->flags & GFX_OVERLAY_BAR_FLAG_ANALOG) != 0,
+                  (bar->flags & GFX_OVERLAY_BAR_FLAG_ANALOG_OFF) != 0,
                   msg_hash_to_str(labels[i]), scale);
             break;
          case GFX_OVERLAY_BAR_CONTROLS_BUTTON:
@@ -2281,7 +2295,8 @@ static void gfx_widgets_draw_overlay_bar(dispgfx_widget_t *p_dispwidget,
             /* fall-through */
          default:
             gfx_widgets_overlay_text(p_dispwidget, video_dims,
-                  msg_hash_to_str(labels[i]), x, y, iw, ih, scale, true);
+                  msg_hash_to_str(labels[i]), x, y, iw, ih, scale, true,
+                  OVERLAY_BAR_TEXT);
             break;
       }
    }
@@ -2291,6 +2306,7 @@ static void gfx_widgets_draw_overlay_bar(dispgfx_widget_t *p_dispwidget,
             &x, &y, &iw, &ih))
    {
       float row_scale = scale;
+      int px = x, py = y, pw = iw, ph = ih;
 
       gfx_widgets_overlay_rect(p_disp, userdata, video_dims,
             x, y, iw, ih, OVERLAY_BAR_BG, 0.85f);
@@ -2317,16 +2333,34 @@ static void gfx_widgets_draw_overlay_bar(dispgfx_widget_t *p_dispwidget,
          {
             unsigned c = bar->first + (i - GFX_OVERLAY_BAR_ROW);
             gfx_widgets_overlay_check(p_dispwidget, p_disp, userdata,
-                  video_dims, x, y, iw, ih, bar->shown[c] != 0,
+                  video_dims, x, y, iw, ih, bar->shown[c] != 0, false,
                   bar->names[c], row_scale);
             continue;
          }
          gfx_widgets_overlay_text(p_dispwidget, video_dims,
-               msg_hash_to_str(i == GFX_OVERLAY_BAR_PANEL_DONE
-                  ? MSG_OVERLAY_EDIT_DONE
-                  : i == GFX_OVERLAY_BAR_PANEL_PREV
-                  ? MSG_OVERLAY_EDIT_PREV : MSG_OVERLAY_EDIT_NEXT),
-               x, y, iw, ih, scale, true);
+               msg_hash_to_str(MSG_OVERLAY_EDIT_DONE),
+               x, y, iw, ih, scale, true, OVERLAY_BAR_TEXT);
+         /* The panel's title, before Done */
+         gfx_widgets_overlay_text(p_dispwidget, video_dims,
+               msg_hash_to_str(MSG_OVERLAY_EDIT_CONTROLS),
+               px + ih / 4, y, x - px, ih, scale, false, OVERLAY_BAR_TEXT_DIM);
+         gfx_widgets_overlay_rect(p_disp, userdata, video_dims,
+               px, y + ih - 1, pw, 1, OVERLAY_BAR_LINE, 0.5f);
+
+         /* Where the rows shown are in the list, when it scrolls */
+         n = (unsigned)(ph / ih) - 1;
+         if (bar->count > n && n)
+         {
+            int track = ph - ih - 4;
+            int thumb = MAX(ih / 3, track * (int)n / (int)bar->count);
+            int top   = (track - thumb) * (int)MIN(bar->first,
+                  bar->count - n) / (int)(bar->count - n);
+            gfx_widgets_overlay_rect(p_disp, userdata, video_dims,
+                  px + pw - 6, py + ih + 2, 3, track, OVERLAY_BAR_LINE, 0.25f);
+            gfx_widgets_overlay_rect(p_disp, userdata, video_dims,
+                  px + pw - 6, py + ih + 2 + top, 3, thumb,
+                  OVERLAY_BAR_CHECK, 1.0f);
+         }
       }
    }
 
