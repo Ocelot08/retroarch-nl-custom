@@ -8360,7 +8360,25 @@ static bool input_overlay_edit_bar_tap(input_overlay_t *ol, int item)
          break;
       case GFX_OVERLAY_BAR_SEL_RESET:
          if (input_overlay_edit.flags & OVERLAY_EDIT_SEL_SCREEN)
-            input_overlay_edit_set_screen(ol, NULL);
+         {
+            /* The game's own shape at the width set: no bars in it */
+            float w, h, box[4];
+            float aspect = video_driver_get_aspect_ratio();
+            input_overlay_edit_cell(&w, &h);
+            if (     aspect > 0.0f && w > 0.0f && h > 0.0f
+                  && input_overlay_edit_screen(ol, box))
+            {
+               box[3] = box[2] * w / aspect / h;
+               if (box[3] > 1.0f)
+               {
+                  box[3] = 1.0f;
+                  box[2] = aspect * h / w;
+               }
+               if (box[1] + box[3] > 1.0f)
+                  box[1] = 1.0f - box[3];
+               input_overlay_edit_set_screen(ol, box);
+            }
+         }
          else if (input_overlay_edit.flags & OVERLAY_EDIT_SELECTED)
             input_overlay_edit_resize(ol, input_overlay_edit.sel_group,
                   1.0f, 1.0f);
