@@ -6166,9 +6166,18 @@ void config_set_defaults(settings_t *target)
             settings->paths.directory_cache,
             g_defaults.dirs[DEFAULT_DIR_CACHE]);
    if (*g_defaults.dirs[DEFAULT_DIR_ASSETS])
+   {
       configuration_set_string(settings,
             settings->paths.directory_assets,
             g_defaults.dirs[DEFAULT_DIR_ASSETS]);
+#if defined(ANDROID) && defined(HAVE_RGUI)
+      /* The theme the custom RGUI colour theme starts with */
+      if (!*settings->paths.path_rgui_theme_preset)
+         fill_pathname_join_special(settings->paths.path_rgui_theme_preset,
+               settings->paths.directory_assets, "rgui/Highlighter.cfg",
+               sizeof(settings->paths.path_rgui_theme_preset));
+#endif
+   }
    if (*g_defaults.dirs[DEFAULT_DIR_CORE_ASSETS])
       configuration_set_string(settings,
             settings->paths.directory_core_assets,

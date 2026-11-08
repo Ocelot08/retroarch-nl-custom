@@ -1058,7 +1058,12 @@
 
 #define DEFAULT_SHOW_ADVANCED_SETTINGS true
 
+#ifdef ANDROID
+/* Highlighter (rgui/Highlighter.cfg in the assets) */
+#define DEFAULT_RGUI_COLOR_THEME RGUI_THEME_CUSTOM
+#else
 #define DEFAULT_RGUI_COLOR_THEME RGUI_THEME_CLASSIC_GREEN
+#endif
 #define DEFAULT_RGUI_TRANSPARENCY true
 
 #define DEFAULT_RGUI_INLINE_THUMBNAILS false

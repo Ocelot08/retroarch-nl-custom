@@ -1,7 +1,8 @@
 #!/bin/sh
 # Fills assets/ with what the app extracts to its data directory on first
 # run (see bundle_assets_* in frontend/drivers/platform_unix.c): menu
-# assets, overlays, Android controller profiles and core info files.
+# assets with this build's RGUI themes, overlays, Android controller
+# profiles and core info files.
 # Usage: bundle_assets.sh [download dir]
 set -eu
 
@@ -31,5 +32,7 @@ mkdir -p "$dst/assets" "$dst/overlays" "$dst/autoconfig" "$dst/info"
    | (cd "$dst/overlays" && tar xf -)
 cp -R "$src/retroarch-joypad-autoconfig/android" "$dst/autoconfig/"
 cp "$src/libretro-core-info/"*.info "$dst/info/"
+# RGUI theme presets of this build; Highlighter is the default
+cp "$here/rgui_themes/"*.cfg "$dst/assets/rgui/"
 
 du -sh "$dst"/*
