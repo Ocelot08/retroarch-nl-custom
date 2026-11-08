@@ -15186,7 +15186,7 @@ MSG_HASH(
    )
 MSG_HASH(
    MENU_ENUM_SUBLABEL_OVERLAY_EDIT_LAYOUT,
-   "Drag the overlay's controls to new positions, with or without content running. Tapping a page button turns the page. Press Back when done."
+   "Drag the overlay's controls to new positions, with or without content running. Controls do nothing while being laid out. Press Back when done."
    )
 MSG_HASH(
    MENU_ENUM_LABEL_VALUE_OVERLAY_TOUCH_LAYOUT,

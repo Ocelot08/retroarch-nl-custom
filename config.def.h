@@ -738,7 +738,12 @@
 
 #define DEFAULT_OVERLAY_BEHIND_MENU false
 
+#ifdef ANDROID
+/* The touch controls stay up over the menu */
+#define DEFAULT_OVERLAY_HIDE_IN_MENU false
+#else
 #define DEFAULT_OVERLAY_HIDE_IN_MENU true
+#endif
 
 /* Automatically disable overlays when a
  * controller is connected in port 1 */

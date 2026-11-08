@@ -7000,11 +7000,9 @@ enum input_overlay_edit_flags
    OVERLAY_EDIT_MOVED    = (1 << 4),
    /* Moves not yet saved */
    OVERLAY_EDIT_CHANGED  = (1 << 5),
-   /* The grabbed group holds menu_toggle: a tap on it finishes */
-   OVERLAY_EDIT_TAP_DONE = (1 << 6),
-   /* The grabbed group holds overlay_next: a tap on it turns the page,
-    * so that every page can be edited */
-   OVERLAY_EDIT_TAP_NEXT = (1 << 7)
+   /* Back is down, and went down while editing: its release finishes */
+   OVERLAY_EDIT_BACK     = (1 << 6),
+   OVERLAY_EDIT_BACK_NEW = (1 << 7)
 };
 
 static struct
@@ -7016,7 +7014,6 @@ static struct
    float start_x;
    float start_y;
    unsigned page;
-   unsigned next_index;
    uint8_t flags;
 } input_overlay_edit;
 
@@ -7381,8 +7378,7 @@ static void input_overlay_edit_drop(input_overlay_t *ol)
       for (i = 0; i < ol->active->size; i++)
          ol->active->descs[i].touch_mask = 0;
    input_overlay_edit.count  = 0;
-   input_overlay_edit.flags &= ~(OVERLAY_EDIT_DRAGGING
-         | OVERLAY_EDIT_MOVED | OVERLAY_EDIT_TAP_DONE | OVERLAY_EDIT_TAP_NEXT);
+   input_overlay_edit.flags &= ~(OVERLAY_EDIT_DRAGGING | OVERLAY_EDIT_MOVED);
 }
 
 static void input_overlay_edit_finish(input_overlay_t *ol, bool save)
@@ -7445,29 +7441,47 @@ static void input_overlay_edit_grab(input_overlay_t *ol, float x, float y)
    size_t index           = (size_t)(ol->active - ol->overlays);
    struct overlay *active = &ol->overlays[index];
    size_t first           = active->size;
+   bool first_drawn       = false;
    float first_area       = 0.0f;
 
-   /* The smallest drawn desc under the finger */
+   input_overlay_layout_group(active);
+
+   /* The smallest drawn desc under the finger, else the smallest of a
+    * drawn control (a D-pad's middle is only its area desc) */
    for (i = 0; i < active->size; i++)
    {
       const struct overlay_desc *desc = &active->descs[i];
       float area = desc->range_x * desc->range_y;
-      if (     !OVERLAY_HAS_IMAGE(&desc->image)
-            || (desc->flags & OVERLAY_DESC_LAYOUT_HIDDEN)
+      bool drawn = OVERLAY_HAS_IMAGE(&desc->image);
+      if (     (desc->flags & OVERLAY_DESC_LAYOUT_HIDDEN)
             || fabs(x - desc->x_shift) > desc->range_x
             || fabs(y - desc->y_shift) > desc->range_y)
          continue;
-      if (first == active->size || area < first_area)
+      if (!drawn)
       {
-         first      = i;
-         first_area = area;
+         for (j = 0; j < active->size && !drawn; j++)
+            drawn = active->descs[j].layout_group == desc->layout_group
+               && OVERLAY_HAS_IMAGE(&active->descs[j].image)
+               && !(active->descs[j].flags & OVERLAY_DESC_LAYOUT_HIDDEN);
+         if (!drawn)
+            continue;
+         drawn = false;
+      }
+      else
+         drawn = true;
+      if (     first == active->size
+            || (drawn && !first_drawn)
+            || (drawn == first_drawn && area < first_area))
+      {
+         first       = i;
+         first_drawn = drawn;
+         first_area  = area;
       }
    }
 
    if (first == active->size)
       return;
 
-   input_overlay_layout_group(active);
    group = active->descs[first].layout_group;
 
    input_overlay_edit.count = 0;
@@ -7481,13 +7495,6 @@ static void input_overlay_edit_grab(input_overlay_t *ol, float x, float y)
          break;
       /* Lit as pressed while dragged */
       desc->touch_mask = 1;
-      if (BIT256_GET(desc->button_mask, RARCH_MENU_TOGGLE))
-         input_overlay_edit.flags |= OVERLAY_EDIT_TAP_DONE;
-      if (BIT256_GET(desc->button_mask, RARCH_OVERLAY_NEXT))
-      {
-         input_overlay_edit.next_index = desc->next_index;
-         input_overlay_edit.flags     |= OVERLAY_EDIT_TAP_NEXT;
-      }
 
       for (j = 0; j < ol->size; j++)
       {
@@ -7622,29 +7629,30 @@ static void input_overlay_edit_poll(input_overlay_t *ol, float opacity)
    }
    else if (input_overlay_edit.flags & OVERLAY_EDIT_HELD)
    {
-      uint8_t flags = input_overlay_edit.flags;
-      bool tap      = (flags & (OVERLAY_EDIT_DRAGGING | OVERLAY_EDIT_MOVED))
-            == OVERLAY_EDIT_DRAGGING;
-
+      /* Only placed: a control does nothing while it is laid out */
       input_overlay_edit_drop(ol);
       input_overlay_edit.flags &= ~OVERLAY_EDIT_HELD;
+   }
 
-      if (tap && (flags & OVERLAY_EDIT_TAP_DONE))
+   /* Back finishes, as the hint says. Android sends it to the menu's
+    * own back, not to the menu toggle the run loop finishes on. Taken
+    * on release, so that nothing sees it held once editing is over. */
+   if (input_driver_device_state(0, RARCH_DEVICE_POINTER_SCREEN, 0,
+            RARCH_DEVICE_ID_POINTER_BACK))
+   {
+      if (!(input_overlay_edit.flags & OVERLAY_EDIT_BACK))
+         input_overlay_edit.flags |= OVERLAY_EDIT_BACK | OVERLAY_EDIT_BACK_NEW;
+   }
+   else if (input_overlay_edit.flags & OVERLAY_EDIT_BACK)
+   {
+      bool done = (input_overlay_edit.flags & OVERLAY_EDIT_BACK_NEW) != 0;
+      input_overlay_edit.flags &= ~(OVERLAY_EDIT_BACK | OVERLAY_EDIT_BACK_NEW);
+      if (done)
       {
-         input_overlay_edit_finish(ol, true);
+         input_overlay_edit_end();
          input_overlay_alpha_pass(ol, opacity, false, opacity,
                input_st->overlay_leds_lit, input_overlay_led_map());
-         input_overlay_edit_return();
          return;
-      }
-
-      if (     tap
-            && (flags & OVERLAY_EDIT_TAP_NEXT)
-            && input_overlay_edit.next_index < ol->size)
-      {
-         bool check_rotation = true;
-         ol->next_index      = input_overlay_edit.next_index;
-         command_event(CMD_EVENT_OVERLAY_NEXT, &check_rotation);
       }
    }
 
@@ -7666,8 +7674,10 @@ void input_overlay_edit_begin(void)
       return;
 
    memset(&input_overlay_edit, 0, sizeof(input_overlay_edit));
-   /* Held: a finger still down from the menu grabs nothing */
-   input_overlay_edit.flags = OVERLAY_EDIT_ACTIVE | OVERLAY_EDIT_HELD;
+   /* Held: a finger still down from the menu grabs nothing, a Back
+    * still down from it finishes nothing */
+   input_overlay_edit.flags = OVERLAY_EDIT_ACTIVE | OVERLAY_EDIT_HELD
+         | OVERLAY_EDIT_BACK;
 
    if (     runloop_st->current_core_type != CORE_TYPE_DUMMY
          && !(runloop_st->flags & RUNLOOP_FLAG_PAUSED))
