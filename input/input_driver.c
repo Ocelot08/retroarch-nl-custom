@@ -7008,8 +7008,8 @@ enum input_overlay_edit_flags
    OVERLAY_EDIT_BACK_NEW = (1 << 7)
 };
 
-/* Grid cells to the longer side of the screen, square, that the left
- * and top edges of what is dragged snap to */
+/* Grid cells to the longer side of the screen, square, whose corners
+ * the middle of what is dragged snaps to */
 #define OVERLAY_EDIT_GRID 50
 
 static struct
@@ -7020,10 +7020,10 @@ static struct
    size_t cap;
    float start_x;
    float start_y;
-   /* Left and top edges of what is drawn of the grabbed control, as
-    * fractions of the screen */
-   float left;
-   float top;
+   /* Middle of what is drawn of the grabbed control, as fractions of
+    * the screen */
+   float mid_x;
+   float mid_y;
    unsigned page;
    uint8_t flags;
 } input_overlay_edit;
@@ -7522,17 +7522,22 @@ static void input_overlay_edit_grab(input_overlay_t *ol, float x, float y)
       }
    }
 
-   input_overlay_edit.left = 1.0f;
-   input_overlay_edit.top  = 1.0f;
-   for (i = 0; i < active->size; i++)
    {
-      const struct overlay_desc *desc = &active->descs[i];
-      if (     desc->layout_group != group
-            || !OVERLAY_HAS_IMAGE(&desc->image)
-            || (desc->flags & OVERLAY_DESC_LAYOUT_HIDDEN))
-         continue;
-      input_overlay_edit.left = MIN(input_overlay_edit.left, desc->mod_x);
-      input_overlay_edit.top  = MIN(input_overlay_edit.top,  desc->mod_y);
+      float x0 = 1.0f, y0 = 1.0f, x1 = 0.0f, y1 = 0.0f;
+      for (i = 0; i < active->size; i++)
+      {
+         const struct overlay_desc *desc = &active->descs[i];
+         if (     desc->layout_group != group
+               || !OVERLAY_HAS_IMAGE(&desc->image)
+               || (desc->flags & OVERLAY_DESC_LAYOUT_HIDDEN))
+            continue;
+         x0 = MIN(x0, desc->mod_x);
+         y0 = MIN(y0, desc->mod_y);
+         x1 = MAX(x1, desc->mod_x + desc->mod_w);
+         y1 = MAX(y1, desc->mod_y + desc->mod_h);
+      }
+      input_overlay_edit.mid_x = (x0 + x1) * 0.5f;
+      input_overlay_edit.mid_y = (y0 + y1) * 0.5f;
    }
 
    input_overlay_edit.page     = (unsigned)index;
@@ -7553,7 +7558,7 @@ static void input_overlay_edit_move(input_overlay_t *ol, float x, float y)
       return;
    input_overlay_edit.flags |= OVERLAY_EDIT_MOVED | OVERLAY_EDIT_CHANGED;
 
-   /* The control's left and top edges onto the grid */
+   /* The control's middle onto a grid corner */
    {
       unsigned dims = video_driver_get_output_dims();
       float w       = (float)VIDEO_SCALE_W(dims);
@@ -7562,12 +7567,12 @@ static void input_overlay_edit_move(input_overlay_t *ol, float x, float y)
       if (     cell >= 1.0f
             && ol->active->mod_w > 0.0f && ol->active->mod_h > 0.0f)
       {
-         float left = (input_overlay_edit.left + dx * ol->active->mod_w) * w;
-         float top  = (input_overlay_edit.top  + dy * ol->active->mod_h) * h;
-         left = (float)floor(left / cell + 0.5f) * cell;
-         top  = (float)floor(top  / cell + 0.5f) * cell;
-         dx   = (left / w - input_overlay_edit.left) / ol->active->mod_w;
-         dy   = (top  / h - input_overlay_edit.top)  / ol->active->mod_h;
+         float mx = (input_overlay_edit.mid_x + dx * ol->active->mod_w) * w;
+         float my = (input_overlay_edit.mid_y + dy * ol->active->mod_h) * h;
+         mx = (float)floor(mx / cell + 0.5f) * cell;
+         my = (float)floor(my / cell + 0.5f) * cell;
+         dx = (mx / w - input_overlay_edit.mid_x) / ol->active->mod_w;
+         dy = (my / h - input_overlay_edit.mid_y) / ol->active->mod_h;
       }
    }
 
