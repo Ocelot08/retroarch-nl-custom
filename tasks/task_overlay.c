@@ -611,7 +611,7 @@ static bool task_overlay_load_desc_drawn(
    char *p;
    unsigned n      = 0;
    bool movable    = false;
-   float rx, ry, tmp;
+   float rx, ry, pack_rx, pack_ry, tmp;
    int img_idx;
    config_file_t *conf = loader->conf;
    float w         = (float)VIDEO_SCALE_W(loader->draw_dims);
@@ -647,6 +647,8 @@ static bool task_overlay_load_desc_drawn(
       return false;
    rx = (float)rstrtod(tok[4], NULL);
    ry = (float)rstrtod(tok[5], NULL);
+   pack_rx = rx;
+   pack_ry = ry;
 
    snprintf(key, sizeof(key), "overlay%u_desc%u_layout_w", ol_idx, desc_idx);
    if (config_get_float(conf, key, &tmp) && tmp > 0.0f)
@@ -666,9 +668,12 @@ static bool task_overlay_load_desc_drawn(
    /* A little over the size shown, as the page may be scaled up */
    draw.width  = (unsigned)MIN(1024.0f, MAX(8.0f, 2.0f * rx * w * 1.25f));
    draw.height = (unsigned)MIN(1024.0f, MAX(8.0f, 2.0f * ry * h * 1.25f));
+   draw.pack_width  = (unsigned)MAX(1.0f, 2.0f * pack_rx * w * 1.25f);
+   draw.pack_height = (unsigned)MAX(1.0f, 2.0f * pack_ry * h * 1.25f);
 
-   snprintf(name, sizeof(name), "drawn/%d/%u/%s/%ux%u", (int)draw.shape,
-         draw.dir, draw.label, draw.width, draw.height);
+   snprintf(name, sizeof(name), "drawn/%d/%u/%s/%ux%u/%ux%u",
+         (int)draw.shape, draw.dir, draw.label, draw.width, draw.height,
+         draw.pack_width, draw.pack_height);
    img_idx = string_list_find_elem(loader->image_list, name) - 1;
    if (img_idx >= 0)
    {

@@ -48,6 +48,10 @@ typedef struct
    unsigned dir;
    unsigned width;
    unsigned height;
+   /* Its size as the overlay made it, in the same pixels: the label
+    * and arrow follow the button's size but not its shape */
+   unsigned pack_width;
+   unsigned pack_height;
    char label[16];
 } overlay_draw_t;
 

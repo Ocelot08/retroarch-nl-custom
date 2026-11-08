@@ -218,52 +218,62 @@ static float overlay_draw_polygon(float x, float y, const float *pts,
    return d;
 }
 
-/* An arrow pointing up in a unit box, its point down to the D-pad's
- * middle, and its small triangle; turned for the other directions */
+/* @u, @v of a unit box pointing up, turned for @dir, as offsets of
+ * @w x @h */
+static void overlay_draw_turn(unsigned dir, float u, float v,
+      float w, float h, float *x, float *y)
+{
+   switch (dir)
+   {
+      case 1: /* down */
+         *x = u * w;
+         *y = -v * h;
+         break;
+      case 2: /* left: up turned, across */
+         *x = v * w;
+         *y = u * h;
+         break;
+      case 3: /* right */
+         *x = -v * w;
+         *y = u * h;
+         break;
+      default:
+         *x = u * w;
+         *y = v * h;
+         break;
+   }
+}
+
+/* An arrow pointing up, its point down to the D-pad's middle, filling
+ * @w x @h; and its small triangle, @tri_w x @tri_h however the arrow
+ * is shaped. Turned for the other directions. */
 static void overlay_draw_arrow_points(unsigned dir, float w, float h,
-      float *body, float *tri)
+      float tri_w, float tri_h, float *body, float *tri)
 {
    static const float up_body[] = {
       0.04f, 0.04f,  0.96f, 0.04f,  0.96f, 0.64f,  0.5f, 0.97f,
       0.04f, 0.64f };
+   /* About the triangle's middle, which is 0.38 down the arrow */
    static const float up_tri[] = {
-      0.5f, 0.2f,  0.74f, 0.47f,  0.26f, 0.47f };
+      0.0f, -0.18f,  0.24f, 0.09f,  -0.24f, 0.09f };
+   float mx, my;
    unsigned i;
 
-   for (i = 0; i < 5 + 3; i++)
+   for (i = 0; i < 5; i++)
    {
-      float u = (i < 5) ? up_body[2 * i]     : up_tri[2 * (i - 5)];
-      float v = (i < 5) ? up_body[2 * i + 1] : up_tri[2 * (i - 5) + 1];
-      float x, y;
-      switch (dir)
-      {
-         case 1: /* down */
-            x = u * w;
-            y = (1.0f - v) * h;
-            break;
-         case 2: /* left: up turned, across */
-            x = v * w;
-            y = u * h;
-            break;
-         case 3: /* right */
-            x = (1.0f - v) * w;
-            y = u * h;
-            break;
-         default:
-            x = u * w;
-            y = v * h;
-            break;
-      }
-      if (i < 5)
-      {
-         body[2 * i]     = x;
-         body[2 * i + 1] = y;
-      }
-      else
-      {
-         tri[2 * (i - 5)]     = x;
-         tri[2 * (i - 5) + 1] = y;
-      }
+      overlay_draw_turn(dir, up_body[2 * i] - 0.5f,
+            up_body[2 * i + 1] - 0.5f, w, h, &body[2 * i],
+            &body[2 * i + 1]);
+      body[2 * i]     += w * 0.5f;
+      body[2 * i + 1] += h * 0.5f;
+   }
+   overlay_draw_turn(dir, 0.0f, 0.38f - 0.5f, w, h, &mx, &my);
+   for (i = 0; i < 3; i++)
+   {
+      overlay_draw_turn(dir, up_tri[2 * i], up_tri[2 * i + 1],
+            tri_w, tri_h, &tri[2 * i], &tri[2 * i + 1]);
+      tri[2 * i]     += w * 0.5f + mx;
+      tri[2 * i + 1] += h * 0.5f + my;
    }
 }
 
@@ -359,6 +369,11 @@ bool input_overlay_draw_render(struct texture_image *img,
    float stroke    = MAX(1.5f, short_px * 0.055f);
    float radius    = MIN(hx, hy);
    bool hollow     = draw->shape == OVERLAY_DRAW_RING;
+   /* How much bigger than the overlay made it, along its longer side:
+    * Shape only narrows the other, so this is the button's Size */
+   float pack_w    = draw->pack_width  ? (float)draw->pack_width  : (float)w;
+   float pack_h    = draw->pack_height ? (float)draw->pack_height : (float)h;
+   float grow      = (float)MAX(w, h) / MAX(pack_w, pack_h);
 
    if (w < 4 || h < 4 || w > 2048 || h > 2048)
       return false;
@@ -375,7 +390,8 @@ bool input_overlay_draw_render(struct texture_image *img,
    else if (draw->shape == OVERLAY_DRAW_RING)
       stroke = MAX(1.5f, short_px * 0.02f);
    if (draw->shape == OVERLAY_DRAW_ARROW)
-      overlay_draw_arrow_points(draw->dir, (float)w, (float)h, body, tri);
+      overlay_draw_arrow_points(draw->dir, (float)w, (float)h,
+            pack_w * grow * 0.85f, pack_h * grow * 0.85f, body, tri);
 
    /* The label, or the arrow's triangle, as coverage */
    if (draw->shape == OVERLAY_DRAW_ARROW)
@@ -387,8 +403,12 @@ bool input_overlay_draw_render(struct texture_image *img,
    }
    else if (!hollow)
    {
-      /* Short labels by their height, long ones by the room across */
-      float cap = short_px * (strlen(draw->label) > 2 ? 0.3f : 0.46f);
+      /* Short labels by their height, long ones by the room across;
+       * as the button was made, grown with its Size, and kept inside it
+       * however narrow its Shape makes it */
+      float cap = MIN(pack_w, pack_h) * grow
+         * (strlen(draw->label) > 2 ? 0.255f : 0.39f);
+      cap       = MIN(cap, short_px * 0.72f);
       overlay_draw_label(cover, w, h, draw->label, font, cap,
             (draw->shape == OVERLAY_DRAW_RECT ? 0.8f : 0.72f) * w);
    }
