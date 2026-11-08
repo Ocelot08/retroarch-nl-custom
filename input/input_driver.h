@@ -2183,6 +2183,14 @@ bool input_overlay_layout_add(unsigned i);
 
 /* Forgets the layout of the scope chosen and reloads the overlay. */
 void input_overlay_layout_reset(void);
+
+/* Named copies of the layout shown, kept apart for each overlay:
+ * saved from what all the scopes make of it, loaded into the scope
+ * chosen in place of its layout. The list holds the names, sorted. */
+bool input_overlay_layout_profile_save(const char *name);
+bool input_overlay_layout_profile_load(const char *name);
+bool input_overlay_layout_profile_delete(const char *name);
+struct string_list *input_overlay_layout_profile_list(void);
 #endif
 
 #ifdef HAVE_BSV_MOVIE

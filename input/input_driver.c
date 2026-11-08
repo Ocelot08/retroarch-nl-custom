@@ -51,6 +51,7 @@
 #include "common/input_device_pins.h"
 #ifdef HAVE_OVERLAY
 #include <file/config_file.h>
+#include <lists/dir_list.h>
 #include <file/file_path.h>
 #include <streams/file_stream.h>
 #include "../file_path_special.h"
@@ -12697,6 +12698,171 @@ void input_overlay_layout_reset(void)
 
    runloop_msg_queue_push(_msg, strlen(_msg), 1, 120, true, NULL,
          MESSAGE_QUEUE_ICON_DEFAULT, MESSAGE_QUEUE_CATEGORY_INFO);
+}
+
+/* config/overlay_layouts/profiles/<overlay>/, and @name.cfg in it when
+ * @name is given; empty when there is no gamepad overlay, or @name
+ * leaves nothing to name a file with. */
+static void input_overlay_layout_profile_path(char *s, size_t len,
+      const char *name)
+{
+   char dir[DIR_MAX_LENGTH];
+   char overlay[NAME_MAX_LENGTH];
+   input_overlay_t *ol = input_overlay_layout_target();
+   const char *path    = ol ? ol->path : input_overlay_path(false);
+
+   *s = '\0';
+   if (!path || !*path)
+      return;
+   fill_pathname_application_special(dir, sizeof(dir),
+         APPLICATION_SPECIAL_DIRECTORY_CONFIG);
+   if (!*dir)
+      return;
+   strlcpy(overlay, path_basename(path), sizeof(overlay));
+   path_remove_extension(overlay);
+   fill_pathname_join_special(dir, dir, "overlay_layouts", sizeof(dir));
+   fill_pathname_join_special(dir, dir, "profiles", sizeof(dir));
+   fill_pathname_join_special(dir, dir, overlay, sizeof(dir));
+
+   if (name)
+   {
+      char file[NAME_MAX_LENGTH];
+      char *c;
+      size_t _len;
+
+      while (*name == ' ' || *name == '.')
+         name++;
+      _len = strlcpy(file, name, sizeof(file) - STRLEN_CONST(".cfg"));
+      if (_len >= sizeof(file) - STRLEN_CONST(".cfg"))
+         _len = sizeof(file) - STRLEN_CONST(".cfg") - 1;
+      while (_len && file[_len - 1] == ' ')
+         file[--_len] = '\0';
+      if (!_len)
+         return;
+      /* What file systems do not take in a name */
+      for (c = file; *c; c++)
+         if (strchr("/\\:*?\"<>|", *c) || (unsigned char)*c < 0x20)
+            *c = '_';
+      strlcpy(file + _len, ".cfg", sizeof(file) - _len);
+      fill_pathname_join_special(s, dir, file, len);
+   }
+   else
+      strlcpy(s, dir, len);
+}
+
+bool input_overlay_layout_profile_save(const char *name)
+{
+   unsigned scope;
+   char path[PATH_MAX_LENGTH];
+   char dir[DIR_MAX_LENGTH];
+   bool ret            = false;
+   config_file_t *conf = NULL;
+   input_overlay_t *ol = input_overlay_layout_target();
+
+   input_overlay_layout_profile_path(path, sizeof(path), name);
+   if (!ol || !*path || !(conf = config_file_new_alloc()))
+      return false;
+
+   /* Each scope over the one before, as they load */
+   for (scope = 0; scope < OVERLAY_LAYOUT_SCOPE_LAST; scope++)
+   {
+      char layer_path[PATH_MAX_LENGTH];
+      config_file_t *layer;
+      struct config_entry_list *entry;
+
+      input_overlay_layout_path(layer_path, sizeof(layer_path), ol->path,
+            (enum overlay_layout_scope)scope);
+      if (     !*layer_path || !path_is_valid(layer_path)
+            || !(layer = config_file_new_from_path_to_string(layer_path)))
+         continue;
+      for (entry = layer->entries; entry; entry = entry->next)
+         if (entry->key && entry->value)
+            config_set_string(conf, entry->key, entry->value);
+      config_file_free(layer);
+   }
+
+   fill_pathname_basedir(dir, path, sizeof(dir));
+   if (!path_is_directory(dir))
+      path_mkdir(dir);
+   /* Nothing laid out is a profile too, of the pack as it comes */
+   if (conf->entries)
+      ret = config_file_write(conf, path, true);
+   else
+      ret = filestream_write_file(path, "", 0);
+   if (ret)
+      RARCH_LOG("[Overlay] Saved layout profile: \"%s\".\n", path);
+   else
+      RARCH_ERR("[Overlay] Failed to save layout profile: \"%s\".\n", path);
+   config_file_free(conf);
+   return ret;
+}
+
+bool input_overlay_layout_profile_load(const char *name)
+{
+   char path[PATH_MAX_LENGTH];
+   char layout[PATH_MAX_LENGTH];
+   char dir[DIR_MAX_LENGTH];
+   void *buf           = NULL;
+   int64_t _len        = 0;
+   bool ret            = false;
+   input_overlay_t *ol = input_overlay_layout_target();
+
+   input_overlay_layout_profile_path(path, sizeof(path), name);
+   if (!ol || !*path || !path_is_valid(path))
+      return false;
+   input_overlay_layout_path(layout, sizeof(layout), ol->path,
+         input_overlay_layout_scope());
+   if (     !*layout
+         || !filestream_read_file(path, &buf, &_len))
+      return false;
+
+   input_overlay_edit_finish(input_driver_st.overlay_ptr, false);
+
+   fill_pathname_basedir(dir, layout, sizeof(dir));
+   if (!path_is_directory(dir))
+      path_mkdir(dir);
+   if ((ret = filestream_write_file(layout, buf, _len)))
+      RARCH_LOG("[Overlay] Loaded layout profile \"%s\" into \"%s\".\n",
+            path, layout);
+   free(buf);
+
+   input_overlay_deinit();
+   input_overlay_init();
+   return ret;
+}
+
+bool input_overlay_layout_profile_delete(const char *name)
+{
+   char path[PATH_MAX_LENGTH];
+
+   input_overlay_layout_profile_path(path, sizeof(path), name);
+   return *path && path_is_valid(path) && filestream_delete(path) == 0;
+}
+
+struct string_list *input_overlay_layout_profile_list(void)
+{
+   size_t i;
+   char dir[DIR_MAX_LENGTH];
+   union string_list_elem_attr attr;
+   struct string_list *files;
+   struct string_list *names;
+
+   attr.i = 0;
+   input_overlay_layout_profile_path(dir, sizeof(dir), NULL);
+   if (     !*dir
+         || !(files = dir_list_new(dir, "cfg", false, false, false, false)))
+      return NULL;
+   dir_list_sort_ignore_ext(files, false);
+   if ((names = string_list_new()))
+      for (i = 0; i < files->size; i++)
+      {
+         char name[NAME_MAX_LENGTH];
+         strlcpy(name, path_basename(files->elems[i].data), sizeof(name));
+         path_remove_extension(name);
+         string_list_append(names, name, attr);
+      }
+   string_list_free(files);
+   return names;
 }
 
 /* The overlay's config as it loads, with the user layouts over it */

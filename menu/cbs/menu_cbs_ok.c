@@ -432,6 +432,10 @@ static enum msg_hash_enums action_ok_dl_to_enum(unsigned lbl)
          return MENU_ENUM_LABEL_DEFERRED_OVERLAY_LAYOUT_CONTROLS_LIST;
       case ACTION_OK_DL_OVERLAY_LAYOUT_ADD_LIST:
          return MENU_ENUM_LABEL_DEFERRED_OVERLAY_LAYOUT_ADD_LIST;
+      case ACTION_OK_DL_OVERLAY_LAYOUT_PROFILE_LOAD_LIST:
+         return MENU_ENUM_LABEL_DEFERRED_OVERLAY_LAYOUT_PROFILE_LOAD_LIST;
+      case ACTION_OK_DL_OVERLAY_LAYOUT_PROFILE_DELETE_LIST:
+         return MENU_ENUM_LABEL_DEFERRED_OVERLAY_LAYOUT_PROFILE_DELETE_LIST;
       case ACTION_OK_DL_MENU_SETTINGS_LIST:
          return MENU_ENUM_LABEL_DEFERRED_MENU_SETTINGS_LIST;
 #ifdef _3DS
@@ -1841,6 +1845,8 @@ int generic_action_ok_displaylist_push(
       case ACTION_OK_DL_OVERLAY_TOUCH_LAYOUT_LIST:
       case ACTION_OK_DL_OVERLAY_LAYOUT_CONTROLS_LIST:
       case ACTION_OK_DL_OVERLAY_LAYOUT_ADD_LIST:
+      case ACTION_OK_DL_OVERLAY_LAYOUT_PROFILE_LOAD_LIST:
+      case ACTION_OK_DL_OVERLAY_LAYOUT_PROFILE_DELETE_LIST:
       case ACTION_OK_DL_MENU_SETTINGS_LIST:
 #ifdef _3DS
       case ACTION_OK_DL_MENU_BOTTOM_SETTINGS_LIST:
@@ -2056,6 +2062,8 @@ static const ok_dl_map_t ok_dl_map[] = {
    { MENU_ENUM_LABEL_OVERLAY_TOUCH_LAYOUT, ACTION_OK_DL_OVERLAY_TOUCH_LAYOUT_LIST },
    { MENU_ENUM_LABEL_OVERLAY_LAYOUT_CONTROLS, ACTION_OK_DL_OVERLAY_LAYOUT_CONTROLS_LIST },
    { MENU_ENUM_LABEL_OVERLAY_LAYOUT_ADD, ACTION_OK_DL_OVERLAY_LAYOUT_ADD_LIST },
+   { MENU_ENUM_LABEL_OVERLAY_LAYOUT_PROFILE_LOAD, ACTION_OK_DL_OVERLAY_LAYOUT_PROFILE_LOAD_LIST },
+   { MENU_ENUM_LABEL_OVERLAY_LAYOUT_PROFILE_DELETE, ACTION_OK_DL_OVERLAY_LAYOUT_PROFILE_DELETE_LIST },
    { MENU_ENUM_LABEL_OSK_OVERLAY_SETTINGS, ACTION_OK_DL_OSK_OVERLAY_SETTINGS_LIST },
    { MENU_ENUM_LABEL_MENU_SETTINGS, ACTION_OK_DL_MENU_SETTINGS_LIST },
    { MENU_ENUM_LABEL_MENU_VIEWS_SETTINGS, ACTION_OK_DL_MENU_VIEWS_SETTINGS_LIST },
@@ -6460,6 +6468,69 @@ static int action_ok_overlay_layout_add_item(const char *path,
    input_overlay_edit_begin();
    return generic_action_ok_command(CMD_EVENT_RESUME);
 }
+
+static void action_ok_overlay_layout_profile_msg(enum msg_hash_enums msg,
+      const char *name, const char *scope)
+{
+   char _msg[256];
+   size_t _len = snprintf(_msg, sizeof(_msg), msg_hash_to_str(msg),
+         name, scope);
+   runloop_msg_queue_push(_msg, MIN(_len, sizeof(_msg) - 1), 1, 180, true,
+         NULL, MESSAGE_QUEUE_ICON_DEFAULT, MESSAGE_QUEUE_CATEGORY_INFO);
+}
+
+static void action_input_overlay_layout_profile_save(void *userdata,
+      const char *line)
+{
+   if (line && *line)
+      action_ok_overlay_layout_profile_msg(
+            input_overlay_layout_profile_save(line)
+            ? MSG_OVERLAY_LAYOUT_PROFILE_SAVED
+            : MSG_OVERLAY_LAYOUT_PROFILE_FAILED, line, NULL);
+   menu_input_dialog_end();
+}
+
+static int action_ok_overlay_layout_profile_save(const char *path,
+      const char *label, unsigned type, size_t idx, size_t entry_idx)
+{
+   menu_input_ctx_line_t line;
+   line.label         = msg_hash_to_str(MSG_OVERLAY_LAYOUT_PROFILE_NAME);
+   line.label_setting = NULL;
+   line.type          = 0;
+   line.idx           = 0;
+   line.text_type     = MENU_INPUT_DIALOG_KB_TYPE_TEXT;
+   line.cb            = action_input_overlay_layout_profile_save;
+   menu_input_dialog_start(&line);
+   return 0;
+}
+
+/* Into the scope chosen in Layout For */
+static int action_ok_overlay_layout_profile_load_item(const char *path,
+      const char *label, unsigned type, size_t idx, size_t entry_idx)
+{
+   char scope[128];
+   input_overlay_layout_scope_name(scope, sizeof(scope));
+   if (!input_overlay_layout_profile_load(path))
+   {
+      action_ok_overlay_layout_profile_msg(
+            MSG_OVERLAY_LAYOUT_PROFILE_FAILED, path, NULL);
+      return -1;
+   }
+   action_ok_overlay_layout_profile_msg(
+         MSG_OVERLAY_LAYOUT_PROFILE_LOADED, path, scope);
+   return 0;
+}
+
+static int action_ok_overlay_layout_profile_delete_item(const char *path,
+      const char *label, unsigned type, size_t idx, size_t entry_idx)
+{
+   if (!input_overlay_layout_profile_delete(path))
+      return -1;
+   action_ok_overlay_layout_profile_msg(
+         MSG_OVERLAY_LAYOUT_PROFILE_DELETED, path, NULL);
+   menu_state_get_ptr()->flags |= MENU_ST_FLAG_ENTRIES_NEED_REFRESH;
+   return 0;
+}
 #endif
 
 static int action_ok_set_core_association(const char *path,
@@ -9848,6 +9919,9 @@ static int menu_cbs_init_bind_ok_compare_label(menu_file_list_cbs_t *cbs,
          {MENU_ENUM_LABEL_OVERLAY_LAYOUT_SCOPE,                action_ok_overlay_layout_scope},
          {MENU_ENUM_LABEL_OVERLAY_LAYOUT_CONTROL,              action_ok_overlay_layout_control},
          {MENU_ENUM_LABEL_OVERLAY_LAYOUT_ADD_ITEM,             action_ok_overlay_layout_add_item},
+         {MENU_ENUM_LABEL_OVERLAY_LAYOUT_PROFILE_SAVE,         action_ok_overlay_layout_profile_save},
+         {MENU_ENUM_LABEL_OVERLAY_LAYOUT_PROFILE_LOAD_ITEM,    action_ok_overlay_layout_profile_load_item},
+         {MENU_ENUM_LABEL_OVERLAY_LAYOUT_PROFILE_DELETE_ITEM,  action_ok_overlay_layout_profile_delete_item},
 #endif
          {MENU_ENUM_LABEL_ADD_TO_FAVORITES_PLAYLIST,           action_ok_add_to_favorites_playlist},
          {MENU_ENUM_LABEL_ADD_ENTRY_TO_PLAYLIST,               action_ok_add_entry_to_playlist},

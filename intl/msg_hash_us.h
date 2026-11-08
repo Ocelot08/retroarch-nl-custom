@@ -15221,6 +15221,30 @@ MSG_HASH(
    "Add a control from the overlay's other pages. It appears in the middle of the screen, ready to be dragged into place."
    )
 MSG_HASH(
+   MENU_ENUM_LABEL_VALUE_OVERLAY_LAYOUT_PROFILE_SAVE,
+   "Save Layout as Profile"
+   )
+MSG_HASH(
+   MENU_ENUM_SUBLABEL_OVERLAY_LAYOUT_PROFILE_SAVE,
+   "Save the layout shown under a name, to load later for any core or content."
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_VALUE_OVERLAY_LAYOUT_PROFILE_LOAD,
+   "Load Profile"
+   )
+MSG_HASH(
+   MENU_ENUM_SUBLABEL_OVERLAY_LAYOUT_PROFILE_LOAD,
+   "Replace the layout chosen in 'Layout For' with a saved profile."
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_VALUE_OVERLAY_LAYOUT_PROFILE_DELETE,
+   "Delete Profile"
+   )
+MSG_HASH(
+   MENU_ENUM_SUBLABEL_OVERLAY_LAYOUT_PROFILE_DELETE,
+   "Delete a saved layout profile. Layouts already loaded from it stay as they are."
+   )
+MSG_HASH(
    MENU_ENUM_LABEL_VALUE_OVERLAY_RESET_LAYOUT,
    "Reset Layout"
    )
@@ -32562,6 +32586,26 @@ MSG_HASH(
 MSG_HASH(
    MSG_OVERLAY_LAYOUT_SCOPE_CONTENT,
    "Content: %s"
+   )
+MSG_HASH(
+   MSG_OVERLAY_LAYOUT_PROFILE_NAME,
+   "Profile Name"
+   )
+MSG_HASH(
+   MSG_OVERLAY_LAYOUT_PROFILE_SAVED,
+   "Saved layout profile: %s"
+   )
+MSG_HASH(
+   MSG_OVERLAY_LAYOUT_PROFILE_LOADED,
+   "Loaded layout profile %s for %s"
+   )
+MSG_HASH(
+   MSG_OVERLAY_LAYOUT_PROFILE_DELETED,
+   "Deleted layout profile: %s"
+   )
+MSG_HASH(
+   MSG_OVERLAY_LAYOUT_PROFILE_FAILED,
+   "Layout profile could not be written or read."
    )
 MSG_HASH(
    MSG_OVERLAY_CONTROL_DPAD,

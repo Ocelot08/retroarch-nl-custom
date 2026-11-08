@@ -12840,6 +12840,12 @@ unsigned menu_displaylist_build_list(
                   MENU_ENUM_LABEL_VALUE_OVERLAY_LAYOUT_CONTROLS },
                { MENU_ENUM_LABEL_OVERLAY_LAYOUT_ADD,
                   MENU_ENUM_LABEL_VALUE_OVERLAY_LAYOUT_ADD },
+               { MENU_ENUM_LABEL_OVERLAY_LAYOUT_PROFILE_SAVE,
+                  MENU_ENUM_LABEL_VALUE_OVERLAY_LAYOUT_PROFILE_SAVE },
+               { MENU_ENUM_LABEL_OVERLAY_LAYOUT_PROFILE_LOAD,
+                  MENU_ENUM_LABEL_VALUE_OVERLAY_LAYOUT_PROFILE_LOAD },
+               { MENU_ENUM_LABEL_OVERLAY_LAYOUT_PROFILE_DELETE,
+                  MENU_ENUM_LABEL_VALUE_OVERLAY_LAYOUT_PROFILE_DELETE },
                { MENU_ENUM_LABEL_OVERLAY_RESET_LAYOUT,
                   MENU_ENUM_LABEL_VALUE_OVERLAY_RESET_LAYOUT },
             };
@@ -12880,6 +12886,25 @@ unsigned menu_displaylist_build_list(
                         MENU_ENUM_LABEL_OVERLAY_LAYOUT_ADD_ITEM,
                         MENU_SETTING_ACTION, 0, i, NULL))
                   count++;
+         }
+         break;
+      case DISPLAYLIST_OVERLAY_LAYOUT_PROFILE_LOAD_LIST:
+      case DISPLAYLIST_OVERLAY_LAYOUT_PROFILE_DELETE_LIST:
+         {
+            enum msg_hash_enums item = (type == DISPLAYLIST_OVERLAY_LAYOUT_PROFILE_LOAD_LIST)
+               ? MENU_ENUM_LABEL_OVERLAY_LAYOUT_PROFILE_LOAD_ITEM
+               : MENU_ENUM_LABEL_OVERLAY_LAYOUT_PROFILE_DELETE_ITEM;
+            struct string_list *names = input_overlay_layout_profile_list();
+
+            if (names)
+            {
+               for (i = 0; i < names->size; i++)
+                  if (menu_entries_append(list, names->elems[i].data,
+                           msg_hash_to_str(item), item,
+                           MENU_SETTING_ACTION, 0, i, NULL))
+                     count++;
+               string_list_free(names);
+            }
          }
          break;
       case DISPLAYLIST_OVERLAY_MOUSE_SETTINGS_LIST:
@@ -16950,6 +16975,8 @@ static bool menu_displaylist_ctl_internal(
          case DISPLAYLIST_OVERLAY_TOUCH_LAYOUT_LIST:
          case DISPLAYLIST_OVERLAY_LAYOUT_CONTROLS_LIST:
          case DISPLAYLIST_OVERLAY_LAYOUT_ADD_LIST:
+         case DISPLAYLIST_OVERLAY_LAYOUT_PROFILE_LOAD_LIST:
+         case DISPLAYLIST_OVERLAY_LAYOUT_PROFILE_DELETE_LIST:
 #endif
          case DISPLAYLIST_ACCOUNTS_CHEEVOS_LIST:
          case DISPLAYLIST_ACCOUNTS_LIST:
