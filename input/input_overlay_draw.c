@@ -218,63 +218,65 @@ static float overlay_draw_polygon(float x, float y, const float *pts,
    return d;
 }
 
-/* @u, @v of a unit box pointing up, turned for @dir, as offsets of
- * @w x @h */
+/* @u across and @v along an arm pointing up from its outer end, turned
+ * for @dir, as a point of the w x h box */
 static void overlay_draw_turn(unsigned dir, float u, float v,
       float w, float h, float *x, float *y)
 {
    switch (dir)
    {
       case 1: /* down */
-         *x = u * w;
-         *y = -v * h;
+         *x = u;
+         *y = h - v;
          break;
       case 2: /* left: up turned, across */
-         *x = v * w;
-         *y = u * h;
+         *x = v;
+         *y = u;
          break;
       case 3: /* right */
-         *x = -v * w;
-         *y = u * h;
+         *x = w - v;
+         *y = u;
          break;
       default:
-         *x = u * w;
-         *y = v * h;
+         *x = u;
+         *y = v;
          break;
    }
 }
 
-/* An arrow pointing up, its point down to the D-pad's middle, filling
- * @w x @h; and its small triangle, @tri_w x @tri_h however the arrow
- * is shaped. Turned for the other directions. */
+/* A D-pad arm filling @w x @h, its point to the D-pad's middle at 45
+ * degrees, so that next to the arms beside it its edges run parallel
+ * to theirs; and its small triangle, @tri_across x @tri_along however
+ * the arm is shaped */
 static void overlay_draw_arrow_points(unsigned dir, float w, float h,
-      float tri_w, float tri_h, float *body, float *tri)
+      float tri_across, float tri_along, float *body, float *tri)
 {
-   static const float up_body[] = {
-      0.04f, 0.04f,  0.96f, 0.04f,  0.96f, 0.64f,  0.5f, 0.97f,
-      0.04f, 0.64f };
-   /* About the triangle's middle, which is 0.38 down the arrow */
+   /* The triangle's points about its middle, across and along */
    static const float up_tri[] = {
       0.0f, -0.18f,  0.24f, 0.09f,  -0.24f, 0.09f };
-   float mx, my;
+   float across = (dir < 2) ? w : h;
+   float along  = (dir < 2) ? h : w;
+   /* Its point right at the end of its box, toward the middle */
+   float m      = MAX(1.0f, across * 0.02f);
+   float tip    = along - 1.0f;
+   float half   = across * 0.5f - m;
+   float neck   = MAX(m, tip - half);
+   float local[10];
    unsigned i;
 
+   local[0] = m;               local[1] = m;
+   local[2] = across - m;      local[3] = m;
+   local[4] = across - m;      local[5] = neck;
+   local[6] = across * 0.5f;   local[7] = tip;
+   local[8] = m;               local[9] = neck;
    for (i = 0; i < 5; i++)
-   {
-      overlay_draw_turn(dir, up_body[2 * i] - 0.5f,
-            up_body[2 * i + 1] - 0.5f, w, h, &body[2 * i],
-            &body[2 * i + 1]);
-      body[2 * i]     += w * 0.5f;
-      body[2 * i + 1] += h * 0.5f;
-   }
-   overlay_draw_turn(dir, 0.0f, 0.38f - 0.5f, w, h, &mx, &my);
+      overlay_draw_turn(dir, local[2 * i], local[2 * i + 1], w, h,
+            &body[2 * i], &body[2 * i + 1]);
    for (i = 0; i < 3; i++)
-   {
-      overlay_draw_turn(dir, up_tri[2 * i], up_tri[2 * i + 1],
-            tri_w, tri_h, &tri[2 * i], &tri[2 * i + 1]);
-      tri[2 * i]     += w * 0.5f + mx;
-      tri[2 * i + 1] += h * 0.5f + my;
-   }
+      overlay_draw_turn(dir,
+            across * 0.5f + up_tri[2 * i] * tri_across,
+            along * 0.38f + up_tri[2 * i + 1] * tri_along, w, h,
+            &tri[2 * i], &tri[2 * i + 1]);
 }
 
 /* @label's coverage over the w x h @cover, centred, its capitals
@@ -391,7 +393,8 @@ bool input_overlay_draw_render(struct texture_image *img,
       stroke = MAX(1.5f, short_px * 0.02f);
    if (draw->shape == OVERLAY_DRAW_ARROW)
       overlay_draw_arrow_points(draw->dir, (float)w, (float)h,
-            pack_w * grow * 0.85f, pack_h * grow * 0.85f, body, tri);
+            ((draw->dir < 2) ? pack_w : pack_h) * grow * 0.68f,
+            ((draw->dir < 2) ? pack_h : pack_w) * grow * 0.68f, body, tri);
 
    /* The label, or the arrow's triangle, as coverage */
    if (draw->shape == OVERLAY_DRAW_ARROW)

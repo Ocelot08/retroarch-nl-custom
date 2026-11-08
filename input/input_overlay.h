@@ -287,6 +287,10 @@ struct overlay_desc
    float pack_y;
    float pack_range_x;
    float pack_range_y;
+   /* How far its image is drawn from where it is, in the page's units:
+    * a drawn D-pad arm, nearer the D-pad's middle */
+   float draw_dx;
+   float draw_dy;
 
    /* These values are used only for hitbox
     * detection. A hitbox can be stretched in

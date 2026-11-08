@@ -39,6 +39,7 @@
 #include "../input/input_overlay.h"
 #include "../input/input_remapping.h"
 #ifdef RARCH_INTERNAL
+#include <math.h>
 #include "../input/input_overlay_draw.h"
 #include "../configuration.h"
 #endif
@@ -593,6 +594,58 @@ static bool task_overlay_load_image_texture(
 }
 
 #ifdef RARCH_INTERNAL
+/* The middle, half sizes and place of desc @d of page @ol_idx as the
+ * layout puts them; false if it does not do @action */
+static bool task_overlay_desc_box(config_file_t *conf, unsigned ol_idx,
+      unsigned d, const char *action, float *box)
+{
+   char key[64];
+   char spec[256];
+   char *tok[6];
+   char *p;
+   unsigned n = 0;
+   float tmp;
+
+   snprintf(key, sizeof(key), "overlay%u_desc%u", ol_idx, d);
+   if (!config_get_array(conf, key, spec, sizeof(spec)))
+      return false;
+   for (p = spec; n < 6; n++)
+   {
+      tok[n] = p;
+      while (*p && *p != ',')
+         p++;
+      if (!*p)
+      {
+         n++;
+         break;
+      }
+      *p++ = '\0';
+   }
+   if (n < 6 || (action && !string_is_equal(tok[0], action)))
+      return false;
+   box[0] = (float)rstrtod(tok[1], NULL);
+   box[1] = (float)rstrtod(tok[2], NULL);
+   box[2] = (float)rstrtod(tok[4], NULL);
+   box[3] = (float)rstrtod(tok[5], NULL);
+   snprintf(key, sizeof(key), "overlay%u_desc%u_layout_x", ol_idx, d);
+   if (config_get_float(conf, key, &tmp))
+      box[0] = tmp;
+   snprintf(key, sizeof(key), "overlay%u_desc%u_layout_y", ol_idx, d);
+   if (config_get_float(conf, key, &tmp))
+      box[1] = tmp;
+   snprintf(key, sizeof(key), "overlay%u_desc%u_layout_w", ol_idx, d);
+   if (config_get_float(conf, key, &tmp) && tmp > 0.0f)
+      box[2] = tmp;
+   snprintf(key, sizeof(key), "overlay%u_desc%u_layout_h", ol_idx, d);
+   if (config_get_float(conf, key, &tmp) && tmp > 0.0f)
+      box[3] = tmp;
+   return true;
+}
+
+/* How much of the room between a drawn D-pad's arms and its middle
+ * they are drawn across: arms 30% nearer to each other than placed */
+#define OVERLAY_DRAW_DPAD_CLOSER 0.3f
+
 /* Draws @desc's button in place of its image, if it is one of those
  * drawn (input_overlay_draw_classify), at the size it is shown */
 static bool task_overlay_load_desc_drawn(
@@ -664,6 +717,36 @@ static bool task_overlay_load_desc_drawn(
 
    if (!input_overlay_draw_classify(tok[0], movable, label, &draw))
       return false;
+
+   /* An arm is drawn nearer the middle of the D-pad it is in */
+   desc->draw_dx = desc->draw_dy = 0.0f;
+   if (draw.shape == OVERLAY_DRAW_ARROW)
+   {
+      unsigned d;
+      float me[4], pad[4];
+      if (task_overlay_desc_box(conf, ol_idx, desc_idx, NULL, me))
+         for (d = 0; d < overlay->size; d++)
+         {
+            float gap;
+            if (     !task_overlay_desc_box(conf, ol_idx, d, "dpad_area", pad)
+                  || fabs(me[0] - pad[0]) > pad[2]
+                  || fabs(me[1] - pad[1]) > pad[3])
+               continue;
+            if (draw.dir < 2)
+            {
+               gap           = (float)fabs(me[1] - pad[1]) - me[3];
+               desc->draw_dy = (me[1] > pad[1] ? -1.0f : 1.0f)
+                  * MAX(gap, 0.0f) * OVERLAY_DRAW_DPAD_CLOSER;
+            }
+            else
+            {
+               gap           = (float)fabs(me[0] - pad[0]) - me[2];
+               desc->draw_dx = (me[0] > pad[0] ? -1.0f : 1.0f)
+                  * MAX(gap, 0.0f) * OVERLAY_DRAW_DPAD_CLOSER;
+            }
+            break;
+         }
+   }
 
    /* A little over the size shown, as the page may be scaled up */
    draw.width  = (unsigned)MIN(1024.0f, MAX(8.0f, 2.0f * rx * w * 1.25f));

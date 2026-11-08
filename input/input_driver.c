@@ -6096,8 +6096,10 @@ static void input_overlay_scale(struct overlay *ol,
 
       scale_w           = ol->mod_w * desc->range_x;
       scale_h           = ol->mod_h * desc->range_y;
-      adj_center_x      = ol->mod_x + desc->x_shift * ol->mod_w;
-      adj_center_y      = ol->mod_y + desc->y_shift * ol->mod_h;
+      adj_center_x      = ol->mod_x + (desc->x_shift + desc->draw_dx)
+         * ol->mod_w;
+      adj_center_y      = ol->mod_y + (desc->y_shift + desc->draw_dy)
+         * ol->mod_h;
 
       desc->mod_w       = 2.0f * scale_w;
       desc->mod_h       = 2.0f * scale_h;
