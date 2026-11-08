@@ -2201,7 +2201,7 @@ bool input_overlay_layout_stroke_step(int dir);
 bool input_overlay_layout_profile_save(const char *name);
 bool input_overlay_layout_profile_load(const char *name);
 bool input_overlay_layout_profile_delete(const char *name);
-struct string_list *input_overlay_layout_profile_list(void);
+struct string_list *input_overlay_layout_profile_list(bool builtin);
 #endif
 
 #ifdef HAVE_BSV_MOVIE

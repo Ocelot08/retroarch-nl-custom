@@ -64,13 +64,17 @@ Layout**, or **Quick Menu → On-Screen Overlay → Touch Layout** in a game.
   then each D-pad arrow and face button on its own, next to the
   cluster. Switching on one the page doesn't have yet adds it in the
   middle of the screen, to be dragged into place.
-- **Save Layout as Profile**: save the layout shown under a name.
-- **Load Profile**: put a saved profile in place of the layout chosen in
-  Layout For, so one profile can be used for any number of cores or
-  games.
-- **Delete Profile**: delete a saved profile. Layouts already loaded
-  from it are not changed.
-- **Reset Layout**: drop the layout chosen in Layout For.
+- **Profiles**: a profile is a controller with its layout. Three come
+  built in: **Main**, **Nintendo DS** and **Nintendo 3DS**.
+  - **Save Layout as Profile**: save the controller shown and its
+    layout under a name.
+  - **Load Profile**: use a profile for what Layout For chooses (all
+    content, a core or a game): its controller and its layout. Main
+    for all content leaves DS and 3DS games on their own controls.
+  - **Delete Profile**: delete a saved profile. Layouts already loaded
+    from it are not changed.
+- **Reset Layout**: drop the layout chosen in Layout For, and the
+  controller a profile chose for it.
 
 #### Screenshots
 
@@ -93,8 +97,9 @@ theme.
 Layouts are saved apart from the overlay itself, in
 `config/overlay_layouts/` (all content), `config/overlay_layouts/<core>/`
 and `config/overlay_layouts/<core>/<game>/`, so updating overlays does
-not lose them. Profiles are in
-`config/overlay_layouts/profiles/<overlay>/`.
+not lose them. Profiles are in `config/overlay_layouts/profiles/`, and
+the controller a profile chose for a scope in that scope's
+`controller.cfg`.
 
 ### Android defaults
 

@@ -15250,7 +15250,7 @@ MSG_HASH(
    )
 MSG_HASH(
    MENU_ENUM_SUBLABEL_OVERLAY_LAYOUT_PROFILE_SAVE,
-   "Save the layout shown under a name, to load later for any core or content."
+   "Save the controller shown and its layout under a name, to load later for any core or content."
    )
 MSG_HASH(
    MENU_ENUM_LABEL_VALUE_OVERLAY_LAYOUT_PROFILE_LOAD,
@@ -15258,7 +15258,7 @@ MSG_HASH(
    )
 MSG_HASH(
    MENU_ENUM_SUBLABEL_OVERLAY_LAYOUT_PROFILE_LOAD,
-   "Replace the layout chosen in 'Layout For' with a saved profile."
+   "Use a profile for what 'Layout For' chooses: its controller (Main, Nintendo DS, Nintendo 3DS, or the one a saved profile was made with) and its layout."
    )
 MSG_HASH(
    MENU_ENUM_LABEL_VALUE_OVERLAY_LAYOUT_PROFILE_DELETE,
@@ -15274,7 +15274,7 @@ MSG_HASH(
    )
 MSG_HASH(
    MENU_ENUM_SUBLABEL_OVERLAY_RESET_LAYOUT,
-   "Discard the layout chosen in 'Layout For', going back to the layout under it."
+   "Discard the layout chosen in 'Layout For', and the controller a profile chose for it, going back to those under it."
    )
 MSG_HASH(
    MENU_ENUM_LABEL_VALUE_OVERLAY,
