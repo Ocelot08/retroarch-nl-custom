@@ -43,6 +43,13 @@ Layout**, or **Quick Menu → On-Screen Overlay → Touch Layout** in a game.
   - **Half grid**: snap to half cells.
   - **Analog**: switch to the overlay's analog-stick page, or back to
     the D-pad page, so either one can be laid out.
+- **Drawn Buttons** (on by default): the face buttons, shoulder
+  buttons, Start, Select, D-pad and sticks are drawn in code, with
+  their labels as text, rather than shown from the overlay's images.
+  They stay sharp at any size, and a button made wider or taller keeps
+  round ends and upright letters: it is drawn again when a slider is
+  let go. Hotkeys (menu, fast-forward, save state, ...) keep their
+  icons. Off shows the images again; kept per Layout For.
 - **Layout For**: save a layout for all content, for one core, or for
   one game. A game's layout applies over its core's, which applies over
   the one for all content.

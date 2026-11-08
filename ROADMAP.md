@@ -12,7 +12,7 @@ how much work it is:
 |---|---------|-------------|--------|
 | 1 | Screen placement (built) | - | Medium |
 | 2 | Button size (built) | - | Medium |
-| 3 | Drawn buttons | - | Large |
+| 3 | Drawn buttons (built) | - | Large |
 | 4 | Button shapes and styles | 3 | Small |
 | 5 | Custom buttons | 3 | Medium |
 | 6 | Buttons to switch profiles | 5 | Small |
@@ -58,14 +58,24 @@ away from what is being sized, with Reset and Done. Built together.
 
 ## 3. Drawn buttons
 
-*Needs first: nothing. Effort: Large.*
+*Needs first: nothing. Effort: Large. Built.*
 
-- Buttons drawn in code instead of from images: vector shapes that
-  stay sharp at any size, with live text labels set apart from what
-  the button does.
-- The largest item: the overlay only draws images today, so this adds
-  a way to draw shapes and text in their place.
-- Before 4 and 5, which build on it.
+- The face buttons, shoulder buttons, Start, Select, D-pad arrows and
+  analog sticks are drawn in code when the overlay loads, at the size
+  they are shown, in place of their images. Shapes are drawn from
+  their outlines (round ends, rounded corners, arrows) and labels as
+  text in the menu's font, so a button made wider stays a capsule
+  with upright letters.
+- The editor draws a control again when its slider is let go.
+- Labels come from what the button does (A, L1, START), or from a
+  `_label` key in the overlay or layout ("L" and "ZL" on DS and 3DS,
+  "C" on the C-stick). Typing one in the editor comes with item 5.
+- Hotkeys (menu, fast-forward, hide, save state, swap screens, ...)
+  keep their icons.
+- Touch Layout > Drawn Buttons switches between drawn buttons and the
+  images, per Layout For.
+- Made through the overlay's own images, so every video driver, the
+  press highlight, hiding and sizing work as before.
 
 ## 4. Button shapes and styles
 
@@ -93,7 +103,7 @@ away from what is being sized, with Reset and Done. Built together.
 
 ## Test checkpoints
 
-### A. Now: after 1 and 2, before 3
+### A. After 1 and 2, before 3 (done)
 
 Item 3 changes how buttons are drawn and sized, so sizing should be
 right first.
@@ -117,12 +127,18 @@ right first.
   button still swaps.
 - Restart the app: everything is where it was saved.
 
-### B. After 3, before 4 and 5
+### B. Now: after 3, before 4 and 5
 
-- Every button of the main, DS and 3DS controls is drawn, pressed
-  states included, at every size from item 2.
-- Text is sharp at small and large sizes, and in both orientations.
-- Speed: no slower than with images, in a demanding game.
+- Main, DS and 3DS controls: every face and shoulder button, Start,
+  Select, the D-pad and sticks are drawn, light up when pressed, and
+  hotkeys still show their icons.
+- Labels are sharp and upright at small and large sizes, and after
+  Shape is set wider or taller (once the slider is let go).
+- Both orientations, and after rotating while a game runs.
+- Touch Layout > Drawn Buttons off brings the images back, on draws
+  again; per core or game too.
+- The overlay appears as quickly as before when a game starts, and
+  games run no slower.
 
 ### C. After 5 and 6
 
