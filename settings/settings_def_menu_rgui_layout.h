@@ -9,7 +9,7 @@
 #ifndef SETTINGS_DEF_CONFIG_PASS
 S_BOOL(menu_rgui_border_filler_enable, MENU_RGUI_BORDER_FILLER_ENABLE,
       "menu_rgui_border_filler_enable",
-      true, SD_FLAG_NONE, 0, 0,
+      DEFAULT_RGUI_BORDER_FILLER_ENABLE, SD_FLAG_NONE, 0, 0,
       "Border Filler",
       "Display menu border.")
 #endif
