@@ -17999,6 +17999,15 @@ void input_driver_poll(void)
    }
 
 #ifdef HAVE_OVERLAY
+   /* Other content, or another core, may have another gamepad: the
+    * menu showing the overlay, nothing else would load it again */
+   if (      input_st->overlay_ptr
+         && (input_st->overlay_ptr->flags & INPUT_OVERLAY_ALIVE)
+         && !(input_st->overlay_ptr->flags & INPUT_OVERLAY_IS_OSK)
+         && !input_overlay_edit_active()
+         && input_st->overlay_ptr->layout_key != input_overlay_layout_key())
+      input_overlay_init();
+
    if (      input_st->overlay_ptr
          && (input_st->overlay_ptr->flags & INPUT_OVERLAY_ALIVE))
    {
