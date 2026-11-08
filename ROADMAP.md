@@ -10,38 +10,45 @@ how much work it is:
 
 | # | Feature | Needs first | Effort |
 |---|---------|-------------|--------|
-| 1 | Screen placement | - | Medium |
-| 2 | Button size | 1 | Medium |
+| 1 | Screen placement (in progress) | - | Medium |
+| 2 | Button size (in progress) | - | Medium |
 | 3 | Drawn buttons | - | Large |
 | 4 | Button shapes and styles | 3 | Small |
 | 5 | Custom buttons | 3 | Medium |
 | 6 | Buttons to switch profiles | 5 | Small |
+
+Both 1 and 2 use one way of editing: tap something in the editor to
+select it, and a panel of notched sliders opens under the editor bar,
+away from what is being sized, with Reset and Done. Built together.
 
 ## 1. Screen placement
 
 *Needs first: nothing. Effort: Medium.*
 
 - One box for the game screen and the menu, which both follow it.
-  Drawn behind the controls while editing; drag to move, drag a corner
-  to resize, snapped to the grid.
+  Drawn dashed behind the controls while editing. Tap it to select it,
+  then drag it to move it (snapped to the grid), and set its width and
+  height with sliders notched in grid cells.
+- The game keeps its own shape inside the box. A Stretch option to
+  fill it can come later.
 - Shared by the D-pad and analog pages.
 - Saved with Layout For (all content, core or game) and with profiles,
   like the controls. It is written as the overlay page's own viewport
   setting (`overlayN_viewport`) in the layout file.
-- To decide: a Stretch option to fill the box, or always keep the
-  game's shape.
 - To check: the Vulkan video driver places the menu as OpenGL does.
-- First because it stands alone, and the corner handle it adds for
-  resizing is the one button size uses.
 
 ## 2. Button size
 
-*Needs first: 1, for its resize handle. Effort: Medium.*
+*Needs first: nothing. Effort: Medium.*
 
-- Resize each button, and make it wider or taller, in set steps (as
-  the grid snaps positions) so buttons can be made the same size.
+- Tap a button to select it; dragging still moves it.
+- A Size slider notched in half grid cells (1 to 12 cells), so buttons
+  set to the same number are the same size whatever their images.
+- A Shape slider from wide to tall, notched, with original proportions
+  in the middle.
+- The D-pad and face buttons size as one, spacing and all.
 - Works on the overlay's own images as they are, so it does not wait
-  for drawn buttons; once those come, they resize the same way.
+  for drawn buttons; once those come, they size the same way.
 
 ## 3. Drawn buttons
 
