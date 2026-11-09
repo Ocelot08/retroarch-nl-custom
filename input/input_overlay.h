@@ -151,7 +151,10 @@ enum OVERLAY_FLAGS
    /* overlay_desc::layout_group is set for every desc */
    OVERLAY_LAYOUT_GROUPED     = (1 << 9),
    /* Its game screen placed in the layout editor and not yet saved */
-   OVERLAY_LAYOUT_VIEWPORT_EDITED = (1 << 10)
+   OVERLAY_LAYOUT_VIEWPORT_EDITED = (1 << 10),
+   /* A desc does more than switch pages; without it, the page is one
+    * that hides the controls */
+   OVERLAY_TAKES_OTHER_INPUT  = (1 << 11)
 };
 
 enum OVERLAY_DESC_FLAGS

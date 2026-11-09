@@ -1123,6 +1123,8 @@ static bool task_overlay_load_desc(
             }
             BIT256_SET(desc->button_mask, bind_id);
             takes_input = true;
+            if (bind_id != RARCH_OVERLAY_NEXT)
+               input_overlay->flags |= OVERLAY_TAKES_OTHER_INPUT;
          }
       }
 
@@ -1140,6 +1142,8 @@ static bool task_overlay_load_desc(
    BIT16_SET(loader->overlay_types, desc->type);
    if (takes_input)
       input_overlay->flags |= OVERLAY_TAKES_INPUT;
+   if (desc->type != OVERLAY_TYPE_BUTTONS)
+      input_overlay->flags |= OVERLAY_TAKES_OTHER_INPUT;
 
    width_mod  = 1.0f;
    height_mod = 1.0f;

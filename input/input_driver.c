@@ -17510,6 +17510,22 @@ bool input_driver_overlay_active_page(void)
 }
 
 /* An overlay is up whose page takes input. */
+bool input_driver_overlay_leaves_menu_touch(void)
+{
+   size_t i;
+   const input_overlay_t *ol = input_driver_st.overlay_ptr;
+   if (     !ol
+         || !(ol->flags & INPUT_OVERLAY_ALIVE)
+         || !ol->active
+         || (ol->active->flags & OVERLAY_TAKES_OTHER_INPUT)
+         || input_overlay_edit_active())
+      return false;
+   for (i = 0; i < ol->active->size; i++)
+      if (ol->active->descs[i].old_touch_mask)
+         return false;
+   return true;
+}
+
 bool input_driver_overlay_takes_input(void)
 {
    const input_overlay_t *ol = input_driver_st.overlay_ptr;

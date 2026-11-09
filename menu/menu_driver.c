@@ -2354,9 +2354,25 @@ MENU_NOINLINE static void menu_input_get_touchscreen_hw_state(
                         );
 
 #ifdef HAVE_OVERLAY
-   /* Menu pointer controls are ignored when overlays are enabled. */
-   if (overlay_active)
-      pointer_enabled   = false;
+   /* Menu pointer controls are ignored when overlays are enabled,
+    * and a touch the overlay had stays its own until let go */
+   {
+      static bool overlay_had_touch = false;
+      if (overlay_active)
+      {
+         pointer_enabled   = false;
+         overlay_had_touch = true;
+      }
+      else if (overlay_had_touch)
+      {
+         if (     state_inited
+               && (view->flags & ((pointer_device == RETRO_DEVICE_POINTER)
+                  ? INPUT_PTR_VIEW_PTR_PRESSED : INPUT_PTR_VIEW_SCR_PRESSED)))
+            pointer_enabled   = false;
+         else
+            overlay_had_touch = false;
+      }
+   }
 #endif
 
    /* If touchscreen is disabled, ignore all input */
@@ -5750,7 +5766,8 @@ unsigned menu_event(
    bool overlay_active                             = input_overlay_enable
          && (   input_driver_overlay_takes_input()
              || (   input_driver_overlay_active_page()
-                 && settings->bools.input_overlay_pointer_enable));
+                 && settings->bools.input_overlay_pointer_enable))
+         && !input_driver_overlay_leaves_menu_touch();
 #else
    bool input_overlay_enable                       = false;
    bool overlay_active                             = false;

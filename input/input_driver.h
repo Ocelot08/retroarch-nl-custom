@@ -1254,6 +1254,9 @@ bool input_driver_hotkey_blocked(void);
 bool input_driver_game_focus_core_requested(void);
 bool input_driver_overlay_alive(void);
 bool input_driver_overlay_takes_input(void);
+/* The page shown only switches pages, as one hiding the controls does,
+ * and none of its buttons is held: the menu may have the touch */
+bool input_driver_overlay_leaves_menu_touch(void);
 bool input_driver_overlay_active_page(void);
 /* Whatever is down now is held back, control by control, until each is
  * let go: from the core (its buttons, keys, mouse and lightgun buttons
