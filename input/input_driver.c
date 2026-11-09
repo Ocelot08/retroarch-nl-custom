@@ -9012,6 +9012,36 @@ static uint16_t input_overlay_layout_alone(const struct overlay *page,
    return 0;
 }
 
+/* Buttons added alone before they were given reach of their own */
+static void input_overlay_layout_reach_singles(input_overlay_t *ol)
+{
+   size_t i, d, k;
+   for (i = 0; i < ol->size; i++)
+   {
+      struct overlay *page = &ol->overlays[i];
+      for (d = 0; d < page->size; d++)
+      {
+         struct overlay_desc *desc = &page->descs[d];
+         bool alone                = desc->layout_added != 0;
+         if (     !alone
+               || desc->type != OVERLAY_TYPE_BUTTONS
+               || (desc->reach_left > 0.0f && desc->reach_up > 0.0f))
+            continue;
+         for (k = 0; k < page->size && alone; k++)
+            alone = k == d
+               || page->descs[k].layout_added != desc->layout_added;
+         if (!alone)
+            continue;
+         if (desc->reach_left <= 0.0f)
+            desc->reach_left = desc->reach_right = 1.0f;
+         if (desc->reach_up <= 0.0f)
+            desc->reach_up   = desc->reach_down  = 1.0f;
+         if (desc->hitbox == OVERLAY_HITBOX_NONE)
+            desc->hitbox = OVERLAY_HITBOX_RECT;
+      }
+   }
+}
+
 #define OVERLAY_LAYOUT_ENTRIES 64
 
 /* The list of controls of the page shown, made again only when the
@@ -13254,6 +13284,7 @@ static void input_overlay_loaded(retro_task_t *task,
    ol->drawn       = (data->flags & OVERLAY_LOADER_DRAWN) != 0;
    ol->filled      = (data->flags & OVERLAY_LOADER_FILLED) != 0;
    ol->stroke      = (uint8_t)data->stroke;
+   input_overlay_layout_reach_singles(ol);
    input_overlay_loads++;
    ol->num_images  = data->image_list->size;
    ol->next_index  = (unsigned)((ol->index + 1) % ol->size);
@@ -14456,6 +14487,11 @@ static bool input_overlay_layout_add_control(input_overlay_t *ol,
          suffix = entry->key + _len;
          if (     (*suffix && *suffix != '_')
                || string_starts_with(suffix, "_layout_"))
+            continue;
+         /* A cluster's button is reached through its area; alone it
+          * needs its own */
+         if (     add.desc >= 0
+               && string_starts_with(suffix, "_reach_"))
             continue;
          snprintf(key, sizeof(key), "overlay%u_desc%u%s", dst, to, suffix);
          config_set_string(layout, key, entry->value);
