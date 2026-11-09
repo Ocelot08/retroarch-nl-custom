@@ -331,6 +331,8 @@ struct overlay_desc
    /* A custom button's id, the same on each page it is on; 0 if not */
    uint16_t custom;
    char custom_label[16];
+   /* A custom button's gamepad, loaded when it is pressed */
+   char custom_gamepad[64];
 
    uint8_t led;
    uint8_t flags;

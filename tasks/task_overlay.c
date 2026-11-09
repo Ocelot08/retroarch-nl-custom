@@ -1225,12 +1225,16 @@ static bool task_overlay_load_desc(
       if (config_get_uint(conf, overlay_key, &custom))
          desc->custom = (uint16_t)custom;
    }
-   desc->custom_label[0] = '\0';
+   desc->custom_label[0]   = '\0';
+   desc->custom_gamepad[0] = '\0';
    if (desc->custom)
    {
       strlcpy_lit(overlay_key + _len, "_label", sizeof(overlay_key) - _len);
       config_get_array(conf, overlay_key, desc->custom_label,
             sizeof(desc->custom_label));
+      strlcpy_lit(overlay_key + _len, "_gamepad", sizeof(overlay_key) - _len);
+      config_get_array(conf, overlay_key, desc->custom_gamepad,
+            sizeof(desc->custom_gamepad));
    }
 
    desc->x_shift = desc->x;

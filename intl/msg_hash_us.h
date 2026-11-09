@@ -32685,7 +32685,7 @@ MSG_HASH(
    )
 MSG_HASH(
    MENU_ENUM_SUBLABEL_OVERLAY_CUSTOM_INPUT,
-   "What the button sends: a button of the gamepad or a hotkey."
+   "What the button sends: a button of the gamepad or a hotkey. Or a gamepad to switch to when the button is let go of, as Load Gamepad does."
    )
 MSG_HASH(
    MENU_ENUM_LABEL_VALUE_OVERLAY_CUSTOM_REMOVE,
@@ -32706,6 +32706,10 @@ MSG_HASH(
 MSG_HASH(
    MSG_OVERLAY_CUSTOM_ADDED,
    "Added %s. Place it in Edit Layout."
+   )
+MSG_HASH(
+   MSG_OVERLAY_CUSTOM_GAMEPAD,
+   "Gamepad: %s"
    )
 MSG_HASH(
    MSG_OVERLAY_CUSTOM_FAILED,

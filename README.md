@@ -63,9 +63,11 @@ Layout**, or **Quick Menu → On-Screen Overlay → Touch Layout** in a game.
   middle of the screen, to be dragged into place, on every page of the
   screen's shape (the D-pad, analog and expanded pages).
 - **Custom Buttons**: buttons of your own. **New Custom Button**: pick
-  what it sends (a button of the gamepad, or a hotkey such as
-  fast-forward or save state), then type its label, say "C" sending
-  L1. It is drawn round with its label and appears in the middle of the
+  what it sends (a button of the gamepad, a hotkey such as
+  fast-forward or save state, or a gamepad to switch to), then type
+  its label, say "C" sending L1. A gamepad button switches when let go
+  of, as Load Gamepad does: until the game closes, or kept with an
+  override. It is drawn round with its label and appears in the middle of the
   screen, to be placed and sized in Edit Layout like any control. Each
   one listed opens **Label**, **Input** and **Remove**. They are kept
   in the gamepad, as plain overlay buttons other RetroArch can use

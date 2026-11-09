@@ -6542,8 +6542,9 @@ static int action_ok_overlay_layout_profile_load_item(const char *path,
    return 0;
 }
 
-/* A new custom button's input, until its label is typed */
+/* A new custom button's input or gamepad, until its label is typed */
 static unsigned action_overlay_custom_bind = RARCH_BIND_LIST_END;
+static char action_overlay_custom_gamepad[NAME_MAX_LENGTH];
 /* A button there is chosen, rather than one being made */
 static bool action_overlay_custom_editing  = false;
 
@@ -6580,10 +6581,14 @@ static void action_input_overlay_custom_label(void *userdata,
    bool made = false;
    if (line)
    {
-      made = (action_overlay_custom_bind != RARCH_BIND_LIST_END)
-         ? input_overlay_custom_new(action_overlay_custom_bind, line)
-         : input_overlay_custom_set(RARCH_BIND_LIST_END, line);
-      if (made && action_overlay_custom_bind != RARCH_BIND_LIST_END)
+      bool making = action_overlay_custom_bind != RARCH_BIND_LIST_END
+         || *action_overlay_custom_gamepad;
+      made = making
+         ? input_overlay_custom_new(action_overlay_custom_bind,
+               *action_overlay_custom_gamepad
+               ? action_overlay_custom_gamepad : NULL, line)
+         : input_overlay_custom_set(RARCH_BIND_LIST_END, NULL, line);
+      if (made && making)
          action_ok_overlay_layout_profile_msg(MSG_OVERLAY_CUSTOM_ADDED,
                line, NULL);
       else if (!made)
@@ -6592,9 +6597,12 @@ static void action_input_overlay_custom_label(void *userdata,
    }
    menu_input_dialog_end();
    /* From the inputs back to the buttons */
-   if (made && action_overlay_custom_bind != RARCH_BIND_LIST_END)
+   if (     made
+         && (  action_overlay_custom_bind != RARCH_BIND_LIST_END
+            || *action_overlay_custom_gamepad))
       action_ok_overlay_custom_back();
-   action_overlay_custom_bind = RARCH_BIND_LIST_END;
+   action_overlay_custom_bind       = RARCH_BIND_LIST_END;
+   *action_overlay_custom_gamepad   = '\0';
 }
 
 static void action_ok_overlay_custom_label_start(void)
@@ -6612,23 +6620,44 @@ static void action_ok_overlay_custom_label_start(void)
 static int action_ok_overlay_custom_label(const char *path,
       const char *label, unsigned type, size_t idx, size_t entry_idx)
 {
-   action_overlay_custom_bind = RARCH_BIND_LIST_END;
+   action_overlay_custom_bind     = RARCH_BIND_LIST_END;
+   *action_overlay_custom_gamepad = '\0';
    action_ok_overlay_custom_label_start();
    return 0;
 }
 
-/* A new button's input, its label next; or the input of one there is */
+/* A new button's input, its label next; or the input of one there is.
+ * Past the binds, the gamepads, as input_overlay_layout_profile_list()
+ * names them. */
 static int action_ok_overlay_custom_input_item(const char *path,
       const char *label, unsigned type, size_t idx, size_t entry_idx)
 {
+   unsigned bind = (unsigned)entry_idx;
+   *action_overlay_custom_gamepad = '\0';
+   if (entry_idx > RARCH_BIND_LIST_END)
+   {
+      struct string_list *names = input_overlay_layout_profile_list(true);
+      size_t i                  = entry_idx - RARCH_BIND_LIST_END - 1;
+      if (names && i < names->size)
+         strlcpy(action_overlay_custom_gamepad, names->elems[i].data,
+               sizeof(action_overlay_custom_gamepad));
+      string_list_free(names);
+      if (!*action_overlay_custom_gamepad)
+         return -1;
+      bind = RARCH_BIND_LIST_END;
+   }
    if (action_overlay_custom_editing)
    {
-      if (!input_overlay_custom_set((unsigned)entry_idx, NULL))
+      bool ret = input_overlay_custom_set(bind,
+            *action_overlay_custom_gamepad
+            ? action_overlay_custom_gamepad : NULL, NULL);
+      *action_overlay_custom_gamepad = '\0';
+      if (!ret)
          return -1;
       action_ok_overlay_custom_back();
       return 0;
    }
-   action_overlay_custom_bind = (unsigned)entry_idx;
+   action_overlay_custom_bind = bind;
    action_ok_overlay_custom_label_start();
    return 0;
 }

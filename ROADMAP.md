@@ -15,7 +15,7 @@ how much work it is:
 | 3 | Drawn buttons (built) | - | Large |
 | 4 | Button style (built) | 3 | Small |
 | 5 | Custom buttons (built) | 3 | Medium |
-| 6 | Buttons to switch gamepads | 5 | Small |
+| 6 | Buttons to switch gamepads (built) | 5 | Small |
 
 Test on the phone at each checkpoint below before building on: the
 Linux build used for development has no Android Back, keyboard,
@@ -104,10 +104,14 @@ away from what is being sized, with Reset and Done. Built together.
 
 ## 6. Buttons to switch gamepads
 
-*Needs first: 5. Effort: Small.*
+*Needs first: 5. Effort: Small. Built.*
 
 - On-screen buttons that switch to another gamepad.
-- A custom button whose action is a gamepad instead of an input.
+- A custom button whose action is a gamepad instead of an input: the
+  gamepads are at the end of its Input list. It switches when let go
+  of, as Load Gamepad does (for the game running, kept by an override).
+- Written as a "nul" button with `_gamepad`, so it does nothing in
+  other RetroArch.
 
 ## Test checkpoints
 
@@ -135,7 +139,7 @@ right first.
   button still swaps.
 - Restart the app: everything is where it was saved.
 
-### B. Now: after 3, before 4 and 5
+### B. After 3, before 4 and 5 (done)
 
 - Main, DS and 3DS controls: every face and shoulder button, Start,
   Select, the D-pad and sticks are drawn, light up when pressed, and
@@ -148,10 +152,12 @@ right first.
 - The overlay appears as quickly as before when a game starts, and
   games run no slower.
 
-### C. After 5 and 6
+### C. Now: after 5 and 6
 
 - A custom button sends the input chosen, in game, and its label
   shows; it survives Save, gamepads and a restart.
+- Label, Input and Remove change it on every page (D-pad, analog,
+  expanded), and it moves and sizes in Edit Layout.
 - A gamepad button switches gamepads in game, including between a
   core's and a game's.
 

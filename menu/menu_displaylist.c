@@ -12954,14 +12954,35 @@ unsigned menu_displaylist_build_list(
          }
          break;
       case DISPLAYLIST_OVERLAY_CUSTOM_INPUT_LIST:
-         for (i = 0; i < RARCH_BIND_LIST_END; i++)
-            if (     input_overlay_custom_input((unsigned)i)
-                  && menu_entries_append(list,
-                     input_config_bind_map_get_desc((unsigned)i),
-                     msg_hash_to_str(MENU_ENUM_LABEL_OVERLAY_CUSTOM_INPUT_ITEM),
-                     MENU_ENUM_LABEL_OVERLAY_CUSTOM_INPUT_ITEM,
-                     MENU_SETTING_ACTION, 0, i, NULL))
-               count++;
+         {
+            struct string_list *names = input_overlay_layout_profile_list(true);
+            for (i = 0; i < RARCH_BIND_LIST_END; i++)
+               if (     input_overlay_custom_input((unsigned)i)
+                     && menu_entries_append(list,
+                        input_config_bind_map_get_desc((unsigned)i),
+                        msg_hash_to_str(MENU_ENUM_LABEL_OVERLAY_CUSTOM_INPUT_ITEM),
+                        MENU_ENUM_LABEL_OVERLAY_CUSTOM_INPUT_ITEM,
+                        MENU_SETTING_ACTION, 0, i, NULL))
+                  count++;
+            /* Then the gamepads, past the binds */
+            if (names)
+            {
+               for (i = 0; i < names->size; i++)
+               {
+                  char text[NAME_MAX_LENGTH + 32];
+                  snprintf(text, sizeof(text),
+                        msg_hash_to_str(MSG_OVERLAY_CUSTOM_GAMEPAD),
+                        names->elems[i].data);
+                  if (menu_entries_append(list, text,
+                           msg_hash_to_str(MENU_ENUM_LABEL_OVERLAY_CUSTOM_INPUT_ITEM),
+                           MENU_ENUM_LABEL_OVERLAY_CUSTOM_INPUT_ITEM,
+                           MENU_SETTING_ACTION, 0,
+                           RARCH_BIND_LIST_END + 1 + i, NULL))
+                     count++;
+               }
+               string_list_free(names);
+            }
+         }
          break;
       case DISPLAYLIST_OVERLAY_MOUSE_SETTINGS_LIST:
          {

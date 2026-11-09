@@ -5980,6 +5980,18 @@ static const unsigned *input_overlay_led_map(void)
    return config_get_ptr()->uints.led_map;
 }
 
+/* A gamepad a custom button asked for, loaded before the next poll */
+static char input_overlay_gamepad_pending[64];
+
+/* On being let go of, so the same touch does not press the next one's */
+static void input_overlay_gamepad_let_go(const struct overlay_desc *desc)
+{
+   if (     *desc->custom_gamepad
+         && desc->old_touch_mask && !desc->touch_mask)
+      strlcpy(input_overlay_gamepad_pending, desc->custom_gamepad,
+            sizeof(input_overlay_gamepad_pending));
+}
+
 /**
  * input_overlay_post_poll:
  *
@@ -6014,6 +6026,7 @@ static void input_overlay_post_poll(
 
       input_overlay_update_desc_geom(ol, desc);
 
+      input_overlay_gamepad_let_go(desc);
       desc->old_touch_mask = desc->touch_mask;
       desc->touch_mask     = 0;
    }
@@ -6373,6 +6386,7 @@ static void input_overlay_poll_clear(
    {
       struct overlay_desc *desc = &ol->active->descs[i];
 
+      input_overlay_gamepad_let_go(desc);
       desc->old_touch_mask      = desc->touch_mask;
       desc->touch_mask          = 0;
 
@@ -14442,9 +14456,14 @@ struct string_list *input_overlay_custom_list(void)
       for (b = 0; b < RARCH_BIND_LIST_END && !input; b++)
          if (BIT256_GET(desc->button_mask, b))
             input = input_config_bind_map_get_desc(b);
-      snprintf(text, sizeof(text), "%s: %s",
-            *desc->custom_label ? desc->custom_label : "-",
-            input ? input : "");
+      if (*desc->custom_gamepad)
+         snprintf(text, sizeof(text), "%s: %s",
+               *desc->custom_label ? desc->custom_label : "-",
+               desc->custom_gamepad);
+      else
+         snprintf(text, sizeof(text), "%s: %s",
+               *desc->custom_label ? desc->custom_label : "-",
+               input ? input : "");
       attr.i = desc->custom;
       string_list_append(list, text, attr);
    }
@@ -14470,7 +14489,8 @@ bool input_overlay_custom_input(unsigned bind)
          && input_config_bind_map_get_desc(bind);
 }
 
-bool input_overlay_custom_new(unsigned bind, const char *label)
+bool input_overlay_custom_new(unsigned bind, const char *gamepad,
+      const char *label)
 {
    size_t d;
    unsigned dst, id = 0;
@@ -14483,7 +14503,7 @@ bool input_overlay_custom_new(unsigned bind, const char *label)
    const struct overlay *active;
    config_file_t *conf;
 
-   if (     !input_overlay_custom_input(bind)
+   if (     (gamepad ? !*gamepad : !input_overlay_custom_input(bind))
          || !(conf = input_overlay_custom_open(&ol, path, sizeof(path))))
       return false;
    active = ol->active;
@@ -14544,7 +14564,7 @@ bool input_overlay_custom_new(unsigned bind, const char *label)
 
       snprintf(key, sizeof(key), "overlay%u_desc%u", dst, to);
       snprintf(val, sizeof(val), "%s,%.6f,%.6f,rect,%.6f,%.6f",
-            input_config_bind_map_get_base(bind),
+            gamepad ? "nul" : input_config_bind_map_get_base(bind),
             (0.5f - active->mod_x) / active->mod_w,
             (0.5f - active->mod_y) / active->mod_h, rx, rx * aspect);
       config_set_string(conf, key, val);
@@ -14554,15 +14574,22 @@ bool input_overlay_custom_new(unsigned bind, const char *label)
       config_set_string(conf, key, label ? label : "");
       snprintf(key, sizeof(key), "overlay%u_desc%u_custom", dst, to);
       config_set_uint(conf, key, id);
+      if (gamepad)
+      {
+         snprintf(key, sizeof(key), "overlay%u_desc%u_gamepad", dst, to);
+         config_set_string(conf, key, gamepad);
+      }
       snprintf(key, sizeof(key), "overlay%u_desc%u_layout_added", dst, to);
       config_set_uint(conf, key, (unsigned)added + 1);
    }
    return input_overlay_custom_write(conf, path, ol);
 }
 
-/* The input (unless @bind is RARCH_BIND_LIST_END) or the label (unless
- * NULL) of the custom button selected */
-bool input_overlay_custom_set(unsigned bind, const char *label)
+/* What the custom button selected sends, @bind or the @gamepad it
+ * loads (unless RARCH_BIND_LIST_END and NULL), or its label (unless
+ * NULL) */
+bool input_overlay_custom_set(unsigned bind, const char *gamepad,
+      const char *label)
 {
    struct config_entry_list *e;
    char path[PATH_MAX_LENGTH];
@@ -14605,7 +14632,12 @@ bool input_overlay_custom_set(unsigned bind, const char *label)
          snprintf(key, sizeof(key), "%s_label", prefix);
          config_set_string(conf, key, label);
       }
-      if (bind != RARCH_BIND_LIST_END)
+      snprintf(key, sizeof(key), "%s_gamepad", prefix);
+      if (gamepad)
+         config_set_string(conf, key, gamepad);
+      else if (bind != RARCH_BIND_LIST_END)
+         config_unset(conf, key);
+      if (bind != RARCH_BIND_LIST_END || gamepad)
       {
          char desc[256];
          const char *rest;
@@ -14615,7 +14647,8 @@ bool input_overlay_custom_set(unsigned bind, const char *label)
          {
             char out[300];
             snprintf(out, sizeof(out), "%s%s",
-                  input_config_bind_map_get_base(bind), rest);
+                  gamepad ? "nul" : input_config_bind_map_get_base(bind),
+                  rest);
             config_set_string(conf, prefix, out);
          }
       }
@@ -18506,6 +18539,13 @@ void input_driver_poll(void)
          && !input_overlay_edit_active()
          && input_st->overlay_ptr->layout_key != input_overlay_layout_key())
       input_overlay_init();
+   if (*input_overlay_gamepad_pending)
+   {
+      char name[sizeof(input_overlay_gamepad_pending)];
+      strlcpy(name, input_overlay_gamepad_pending, sizeof(name));
+      *input_overlay_gamepad_pending = '\0';
+      input_overlay_layout_profile_load(name);
+   }
 
    if (      input_st->overlay_ptr
          && (input_st->overlay_ptr->flags & INPUT_OVERLAY_ALIVE))
