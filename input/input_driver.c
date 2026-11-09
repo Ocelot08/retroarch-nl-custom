@@ -13516,6 +13516,11 @@ static const char *input_overlay_path(bool want_osk)
          }
       }
    }
+   /* With nothing running, the gamepad loaded is for all content,
+    * whatever core was last used */
+   if (     runloop_state_get_ptr()->current_core_type == CORE_TYPE_DUMMY
+         && input_overlay_is_profile(config_get_ptr()->paths.path_overlay))
+      return config_get_ptr()->paths.path_overlay;
    return input_overlay_profile_for(input_overlay_pack_path());
 }
 
