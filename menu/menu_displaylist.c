@@ -12838,6 +12838,8 @@ unsigned menu_displaylist_build_list(
                   MENU_ENUM_LABEL_VALUE_OVERLAY_EDIT_LAYOUT },
                { MENU_ENUM_LABEL_OVERLAY_LAYOUT_CONTROLS,
                   MENU_ENUM_LABEL_VALUE_OVERLAY_LAYOUT_CONTROLS },
+               { MENU_ENUM_LABEL_OVERLAY_CUSTOM_BUTTONS,
+                  MENU_ENUM_LABEL_VALUE_OVERLAY_CUSTOM_BUTTONS },
                { MENU_ENUM_LABEL_OVERLAY_LAYOUT_PROFILE_SAVE,
                   MENU_ENUM_LABEL_VALUE_OVERLAY_LAYOUT_PROFILE_SAVE },
                { MENU_ENUM_LABEL_OVERLAY_LAYOUT_PROFILE_LOAD,
@@ -12910,6 +12912,56 @@ unsigned menu_displaylist_build_list(
                string_list_free(names);
             }
          }
+         break;
+      case DISPLAYLIST_OVERLAY_CUSTOM_BUTTONS_LIST:
+         {
+            struct string_list *buttons = input_overlay_custom_list();
+            if (menu_entries_append(list,
+                     msg_hash_to_str(MENU_ENUM_LABEL_VALUE_OVERLAY_CUSTOM_NEW),
+                     msg_hash_to_str(MENU_ENUM_LABEL_OVERLAY_CUSTOM_NEW),
+                     MENU_ENUM_LABEL_OVERLAY_CUSTOM_NEW,
+                     MENU_SETTING_ACTION, 0, 0, NULL))
+               count++;
+            if (buttons)
+            {
+               for (i = 0; i < buttons->size; i++)
+                  if (menu_entries_append(list, buttons->elems[i].data,
+                           msg_hash_to_str(MENU_ENUM_LABEL_OVERLAY_CUSTOM_ITEM),
+                           MENU_ENUM_LABEL_OVERLAY_CUSTOM_ITEM,
+                           MENU_SETTING_ACTION, 0,
+                           (size_t)buttons->elems[i].attr.i, NULL))
+                     count++;
+               string_list_free(buttons);
+            }
+         }
+         break;
+      case DISPLAYLIST_OVERLAY_CUSTOM_BUTTON_LIST:
+         {
+            static const enum msg_hash_enums rows[][2] = {
+               { MENU_ENUM_LABEL_OVERLAY_CUSTOM_LABEL,
+                  MENU_ENUM_LABEL_VALUE_OVERLAY_CUSTOM_LABEL },
+               { MENU_ENUM_LABEL_OVERLAY_CUSTOM_INPUT,
+                  MENU_ENUM_LABEL_VALUE_OVERLAY_CUSTOM_INPUT },
+               { MENU_ENUM_LABEL_OVERLAY_CUSTOM_REMOVE,
+                  MENU_ENUM_LABEL_VALUE_OVERLAY_CUSTOM_REMOVE },
+            };
+            for (i = 0; i < ARRAY_SIZE(rows); i++)
+               if (menu_entries_append(list,
+                        msg_hash_to_str(rows[i][1]),
+                        msg_hash_to_str(rows[i][0]),
+                        rows[i][0], MENU_SETTING_ACTION, 0, 0, NULL))
+                  count++;
+         }
+         break;
+      case DISPLAYLIST_OVERLAY_CUSTOM_INPUT_LIST:
+         for (i = 0; i < RARCH_BIND_LIST_END; i++)
+            if (     input_overlay_custom_input((unsigned)i)
+                  && menu_entries_append(list,
+                     input_config_bind_map_get_desc((unsigned)i),
+                     msg_hash_to_str(MENU_ENUM_LABEL_OVERLAY_CUSTOM_INPUT_ITEM),
+                     MENU_ENUM_LABEL_OVERLAY_CUSTOM_INPUT_ITEM,
+                     MENU_SETTING_ACTION, 0, i, NULL))
+               count++;
          break;
       case DISPLAYLIST_OVERLAY_MOUSE_SETTINGS_LIST:
          {
@@ -16980,6 +17032,9 @@ static bool menu_displaylist_ctl_internal(
          case DISPLAYLIST_OVERLAY_LAYOUT_CONTROLS_LIST:
          case DISPLAYLIST_OVERLAY_LAYOUT_PROFILE_LOAD_LIST:
          case DISPLAYLIST_OVERLAY_LAYOUT_PROFILE_DELETE_LIST:
+         case DISPLAYLIST_OVERLAY_CUSTOM_BUTTONS_LIST:
+         case DISPLAYLIST_OVERLAY_CUSTOM_BUTTON_LIST:
+         case DISPLAYLIST_OVERLAY_CUSTOM_INPUT_LIST:
          case DISPLAYLIST_OVERLAY_BUTTON_STYLE_LIST:
 #endif
          case DISPLAYLIST_ACCOUNTS_CHEEVOS_LIST:

@@ -14,7 +14,7 @@ how much work it is:
 | 2 | Button size (built) | - | Medium |
 | 3 | Drawn buttons (built) | - | Large |
 | 4 | Button style (built) | 3 | Small |
-| 5 | Custom buttons | 3 | Medium |
+| 5 | Custom buttons (built) | 3 | Medium |
 | 6 | Buttons to switch gamepads | 5 | Small |
 
 Test on the phone at each checkpoint below before building on: the
@@ -90,12 +90,17 @@ away from what is being sized, with Reset and Done. Built together.
 
 ## 5. Custom buttons
 
-*Needs first: 3, for its label. Effort: Medium.*
+*Needs first: 3, for its label. Effort: Medium. Built.*
 
 - A button with its own label (for example "C") sending any RetroArch
-  input (for example L1).
-- Needs a way in the editor to make a button, type its label and pick
-  its input.
+  input (for example L1): a button of the gamepad or a hotkey.
+- Touch Layout > Custom Buttons: New Custom Button picks the input,
+  then the label is typed; each one listed opens Label, Input and
+  Remove. It is placed and sized in Edit Layout like other controls.
+- Drawn round with its label whatever it sends. With drawn buttons off,
+  and in other RetroArch, it shows a blank button image.
+- Written in the gamepad as a plain overlay button, with `_label` and
+  a `_custom` id shared by its copies on each page of the shape.
 
 ## 6. Buttons to switch gamepads
 

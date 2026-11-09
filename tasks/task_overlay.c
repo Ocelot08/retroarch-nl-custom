@@ -740,8 +740,14 @@ static bool task_overlay_load_desc_drawn(
    snprintf(key, sizeof(key), "overlay%u_desc%u_label", ol_idx, desc_idx);
    config_get_array(conf, key, label, sizeof(label));
 
-   if (!input_overlay_draw_classify(tok[0], movable, label, &draw))
-      return false;
+   {
+      unsigned custom = 0;
+      snprintf(key, sizeof(key), "overlay%u_desc%u_custom", ol_idx, desc_idx);
+      config_get_uint(conf, key, &custom);
+      if (!input_overlay_draw_classify(tok[0], movable, custom != 0,
+               label, &draw))
+         return false;
+   }
 
    /* An arm is drawn nearer the middle of the D-pad it is in */
    desc->draw_dx = desc->draw_dy = 0.0f;
@@ -1211,6 +1217,20 @@ static bool task_overlay_load_desc(
       unsigned added = 0;
       if (config_get_uint(conf, overlay_key, &added))
          desc->layout_added = (uint16_t)added;
+   }
+   strlcpy_lit(overlay_key + _len, "_custom", sizeof(overlay_key) - _len);
+   desc->custom = 0;
+   {
+      unsigned custom = 0;
+      if (config_get_uint(conf, overlay_key, &custom))
+         desc->custom = (uint16_t)custom;
+   }
+   desc->custom_label[0] = '\0';
+   if (desc->custom)
+   {
+      strlcpy_lit(overlay_key + _len, "_label", sizeof(overlay_key) - _len);
+      config_get_array(conf, overlay_key, desc->custom_label,
+            sizeof(desc->custom_label));
    }
 
    desc->x_shift = desc->x;

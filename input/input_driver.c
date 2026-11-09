@@ -8848,6 +8848,9 @@ static size_t input_overlay_layout_desc_name(const struct overlay_desc *desc,
    size_t _len = 0;
 
    *s = '\0';
+   if (desc->custom)
+      return snprintf(s, len, msg_hash_to_str(MSG_OVERLAY_CONTROL_CUSTOM),
+            desc->custom_label);
    if (desc->type == OVERLAY_TYPE_KEYBOARD)
       return strlcpy(s, msg_hash_to_str(MSG_OVERLAY_CONTROL_KEY), len);
    if (     BIT256_GET(desc->button_mask, RARCH_OVERLAY_NEXT)
@@ -14335,6 +14338,320 @@ bool input_overlay_layout_profile_delete(const char *name)
       return false;
    input_overlay_profile_file(path, sizeof(path), name);
    return *path && path_is_valid(path) && filestream_delete(path) == 0;
+}
+
+/* Custom buttons: controls of their own label and input, added to each
+ * page of the shape of the one shown, all with the same _custom id */
+static unsigned input_overlay_custom_sel;
+
+/* The gamepad shown, opened, with its path in @path; NULL when what is
+ * shown is not a gamepad */
+static config_file_t *input_overlay_custom_open(input_overlay_t **ol,
+      char *path, size_t len)
+{
+   *ol = input_overlay_layout_target();
+   if (!*ol || !input_overlay_is_profile((*ol)->path))
+      return NULL;
+   input_overlay_edit_finish(input_driver_st.overlay_ptr, true);
+   strlcpy(path, (*ol)->path, len);
+   return config_file_new_from_path_to_string(path);
+}
+
+static bool input_overlay_custom_write(config_file_t *conf,
+      const char *path, input_overlay_t *ol)
+{
+   bool ret = config_file_write(conf, path, true);
+   config_file_free(conf);
+   if (ret)
+      input_overlay_layout_reload(ol);
+#ifdef HAVE_MENU
+   menu_state_get_ptr()->flags |= MENU_ST_FLAG_ENTRIES_NEED_REFRESH;
+#endif
+   return ret;
+}
+
+/* @idx of @page taken out, the descs after it moved down one */
+static void input_overlay_custom_drop(config_file_t *conf, unsigned page,
+      unsigned idx)
+{
+   unsigned k, count = 0;
+   char key[64];
+
+   snprintf(key, sizeof(key), "overlay%u_descs", page);
+   if (!config_get_uint(conf, key, &count) || idx >= count)
+      return;
+   for (k = idx; k < count; k++)
+   {
+      size_t i, _len;
+      char prefix[32];
+      struct config_entry_list *e;
+      union string_list_elem_attr attr;
+      struct string_list *keys = string_list_new();
+      if (!keys)
+         return;
+      attr.i = 0;
+      _len   = snprintf(prefix, sizeof(prefix), "overlay%u_desc%u", page, k);
+      for (e = conf->entries; e; e = e->next)
+         if (     e->key && !strncmp(e->key, prefix, _len)
+               && (!e->key[_len] || e->key[_len] == '_'))
+            string_list_append(keys, e->key, attr);
+      for (i = 0; i < keys->size; i++)
+         config_unset(conf, keys->elems[i].data);
+      string_list_free(keys);
+
+      if (k + 1 >= count || !(keys = string_list_new()))
+         continue;
+      _len = snprintf(prefix, sizeof(prefix), "overlay%u_desc%u", page, k + 1);
+      for (e = conf->entries; e; e = e->next)
+         if (     e->key && e->value && !strncmp(e->key, prefix, _len)
+               && (!e->key[_len] || e->key[_len] == '_'))
+         {
+            snprintf(key, sizeof(key), "overlay%u_desc%u%s", page, k,
+                  e->key + _len);
+            attr.p = NULL;
+            string_list_append(keys, key, attr);
+            string_list_append(keys, e->value, attr);
+         }
+      for (i = 0; i + 1 < keys->size; i += 2)
+         config_set_string(conf, keys->elems[i].data,
+               keys->elems[i + 1].data);
+      string_list_free(keys);
+   }
+   snprintf(key, sizeof(key), "overlay%u_descs", page);
+   config_set_uint(conf, key, count - 1);
+}
+
+struct string_list *input_overlay_custom_list(void)
+{
+   size_t i;
+   input_overlay_t *ol        = input_overlay_layout_target();
+   struct string_list *list   = string_list_new();
+   const struct overlay *page = ol ? ol->active : NULL;
+
+   if (!list || !page)
+      return list;
+   for (i = 0; i < page->size; i++)
+   {
+      char text[128];
+      unsigned b;
+      union string_list_elem_attr attr;
+      const struct overlay_desc *desc = &page->descs[i];
+      const char *input               = NULL;
+      if (!desc->custom)
+         continue;
+      for (b = 0; b < RARCH_BIND_LIST_END && !input; b++)
+         if (BIT256_GET(desc->button_mask, b))
+            input = input_config_bind_map_get_desc(b);
+      snprintf(text, sizeof(text), "%s: %s",
+            *desc->custom_label ? desc->custom_label : "-",
+            input ? input : "");
+      attr.i = desc->custom;
+      string_list_append(list, text, attr);
+   }
+   return list;
+}
+
+void input_overlay_custom_select(unsigned id)
+{
+   input_overlay_custom_sel = id;
+}
+
+/* An input a custom button can send: a button of the pad or a hotkey,
+ * not one that needs more than pressing */
+bool input_overlay_custom_input(unsigned bind)
+{
+   if (bind >= RARCH_BIND_LIST_END)
+      return false;
+   if (bind >= RARCH_FIRST_CUSTOM_BIND && bind < RARCH_FIRST_META_KEY)
+      return false;
+   return   bind != RARCH_ENABLE_HOTKEY
+         && bind != RARCH_OVERLAY_NEXT
+         && input_config_bind_map_get_base(bind)
+         && input_config_bind_map_get_desc(bind);
+}
+
+bool input_overlay_custom_new(unsigned bind, const char *label)
+{
+   size_t d;
+   unsigned dst, id = 0;
+   char key[64];
+   char val[128];
+   char path[PATH_MAX_LENGTH];
+   char img[PATH_MAX_LENGTH];
+   struct config_entry_list *e;
+   input_overlay_t *ol;
+   const struct overlay *active;
+   config_file_t *conf;
+
+   if (     !input_overlay_custom_input(bind)
+         || !(conf = input_overlay_custom_open(&ol, path, sizeof(path))))
+      return false;
+   active = ol->active;
+
+   for (e = conf->entries; e; e = e->next)
+   {
+      size_t klen = e->key ? strlen(e->key) : 0;
+      if (     klen > STRLEN_CONST("_custom")
+            && string_is_equal(e->key + klen - STRLEN_CONST("_custom"),
+               "_custom"))
+         id = MAX(id, (unsigned)strtoul(e->value, NULL, 10));
+   }
+   id++;
+
+   /* Its image, for the images and other RetroArch, next to it */
+   fill_pathname_basedir(img, path, sizeof(img));
+   fill_pathname_join_special(val, img, "img", sizeof(val));
+   fill_pathname_join_special(img, val, "button_custom.png", sizeof(img));
+   if (!path_is_valid(img))
+   {
+      char from[PATH_MAX_LENGTH];
+      char dir[DIR_MAX_LENGTH];
+      void *buf    = NULL;
+      int64_t blen = 0;
+      fill_pathname_expand_special(dir,
+            config_get_ptr()->paths.directory_overlay, sizeof(dir));
+      fill_pathname_join_special(from, dir,
+            "gamepads/neo-custom/img/button_custom.png", sizeof(from));
+      if (!path_is_directory(val))
+         path_mkdir(val);
+      if (filestream_read_file(from, &buf, &blen))
+      {
+         filestream_write_file(img, buf, blen);
+         free(buf);
+      }
+   }
+
+   for (dst = 0; dst < ol->size; dst++)
+   {
+      unsigned to                = 0;
+      uint16_t added             = 0;
+      const struct overlay *page = &ol->overlays[dst];
+      /* As big as a face button, round on the screen */
+      float aspect               = page->aspect_ratio > 0.0f
+         ? page->aspect_ratio : 1.0f;
+      float rx                   = 0.0612f * MIN(1.0f, 1.0f / aspect);
+
+      if (page != active
+            && (  !input_overlay_page_alike(page, active)
+               || !(page->flags & OVERLAY_TAKES_OTHER_INPUT)))
+         continue;
+      for (d = 0; d < page->size; d++)
+         if (page->descs[d].layout_added > added)
+            added = page->descs[d].layout_added;
+      snprintf(key, sizeof(key), "overlay%u_descs", dst);
+      config_get_uint(conf, key, &to);
+      config_set_uint(conf, key, to + 1);
+
+      snprintf(key, sizeof(key), "overlay%u_desc%u", dst, to);
+      snprintf(val, sizeof(val), "%s,%.6f,%.6f,rect,%.6f,%.6f",
+            input_config_bind_map_get_base(bind),
+            (0.5f - active->mod_x) / active->mod_w,
+            (0.5f - active->mod_y) / active->mod_h, rx, rx * aspect);
+      config_set_string(conf, key, val);
+      snprintf(key, sizeof(key), "overlay%u_desc%u_overlay", dst, to);
+      config_set_string(conf, key, "img/button_custom.png");
+      snprintf(key, sizeof(key), "overlay%u_desc%u_label", dst, to);
+      config_set_string(conf, key, label ? label : "");
+      snprintf(key, sizeof(key), "overlay%u_desc%u_custom", dst, to);
+      config_set_uint(conf, key, id);
+      snprintf(key, sizeof(key), "overlay%u_desc%u_layout_added", dst, to);
+      config_set_uint(conf, key, (unsigned)added + 1);
+   }
+   return input_overlay_custom_write(conf, path, ol);
+}
+
+/* The input (unless @bind is RARCH_BIND_LIST_END) or the label (unless
+ * NULL) of the custom button selected */
+bool input_overlay_custom_set(unsigned bind, const char *label)
+{
+   struct config_entry_list *e;
+   char path[PATH_MAX_LENGTH];
+   input_overlay_t *ol;
+   config_file_t *conf;
+   union string_list_elem_attr attr;
+   struct string_list *descs;
+   size_t i;
+
+   if (     (bind != RARCH_BIND_LIST_END && !input_overlay_custom_input(bind))
+         || !input_overlay_custom_sel
+         || !(conf = input_overlay_custom_open(&ol, path, sizeof(path))))
+      return false;
+   if (!(descs = string_list_new()))
+   {
+      config_file_free(conf);
+      return false;
+   }
+   attr.i = 0;
+   for (e = conf->entries; e; e = e->next)
+   {
+      size_t klen = e->key ? strlen(e->key) : 0;
+      if (     klen > STRLEN_CONST("_custom")
+            && string_is_equal(e->key + klen - STRLEN_CONST("_custom"),
+               "_custom")
+            && strtoul(e->value, NULL, 10) == input_overlay_custom_sel)
+      {
+         char prefix[64];
+         strlcpy(prefix, e->key, MIN(sizeof(prefix),
+                  klen - STRLEN_CONST("_custom") + 1));
+         string_list_append(descs, prefix, attr);
+      }
+   }
+   for (i = 0; i < descs->size; i++)
+   {
+      char key[80];
+      const char *prefix = descs->elems[i].data;
+      if (label)
+      {
+         snprintf(key, sizeof(key), "%s_label", prefix);
+         config_set_string(conf, key, label);
+      }
+      if (bind != RARCH_BIND_LIST_END)
+      {
+         char desc[256];
+         const char *rest;
+         if (     !config_get_array(conf, prefix, desc, sizeof(desc))
+               || !(rest = strchr(desc, ',')))
+            continue;
+         {
+            char out[300];
+            snprintf(out, sizeof(out), "%s%s",
+                  input_config_bind_map_get_base(bind), rest);
+            config_set_string(conf, prefix, out);
+         }
+      }
+   }
+   string_list_free(descs);
+   return input_overlay_custom_write(conf, path, ol);
+}
+
+bool input_overlay_custom_remove(void)
+{
+   unsigned page, pages = 0;
+   char path[PATH_MAX_LENGTH];
+   input_overlay_t *ol;
+   config_file_t *conf;
+
+   if (     !input_overlay_custom_sel
+         || !(conf = input_overlay_custom_open(&ol, path, sizeof(path))))
+      return false;
+   config_get_uint(conf, "overlays", &pages);
+   for (page = 0; page < pages; page++)
+   {
+      unsigned d, count = 0;
+      char key[64];
+      snprintf(key, sizeof(key), "overlay%u_descs", page);
+      config_get_uint(conf, key, &count);
+      for (d = count; d-- > 0; )
+      {
+         unsigned id = 0;
+         snprintf(key, sizeof(key), "overlay%u_desc%u_custom", page, d);
+         if (     config_get_uint(conf, key, &id)
+               && id == input_overlay_custom_sel)
+            input_overlay_custom_drop(conf, page, d);
+      }
+   }
+   input_overlay_custom_sel = 0;
+   return input_overlay_custom_write(conf, path, ol);
 }
 
 struct string_list *input_overlay_layout_profile_list(bool builtin)

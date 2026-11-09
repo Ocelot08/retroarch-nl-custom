@@ -70,10 +70,11 @@ void input_overlay_draw_font_free(overlay_draw_font_t *font);
 
 /* What a desc doing @action (as overlay configs write it, "a" or
  * "left|up") is drawn as, if it is one of the buttons drawn: @movable
- * tells an analog stick's knob from its ring. @label, when not empty,
- * is used in place of the one @action gives. */
+ * tells an analog stick's knob from its ring, and a @custom button is
+ * drawn round whatever it does. @label, when not empty, is used in
+ * place of the one @action gives. */
 bool input_overlay_draw_classify(const char *action, bool movable,
-      const char *label, overlay_draw_t *out);
+      bool custom, const char *label, overlay_draw_t *out);
 
 /* @img's pixels (ARGB, or RGBA as @img->supports_rgba says) made for
  * @draw. False when they could not be had. */

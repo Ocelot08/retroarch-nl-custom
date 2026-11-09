@@ -109,7 +109,7 @@ void input_overlay_draw_font_free(overlay_draw_font_t *font)
 }
 
 bool input_overlay_draw_classify(const char *action, bool movable,
-      const char *label, overlay_draw_t *out)
+      bool custom, const char *label, overlay_draw_t *out)
 {
    static const struct
    {
@@ -154,6 +154,13 @@ bool input_overlay_draw_classify(const char *action, bool movable,
             strlcpy(out->label, buttons[i].label, sizeof(out->label));
             break;
          }
+      /* Round, whatever it sends, and blank with no label of its own */
+      if (custom)
+      {
+         out->shape    = OVERLAY_DRAW_ROUND;
+         out->dir      = 0;
+         out->label[0] = '\0';
+      }
       if (out->shape == OVERLAY_DRAW_NONE)
          return false;
    }

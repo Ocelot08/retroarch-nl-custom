@@ -60,7 +60,18 @@ Layout**, or **Quick Menu → On-Screen Overlay → Touch Layout** in a game.
   pages (an analog stick, save/load state, turbo, the keyboard, ...),
   then each D-pad arrow and face button on its own, next to the
   cluster. Switching on one the page doesn't have yet adds it in the
-  middle of the screen, to be dragged into place.
+  middle of the screen, to be dragged into place, on every page of the
+  screen's shape (the D-pad, analog and expanded pages).
+- **Custom Buttons**: buttons of your own. **New Custom Button**: pick
+  what it sends (a button of the gamepad, or a hotkey such as
+  fast-forward or save state), then type its label, say "C" sending
+  L1. It is drawn round with its label and appears in the middle of the
+  screen, to be placed and sized in Edit Layout like any control. Each
+  one listed opens **Label**, **Input** and **Remove**. They are kept
+  in the gamepad, as plain overlay buttons other RetroArch can use
+  too (with a blank button image, as only this build draws labels).
+- **Hide**: with the controls hidden (the page the hide button goes
+  to), the menu can be used by touch again, apart from the show button.
 - **Gamepads**: what you lay out is a gamepad, an overlay preset of its
   own (RetroArch's word for an overlay config). Three come built in:
   **Main**, **Nintendo DS** and **Nintendo 3DS**; DS and 3DS games

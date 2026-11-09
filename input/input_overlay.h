@@ -328,6 +328,9 @@ struct overlay_desc
    /* Nonzero for a desc the user layout added: the descs added together
     * share it. */
    uint16_t layout_added;
+   /* A custom button's id, the same on each page it is on; 0 if not */
+   uint16_t custom;
+   char custom_label[16];
 
    uint8_t led;
    uint8_t flags;

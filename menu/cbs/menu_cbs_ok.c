@@ -434,6 +434,12 @@ static enum msg_hash_enums action_ok_dl_to_enum(unsigned lbl)
          return MENU_ENUM_LABEL_DEFERRED_OVERLAY_LAYOUT_PROFILE_LOAD_LIST;
       case ACTION_OK_DL_OVERLAY_BUTTON_STYLE_LIST:
          return MENU_ENUM_LABEL_DEFERRED_OVERLAY_BUTTON_STYLE_LIST;
+      case ACTION_OK_DL_OVERLAY_CUSTOM_BUTTONS_LIST:
+         return MENU_ENUM_LABEL_DEFERRED_OVERLAY_CUSTOM_BUTTONS_LIST;
+      case ACTION_OK_DL_OVERLAY_CUSTOM_BUTTON_LIST:
+         return MENU_ENUM_LABEL_DEFERRED_OVERLAY_CUSTOM_BUTTON_LIST;
+      case ACTION_OK_DL_OVERLAY_CUSTOM_INPUT_LIST:
+         return MENU_ENUM_LABEL_DEFERRED_OVERLAY_CUSTOM_INPUT_LIST;
       case ACTION_OK_DL_OVERLAY_LAYOUT_PROFILE_DELETE_LIST:
          return MENU_ENUM_LABEL_DEFERRED_OVERLAY_LAYOUT_PROFILE_DELETE_LIST;
       case ACTION_OK_DL_MENU_SETTINGS_LIST:
@@ -1846,6 +1852,9 @@ int generic_action_ok_displaylist_push(
       case ACTION_OK_DL_OVERLAY_LAYOUT_CONTROLS_LIST:
       case ACTION_OK_DL_OVERLAY_LAYOUT_PROFILE_LOAD_LIST:
       case ACTION_OK_DL_OVERLAY_LAYOUT_PROFILE_DELETE_LIST:
+      case ACTION_OK_DL_OVERLAY_CUSTOM_BUTTONS_LIST:
+      case ACTION_OK_DL_OVERLAY_CUSTOM_BUTTON_LIST:
+      case ACTION_OK_DL_OVERLAY_CUSTOM_INPUT_LIST:
       case ACTION_OK_DL_OVERLAY_BUTTON_STYLE_LIST:
       case ACTION_OK_DL_MENU_SETTINGS_LIST:
 #ifdef _3DS
@@ -2064,6 +2073,8 @@ static const ok_dl_map_t ok_dl_map[] = {
    { MENU_ENUM_LABEL_OVERLAY_LAYOUT_PROFILE_LOAD, ACTION_OK_DL_OVERLAY_LAYOUT_PROFILE_LOAD_LIST },
    { MENU_ENUM_LABEL_OVERLAY_LAYOUT_STYLE, ACTION_OK_DL_OVERLAY_BUTTON_STYLE_LIST },
    { MENU_ENUM_LABEL_OVERLAY_LAYOUT_PROFILE_DELETE, ACTION_OK_DL_OVERLAY_LAYOUT_PROFILE_DELETE_LIST },
+   { MENU_ENUM_LABEL_OVERLAY_CUSTOM_BUTTONS, ACTION_OK_DL_OVERLAY_CUSTOM_BUTTONS_LIST },
+   { MENU_ENUM_LABEL_OVERLAY_CUSTOM_INPUT, ACTION_OK_DL_OVERLAY_CUSTOM_INPUT_LIST },
    { MENU_ENUM_LABEL_OSK_OVERLAY_SETTINGS, ACTION_OK_DL_OSK_OVERLAY_SETTINGS_LIST },
    { MENU_ENUM_LABEL_MENU_SETTINGS, ACTION_OK_DL_MENU_SETTINGS_LIST },
    { MENU_ENUM_LABEL_MENU_VIEWS_SETTINGS, ACTION_OK_DL_MENU_VIEWS_SETTINGS_LIST },
@@ -6531,6 +6542,106 @@ static int action_ok_overlay_layout_profile_load_item(const char *path,
    return 0;
 }
 
+/* A new custom button's input, until its label is typed */
+static unsigned action_overlay_custom_bind = RARCH_BIND_LIST_END;
+/* A button there is chosen, rather than one being made */
+static bool action_overlay_custom_editing  = false;
+
+static void action_ok_overlay_custom_back(void)
+{
+   struct menu_state *menu_st = menu_state_get_ptr();
+   size_t selection           = menu_st->selection_ptr;
+   menu_entries_pop_stack(&selection, 0, 1);
+   menu_st->selection_ptr     = selection;
+   menu_st->flags            |= MENU_ST_FLAG_ENTRIES_NEED_REFRESH;
+}
+
+static int action_ok_overlay_custom_new(const char *path,
+      const char *label, unsigned type, size_t idx, size_t entry_idx)
+{
+   input_overlay_custom_select(0);
+   action_overlay_custom_editing = false;
+   return generic_action_ok_displaylist_push(path, NULL, label, type,
+         idx, entry_idx, ACTION_OK_DL_OVERLAY_CUSTOM_INPUT_LIST);
+}
+
+static int action_ok_overlay_custom_item(const char *path,
+      const char *label, unsigned type, size_t idx, size_t entry_idx)
+{
+   input_overlay_custom_select((unsigned)entry_idx);
+   action_overlay_custom_editing = true;
+   return generic_action_ok_displaylist_push(path, NULL, label, type,
+         idx, entry_idx, ACTION_OK_DL_OVERLAY_CUSTOM_BUTTON_LIST);
+}
+
+static void action_input_overlay_custom_label(void *userdata,
+      const char *line)
+{
+   bool made = false;
+   if (line)
+   {
+      made = (action_overlay_custom_bind != RARCH_BIND_LIST_END)
+         ? input_overlay_custom_new(action_overlay_custom_bind, line)
+         : input_overlay_custom_set(RARCH_BIND_LIST_END, line);
+      if (made && action_overlay_custom_bind != RARCH_BIND_LIST_END)
+         action_ok_overlay_layout_profile_msg(MSG_OVERLAY_CUSTOM_ADDED,
+               line, NULL);
+      else if (!made)
+         action_ok_overlay_layout_profile_msg(MSG_OVERLAY_CUSTOM_FAILED,
+               NULL, NULL);
+   }
+   menu_input_dialog_end();
+   /* From the inputs back to the buttons */
+   if (made && action_overlay_custom_bind != RARCH_BIND_LIST_END)
+      action_ok_overlay_custom_back();
+   action_overlay_custom_bind = RARCH_BIND_LIST_END;
+}
+
+static void action_ok_overlay_custom_label_start(void)
+{
+   menu_input_ctx_line_t line;
+   line.label         = msg_hash_to_str(MSG_OVERLAY_CUSTOM_LABEL);
+   line.label_setting = NULL;
+   line.type          = 0;
+   line.idx           = 0;
+   line.text_type     = MENU_INPUT_DIALOG_KB_TYPE_TEXT;
+   line.cb            = action_input_overlay_custom_label;
+   menu_input_dialog_start(&line);
+}
+
+static int action_ok_overlay_custom_label(const char *path,
+      const char *label, unsigned type, size_t idx, size_t entry_idx)
+{
+   action_overlay_custom_bind = RARCH_BIND_LIST_END;
+   action_ok_overlay_custom_label_start();
+   return 0;
+}
+
+/* A new button's input, its label next; or the input of one there is */
+static int action_ok_overlay_custom_input_item(const char *path,
+      const char *label, unsigned type, size_t idx, size_t entry_idx)
+{
+   if (action_overlay_custom_editing)
+   {
+      if (!input_overlay_custom_set((unsigned)entry_idx, NULL))
+         return -1;
+      action_ok_overlay_custom_back();
+      return 0;
+   }
+   action_overlay_custom_bind = (unsigned)entry_idx;
+   action_ok_overlay_custom_label_start();
+   return 0;
+}
+
+static int action_ok_overlay_custom_remove(const char *path,
+      const char *label, unsigned type, size_t idx, size_t entry_idx)
+{
+   if (!input_overlay_custom_remove())
+      return -1;
+   action_ok_overlay_custom_back();
+   return 0;
+}
+
 static int action_ok_overlay_layout_profile_delete_item(const char *path,
       const char *label, unsigned type, size_t idx, size_t entry_idx)
 {
@@ -9934,6 +10045,11 @@ static int menu_cbs_init_bind_ok_compare_label(menu_file_list_cbs_t *cbs,
          {MENU_ENUM_LABEL_OVERLAY_LAYOUT_PROFILE_SAVE,         action_ok_overlay_layout_profile_save},
          {MENU_ENUM_LABEL_OVERLAY_LAYOUT_PROFILE_LOAD_ITEM,    action_ok_overlay_layout_profile_load_item},
          {MENU_ENUM_LABEL_OVERLAY_LAYOUT_PROFILE_DELETE_ITEM,  action_ok_overlay_layout_profile_delete_item},
+         {MENU_ENUM_LABEL_OVERLAY_CUSTOM_NEW,                  action_ok_overlay_custom_new},
+         {MENU_ENUM_LABEL_OVERLAY_CUSTOM_ITEM,                 action_ok_overlay_custom_item},
+         {MENU_ENUM_LABEL_OVERLAY_CUSTOM_LABEL,                action_ok_overlay_custom_label},
+         {MENU_ENUM_LABEL_OVERLAY_CUSTOM_INPUT_ITEM,           action_ok_overlay_custom_input_item},
+         {MENU_ENUM_LABEL_OVERLAY_CUSTOM_REMOVE,               action_ok_overlay_custom_remove},
 #endif
          {MENU_ENUM_LABEL_ADD_TO_FAVORITES_PLAYLIST,           action_ok_add_to_favorites_playlist},
          {MENU_ENUM_LABEL_ADD_ENTRY_TO_PLAYLIST,               action_ok_add_entry_to_playlist},

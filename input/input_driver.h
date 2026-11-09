@@ -2203,6 +2203,14 @@ bool input_overlay_layout_stroke_step(int dir);
  * chosen in place of its layout. The list holds the names, sorted. */
 bool input_overlay_layout_profile_save(const char *name);
 bool input_overlay_layout_profile_load(const char *name);
+/* Custom buttons of the gamepad shown, by the id each list entry has
+ * in attr.i; the one selected is what set and remove change */
+struct string_list *input_overlay_custom_list(void);
+void input_overlay_custom_select(unsigned id);
+bool input_overlay_custom_input(unsigned bind);
+bool input_overlay_custom_new(unsigned bind, const char *label);
+bool input_overlay_custom_set(unsigned bind, const char *label);
+bool input_overlay_custom_remove(void);
 /* An overlay preset picked while content runs, an override's, and the
  * content closing: a gamepad among them is used for that content */
 void input_overlay_gamepad_preset(const char *path);

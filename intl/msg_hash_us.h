@@ -32656,6 +32656,62 @@ MSG_HASH(
    "Keyboard Key"
    )
 MSG_HASH(
+   MENU_ENUM_LABEL_VALUE_OVERLAY_CUSTOM_BUTTONS,
+   "Custom Buttons"
+   )
+MSG_HASH(
+   MENU_ENUM_SUBLABEL_OVERLAY_CUSTOM_BUTTONS,
+   "Buttons of your own, with a label you type, that send the input you pick. Added to the gamepad shown."
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_VALUE_OVERLAY_CUSTOM_NEW,
+   "New Custom Button"
+   )
+MSG_HASH(
+   MENU_ENUM_SUBLABEL_OVERLAY_CUSTOM_NEW,
+   "Pick what it sends, then type its label. It appears in the middle of the screen, to be placed in Edit Layout."
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_VALUE_OVERLAY_CUSTOM_LABEL,
+   "Label"
+   )
+MSG_HASH(
+   MENU_ENUM_SUBLABEL_OVERLAY_CUSTOM_LABEL,
+   "The text on the button."
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_VALUE_OVERLAY_CUSTOM_INPUT,
+   "Input"
+   )
+MSG_HASH(
+   MENU_ENUM_SUBLABEL_OVERLAY_CUSTOM_INPUT,
+   "What the button sends: a button of the gamepad or a hotkey."
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_VALUE_OVERLAY_CUSTOM_REMOVE,
+   "Remove"
+   )
+MSG_HASH(
+   MENU_ENUM_SUBLABEL_OVERLAY_CUSTOM_REMOVE,
+   "Take the button off the gamepad."
+   )
+MSG_HASH(
+   MSG_OVERLAY_CONTROL_CUSTOM,
+   "Custom: %s"
+   )
+MSG_HASH(
+   MSG_OVERLAY_CUSTOM_LABEL,
+   "Button Label"
+   )
+MSG_HASH(
+   MSG_OVERLAY_CUSTOM_ADDED,
+   "Added %s. Place it in Edit Layout."
+   )
+MSG_HASH(
+   MSG_OVERLAY_CUSTOM_FAILED,
+   "Custom buttons go in a gamepad: use Save as Gamepad first."
+   )
+MSG_HASH(
    MSG_OVERLAY_CONTROL_PAGE,
    "Page: %s"
    )
