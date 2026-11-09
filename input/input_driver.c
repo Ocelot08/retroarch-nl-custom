@@ -14418,7 +14418,7 @@ static bool input_overlay_layout_add_control(input_overlay_t *ol,
 {
    input_overlay_addable_t add = *add_in;
    size_t d, src;
-   uint16_t group, added = 0;
+   uint16_t group;
    char key[64];
    char val[32];
    char prefix[32];
@@ -14426,7 +14426,9 @@ static bool input_overlay_layout_add_control(input_overlay_t *ol,
    const struct overlay *from;
    const struct overlay *active;
    struct config_entry_list *entry;
-   unsigned dst, count     = 0;
+   unsigned dst;
+   const struct overlay_desc *first = NULL;
+   const struct overlay_desc *model = NULL;
    float x0 = 1e9f, x1 = -1e9f, y0 = 1e9f, y1 = -1e9f;
    float dx, dy;
    bool ret                = false;
@@ -14451,72 +14453,130 @@ static bool input_overlay_layout_add_control(input_overlay_t *ol,
 
    from   = &ol->overlays[src];
    active = ol->active;
-   dst    = (unsigned)(active - ol->overlays);
-
-   for (d = 0; d < active->size; d++)
-      if (active->descs[d].layout_added > added)
-         added = active->descs[d].layout_added;
-   added++;
 
    for (d = 0; d < from->size; d++)
    {
       const struct overlay_desc *desc = &from->descs[d];
       if (add.desc >= 0 ? (int)d != add.desc : desc->layout_group != group)
          continue;
+      if (!first)
+         first = desc;
       x0 = MIN(x0, desc->x_shift - desc->range_x);
       x1 = MAX(x1, desc->x_shift + desc->range_x);
       y0 = MIN(y0, desc->y_shift - desc->range_y);
       y1 = MAX(y1, desc->y_shift + desc->range_y);
    }
-   /* To the middle of the screen, where nothing is meant to be */
-   dx = (0.5f - active->mod_x) / active->mod_w - (x0 + x1) * 0.5f;
-   dy = (0.5f - active->mod_y) / active->mod_h - (y0 + y1) * 0.5f;
-
-   for (d = 0; d < from->size; d++)
+   if (!first)
    {
-      size_t _len;
-      const struct overlay_desc *desc = &from->descs[d];
-      unsigned to                     = (unsigned)active->size + count;
-
-      if (add.desc >= 0 ? (int)d != add.desc : desc->layout_group != group)
+      config_file_free(layout);
+      config_file_free(merged);
+      return false;
+   }
+   /* Where a page of its shape has it already, so they stay one;
+    * else the middle of the screen, where nothing is meant to be */
+   for (dst = 0; dst < ol->size && !model; dst++)
+   {
+      const struct overlay *page = &ol->overlays[dst];
+      if (     page == active
+            || !input_overlay_page_alike(page, active))
          continue;
-
-      _len = snprintf(prefix, sizeof(prefix), "overlay%u_desc%u",
-            (unsigned)src, (unsigned)d);
-      for (entry = merged->entries; entry; entry = entry->next)
-      {
-         const char *suffix;
-         if (     !entry->key || !entry->value
-               || strncmp(entry->key, prefix, _len))
-            continue;
-         suffix = entry->key + _len;
-         if (     (*suffix && *suffix != '_')
-               || string_starts_with(suffix, "_layout_"))
-            continue;
-         /* A cluster's button is reached through its area; alone it
-          * needs its own */
-         if (     add.desc >= 0
-               && string_starts_with(suffix, "_reach_"))
-            continue;
-         snprintf(key, sizeof(key), "overlay%u_desc%u%s", dst, to, suffix);
-         config_set_string(layout, key, entry->value);
-      }
-
-      snprintf(key, sizeof(key), "overlay%u_desc%u_layout_x", dst, to);
-      snprintf(val, sizeof(val), "%.6f", desc->x_shift + dx);
-      config_set_string(layout, key, val);
-      snprintf(key, sizeof(key), "overlay%u_desc%u_layout_y", dst, to);
-      snprintf(val, sizeof(val), "%.6f", desc->y_shift + dy);
-      config_set_string(layout, key, val);
-      snprintf(key, sizeof(key), "overlay%u_desc%u_layout_added", dst, to);
-      snprintf(val, sizeof(val), "%u", (unsigned)added);
-      config_set_string(layout, key, val);
-      count++;
+      for (d = 0; d < page->size && !model; d++)
+         if (     page->descs[d].layout_added
+               && input_overlay_layout_same_buttons(&page->descs[d], first))
+            model = &page->descs[d];
+   }
+   if (model)
+   {
+      dx = model->x_shift - first->x_shift;
+      dy = model->y_shift - first->y_shift;
+   }
+   else
+   {
+      dx = (0.5f - active->mod_x) / active->mod_w - (x0 + x1) * 0.5f;
+      dy = (0.5f - active->mod_y) / active->mod_h - (y0 + y1) * 0.5f;
    }
 
-   snprintf(key, sizeof(key), "overlay%u_descs", dst);
-   snprintf(val, sizeof(val), "%u", (unsigned)active->size + count);
-   config_set_string(layout, key, val);
+   /* The page shown, and those of its shape, as moves and sizes carry
+    * to them; not a page that only hides the controls */
+   for (dst = 0; dst < ol->size; dst++)
+   {
+      const struct overlay *page = &ol->overlays[dst];
+      bool has                   = false;
+      unsigned count             = 0;
+      uint16_t added             = 0;
+
+      if (page != active
+            && (  !input_overlay_page_alike(page, active)
+               || !(page->flags & OVERLAY_TAKES_OTHER_INPUT)))
+         continue;
+      for (d = 0; d < page->size; d++)
+      {
+         if (page->descs[d].layout_added > added)
+            added = page->descs[d].layout_added;
+         if (     page != active
+               && page->descs[d].layout_added
+               && input_overlay_layout_same_buttons(&page->descs[d], first))
+            has = true;
+      }
+      if (has)
+         continue;
+      added++;
+
+      for (d = 0; d < from->size; d++)
+      {
+         size_t _len;
+         const struct overlay_desc *desc = &from->descs[d];
+         unsigned to                     = (unsigned)page->size + count;
+
+         if (add.desc >= 0 ? (int)d != add.desc : desc->layout_group != group)
+            continue;
+
+         _len = snprintf(prefix, sizeof(prefix), "overlay%u_desc%u",
+               (unsigned)src, (unsigned)d);
+         for (entry = merged->entries; entry; entry = entry->next)
+         {
+            const char *suffix;
+            if (     !entry->key || !entry->value
+                  || strncmp(entry->key, prefix, _len))
+               continue;
+            suffix = entry->key + _len;
+            if (     (*suffix && *suffix != '_')
+                  || string_starts_with(suffix, "_layout_"))
+               continue;
+            /* A cluster's button is reached through its area; alone it
+             * needs its own */
+            if (     add.desc >= 0
+                  && string_starts_with(suffix, "_reach_"))
+               continue;
+            snprintf(key, sizeof(key), "overlay%u_desc%u%s", dst, to, suffix);
+            config_set_string(layout, key, entry->value);
+         }
+
+         snprintf(key, sizeof(key), "overlay%u_desc%u_layout_x", dst, to);
+         snprintf(val, sizeof(val), "%.6f", desc->x_shift + dx);
+         config_set_string(layout, key, val);
+         snprintf(key, sizeof(key), "overlay%u_desc%u_layout_y", dst, to);
+         snprintf(val, sizeof(val), "%.6f", desc->y_shift + dy);
+         config_set_string(layout, key, val);
+         if (model && add.desc >= 0)
+         {
+            snprintf(key, sizeof(key), "overlay%u_desc%u_layout_w", dst, to);
+            snprintf(val, sizeof(val), "%.6f", model->range_x);
+            config_set_string(layout, key, val);
+            snprintf(key, sizeof(key), "overlay%u_desc%u_layout_h", dst, to);
+            snprintf(val, sizeof(val), "%.6f", model->range_y);
+            config_set_string(layout, key, val);
+         }
+         snprintf(key, sizeof(key), "overlay%u_desc%u_layout_added", dst, to);
+         snprintf(val, sizeof(val), "%u", (unsigned)added);
+         config_set_string(layout, key, val);
+         count++;
+      }
+
+      snprintf(key, sizeof(key), "overlay%u_descs", dst);
+      snprintf(val, sizeof(val), "%u", (unsigned)page->size + count);
+      config_set_string(layout, key, val);
+   }
 
    {
       char dir[DIR_MAX_LENGTH];
