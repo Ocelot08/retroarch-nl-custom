@@ -76,17 +76,19 @@ Layout**, or **Quick Menu → On-Screen Overlay → Touch Layout** in a game.
   to), the menu can be used by touch again, apart from the show button.
 - **Gamepads**: what you lay out is a gamepad, an overlay preset of its
   own (RetroArch's word for an overlay config). Three come built in:
-  **Main**, **Nintendo DS** and **Nintendo 3DS**; DS and 3DS games
-  start on theirs, everything else on Main.
+  **Main**, **Nintendo DS** and **Nintendo 3DS**. Every core starts on
+  Main (or the gamepad loaded with no game running); a core or game
+  gets its own by an override, below.
   - **Edit Layout** changes the gamepad shown, for everything using it.
   - **Save as Gamepad**: a copy of the gamepad shown, as laid out, to
     lay out apart, say for one game.
   - **Load Gamepad**: switch gamepads, the way RetroArch's Overlay
-    Preset works; the one in use is ticked. While a game runs, the change lasts until it closes;
-    to keep it, save an override (Quick Menu > Overrides > Save Core
-    Overrides or Save Game Overrides). With no game running, it is the
-    gamepad for all content, apart from DS and 3DS cores, which start
-    on their own unless an override says otherwise. Picking a gamepad
+    Preset works; the one in use is ticked. While a game runs, the
+    change lasts until it closes; to keep it, save an override (Quick
+    Menu > Overrides > Save Core Overrides or Save Game Overrides), as
+    for melonDS with Nintendo DS, or a Saturn core with a gamepad of
+    your own. With no game running, it is the gamepad for all content
+    that has no override of its own. Picking a gamepad
     file as Overlay Preset (Settings > User Interface > On-Screen
     Overlay) does the same; the files are in `overlays/gamepads/custom`.
   - **Delete Gamepad**: delete one you saved.
@@ -131,11 +133,11 @@ preset: in core and game overrides (`input_overlay`).
 - RGUI is the default menu, with the bundled **Highlighter** theme
   (**My Theme** is also included), without the menu border.
 - The touch controls stay shown over the menu.
-- Every system uses the main touch controls (Neo RetroPad) and their
-  layouts, but for DS, DSi and 3DS, which get controls of their own:
-  the layouts of RetroArch's DS and 3DS overlays, drawn with the same
-  buttons as the rest. Upstream picks a
-  system overlay for some 75 systems; this build only from
+- Every system starts on the Main gamepad (Neo RetroPad); others are
+  picked per core or game with overrides. Upstream picks a system
+  overlay for some 75 systems by itself; this build picks none. The
+  Nintendo DS and 3DS gamepads are made from the layouts of RetroArch's
+  DS and 3DS overlays, drawn with the same buttons as the rest, kept in
   `overlays/gamepads/Named_Overlays_Custom`.
 - Menu assets, overlays, controller profiles and core info files are
   bundled in the APK.

@@ -15258,7 +15258,7 @@ MSG_HASH(
    )
 MSG_HASH(
    MENU_ENUM_SUBLABEL_OVERLAY_LAYOUT_PROFILE_LOAD,
-   "Switch gamepads, like the overlay preset: for the running content until it closes, kept by saving a core or game override; with no content, for all content. Nintendo DS and 3DS cores start on their own gamepads. Any RetroArch can load a gamepad as an overlay preset."
+   "Switch gamepads, like the overlay preset: for the running content until it closes, kept by saving a core or game override; with no content, for all content without an override of its own. Any RetroArch can load a gamepad as an overlay preset."
    )
 MSG_HASH(
    MENU_ENUM_LABEL_VALUE_OVERLAY_LAYOUT_PROFILE_DELETE,

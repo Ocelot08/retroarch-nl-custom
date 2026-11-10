@@ -2318,81 +2318,23 @@ void input_overlay_gamepad_session_end(void)
    *input_overlay_gamepad_chosen   = '\0';
 }
 
-/* The gamepad to show: the one chosen for the content, the one for the
- * core's system, or the one made from @pack, the overlay RetroArch
- * would pick */
+/* The gamepad to show: the one chosen for the content (Load Gamepad, or
+ * an override's overlay preset), else the one for all content, which is
+ * the preset when that is a gamepad and otherwise the one made from
+ * @pack, the overlay RetroArch would pick. A system's own overlay, as
+ * Autoload Preferred Overlay picks, is not taken: a system's gamepad is
+ * chosen by an override like any other. */
 const char *input_overlay_gamepad_path(const char *pack)
 {
-   static char choice_path[PATH_MAX_LENGTH];
+   const char *preset = config_get_ptr()->paths.path_overlay;
 
-   if (*input_overlay_gamepad_chosen
+   if (     *input_overlay_gamepad_chosen
          && path_is_valid(input_overlay_gamepad_chosen))
       return input_overlay_gamepad_chosen;
-   /* The built-in gamepad of the running core's system, by what its
-    * info file says it runs, rather than by playlist, folder or setting */
-   if (runloop_state_get_ptr()->current_core_type != CORE_TYPE_DUMMY)
-   {
-      static const char *systems[][2] = {
-         { "Nintendo - Nintendo 3DS", "Nintendo 3DS" },
-         { "Nintendo - Nintendo DS",  "Nintendo DS"  } };
-      char name[NAME_MAX_LENGTH];
-      char info[PATH_MAX_LENGTH];
-      char databases[1024];
-      config_file_t *conf;
-      const char *core = path_get(RARCH_PATH_CORE);
-      size_t _len;
-
-      *databases = '\0';
-      if (core && *core)
-      {
-         /* melonds_libretro_android.so: melonds_libretro.info */
-         strlcpy(name, path_basename(core), sizeof(name));
-         path_remove_extension(name);
-         _len = strlen(name);
-         if (     _len > STRLEN_CONST("_android")
-               && string_is_equal(name + _len - STRLEN_CONST("_android"),
-                  "_android"))
-            name[_len - STRLEN_CONST("_android")] = '\0';
-         strlcat(name, ".info", sizeof(name));
-         fill_pathname_join_special(info,
-               config_get_ptr()->paths.path_libretro_info, name, sizeof(info));
-         if (     path_is_valid(info)
-               && (conf = config_file_new_from_path_to_string(info)))
-         {
-            config_get_array(conf, "database", databases, sizeof(databases));
-            config_file_free(conf);
-         }
-      }
-      if (*databases)
-      {
-         size_t i;
-         for (i = 0; i < ARRAY_SIZE(systems); i++)
-         {
-            /* One of its '|' separated names, whole */
-            const char *at = databases;
-            size_t nlen    = strlen(systems[i][0]);
-            bool found     = false;
-            while (!found && (at = strstr(at, systems[i][0])))
-            {
-               found = (at == databases || at[-1] == '|')
-                  && (at[nlen] == '\0' || at[nlen] == '|');
-               at   += nlen;
-            }
-            if (!found)
-               continue;
-            input_overlay_profiles_ensure();
-            input_overlay_profile_file(choice_path, sizeof(choice_path),
-                  systems[i][1]);
-            if (path_is_valid(choice_path))
-               return choice_path;
-         }
-      }
-   }
-   /* With nothing running, the gamepad loaded is for all content,
-    * whatever core was last used */
-   if (     runloop_state_get_ptr()->current_core_type == CORE_TYPE_DUMMY
-         && input_overlay_is_profile(config_get_ptr()->paths.path_overlay))
-      return config_get_ptr()->paths.path_overlay;
+   if (input_overlay_is_profile(preset))
+      return preset;
+   if (pack && strstr(pack, SYSTEM_OVERLAY_DIR))
+      pack = preset;
    return input_overlay_profile_for(pack);
 }
 
