@@ -82,8 +82,8 @@ Layout**, or **Quick Menu → On-Screen Overlay → Touch Layout** in a game.
   to), the menu can be used by touch again, apart from the show button.
 - **Gamepads**: what you lay out is a gamepad, an overlay preset of its
   own (RetroArch's word for an overlay config). Three come built in:
-  **Main**, **Nintendo DS** and **Nintendo 3DS**. Every core starts on
-  Main (or the gamepad loaded with no game running); a core or game
+  **Default**, **Nintendo DS** and **Nintendo 3DS**. Every core starts
+  on Default (or the gamepad loaded with no game running); a core or game
   gets its own by an override, below.
   - **Edit Layout** changes the gamepad shown, for everything using it.
   - **Save as Gamepad**: a copy of the gamepad shown, as laid out, to
@@ -97,15 +97,15 @@ Layout**, or **Quick Menu → On-Screen Overlay → Touch Layout** in a game.
     that has no override of its own. Picking a gamepad
     file as Overlay Preset (Settings > User Interface > On-Screen
     Overlay) does the same; the files are in `overlays/gamepads/custom`.
-  - **Delete Gamepad**: delete any gamepad, a built-in one too. If
-    it is the one shown, the controls change at once to the gamepad for
-    all content, or Main, or the plain Neo RetroPad overlay.
+  - **Delete Gamepad**: delete any gamepad but Default, a built-in one
+    too, after asking. If it is the one shown, the controls change at
+    once to the gamepad for all content, or Default.
   - **Reset Gamepad**: put the built-in gamepad shown back as it comes,
     and bring back any built-in one that was deleted.
 
 #### Screenshots
 
-Portrait, with the Main gamepad (drawn from the bundled Neo RetroPad
+Portrait, with the Default gamepad (drawn from the bundled Neo RetroPad
 overlay) and the Highlighter theme.
 
 <table>
@@ -141,7 +141,7 @@ preset: in core and game overrides (`input_overlay`).
 - RGUI is the default menu, with the bundled **Highlighter** theme
   (**My Theme** is also included), without the menu border.
 - The touch controls stay shown over the menu.
-- Every system starts on the Main gamepad (Neo RetroPad); others are
+- Every system starts on the Default gamepad (Neo RetroPad); others are
   picked per core or game with overrides. Upstream picks a system
   overlay for some 75 systems by itself; this build picks none. The
   Nintendo DS and 3DS gamepads are made from the layouts of RetroArch's

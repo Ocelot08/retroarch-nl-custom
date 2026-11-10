@@ -13892,6 +13892,11 @@ unsigned menu_displaylist_build_list(
                input_overlay_layout_profile_current(current, sizeof(current));
                for (i = 0; i < names->size; i++)
                {
+                  /* Default is not to be deleted */
+                  if (     type == DISPLAYLIST_OVERLAY_LAYOUT_PROFILE_DELETE_LIST
+                        && i == 0
+                        && string_is_equal(names->elems[i].data, "Default"))
+                     continue;
                   /* No value, so a tick can show */
                   if (!menu_entries_append(list, names->elems[i].data,
                            msg_hash_to_str(item), item,

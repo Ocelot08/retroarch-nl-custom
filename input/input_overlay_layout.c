@@ -333,7 +333,11 @@ static bool input_overlay_builtin_profile_reset(unsigned i);
 /* The gamepads every build has, made from the overlays
  * input_overlay_builtin_pack() names */
 static const char *input_overlay_builtin_profiles[] = {
-   "Main", "Nintendo DS", "Nintendo 3DS" };
+   "Default", "Nintendo DS", "Nintendo 3DS" };
+
+/* What the first was called before, which overrides and custom buttons
+ * may still name */
+#define OVERLAY_PROFILE_OLD_DEFAULT "Main"
 
 static bool input_overlay_layout_save(const input_overlay_t *ol)
 {
@@ -2329,13 +2333,33 @@ void input_overlay_gamepad_session_end(void)
  * @pack, the overlay RetroArch would pick. A system's own overlay, as
  * Autoload Preferred Overlay picks, is not taken: a system's gamepad is
  * chosen by an override like any other. */
+/* @path, or Default's where it names Main, as it was called */
+static const char *input_overlay_profile_renamed(const char *path)
+{
+   static char renamed[PATH_MAX_LENGTH];
+   char name[NAME_MAX_LENGTH];
+   if (     !path || !*path || path_is_valid(path)
+         || !input_overlay_is_profile(path))
+      return path;
+   strlcpy(name, path_basename(path), sizeof(name));
+   path_remove_extension(name);
+   if (!string_is_equal(name, OVERLAY_PROFILE_OLD_DEFAULT))
+      return path;
+   input_overlay_profiles_ensure();
+   input_overlay_profile_file(renamed, sizeof(renamed),
+         input_overlay_builtin_profiles[0]);
+   return renamed;
+}
+
 const char *input_overlay_gamepad_path(const char *pack)
 {
-   const char *preset = config_get_ptr()->paths.path_overlay;
+   const char *preset = input_overlay_profile_renamed(
+         config_get_ptr()->paths.path_overlay);
+   const char *chosen = input_overlay_profile_renamed(
+         input_overlay_gamepad_chosen);
 
-   if (     *input_overlay_gamepad_chosen
-         && path_is_valid(input_overlay_gamepad_chosen))
-      return input_overlay_gamepad_chosen;
+   if (*chosen && path_is_valid(chosen))
+      return chosen;
    if (input_overlay_is_profile(preset) && path_is_valid(preset))
       return preset;
    if (pack && strstr(pack, SYSTEM_OVERLAY_DIR))
@@ -2833,6 +2857,16 @@ static void input_overlay_profiles_ensure(void)
       return;
    checked = true;
    input_overlay_profiles_dir(dir, sizeof(dir));
+   /* Main, by its name now */
+   {
+      char old_path[PATH_MAX_LENGTH];
+      fill_pathname_join_special(old_path, dir,
+            OVERLAY_PROFILE_OLD_DEFAULT ".cfg", sizeof(old_path));
+      input_overlay_profile_file(path, sizeof(path),
+            input_overlay_builtin_profiles[0]);
+      if (path_is_valid(old_path) && !path_is_valid(path))
+         filestream_rename(old_path, path);
+   }
    fill_pathname_join_special(path, dir, ".made", sizeof(path));
    if (path_is_valid(path))
       return;
@@ -3024,6 +3058,9 @@ bool input_overlay_layout_profile_load(const char *name)
 
    input_overlay_profiles_ensure();
    input_overlay_profile_file(profile, sizeof(profile), name);
+   if (!path_is_valid(profile))
+      strlcpy(profile, input_overlay_profile_renamed(profile),
+            sizeof(profile));
    if (!*profile || !path_is_valid(profile))
       return false;
 
@@ -3068,13 +3105,16 @@ void input_overlay_layout_profile_delete_asked(void)
 #endif
 }
 
-/* Any gamepad, a built-in one too (Reset Gamepad brings that back);
- * the one shown is loaded again without it */
+/* Any gamepad but Default, a built-in one too (Reset Gamepad brings
+ * that back); the one shown is loaded again without it */
 bool input_overlay_layout_profile_delete(const char *name)
 {
    char path[PATH_MAX_LENGTH];
    input_overlay_t *ol = input_overlay_layout_target();
 
+   /* Default is what all content falls back on */
+   if (input_overlay_builtin_profile_find(name) == 0)
+      return false;
    input_overlay_profile_file(path, sizeof(path), name);
    if (     !*path || !path_is_valid(path)
          || filestream_delete(path) != 0)

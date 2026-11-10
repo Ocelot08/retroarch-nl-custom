@@ -141,7 +141,7 @@ right first.
 
 ### B. After 3, before 4 and 5 (done)
 
-- Main, DS and 3DS controls: every face and shoulder button, Start,
+- Default, DS and 3DS controls: every face and shoulder button, Start,
   Select, the D-pad and sticks are drawn, light up when pressed, and
   hotkeys still show their icons.
 - Labels are sharp and upright at small and large sizes, and after
