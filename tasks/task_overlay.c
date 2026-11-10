@@ -675,6 +675,15 @@ static bool task_overlay_load_desc_drawn(
 
    if (!overlay->config.normalized || w <= 0.0f || h <= 0.0f)
       return false;
+   /* On the screen turned as the page is: a landscape page is shown
+    * on a landscape screen, wherever it was loaded */
+   if (     overlay->aspect_ratio > 0.0f
+         && (overlay->aspect_ratio > 1.0f) != (w > h))
+   {
+      float t = w;
+      w       = h;
+      h       = t;
+   }
    /* The page as it is shown: its own shape, as big as fits */
    if (loader->draw_auto_scale && overlay->aspect_ratio > 0.0f)
    {

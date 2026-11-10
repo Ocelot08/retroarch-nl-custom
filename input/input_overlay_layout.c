@@ -2492,46 +2492,34 @@ bool input_overlay_layout_filled_toggle(void)
          ol->filled ? "outline" : "filled");
 }
 
+/* Default back as it comes, and the gamepad for all content; a built-in
+ * gamepad deleted, back too */
 void input_overlay_layout_reset(void)
 {
+   unsigned i;
    char path[PATH_MAX_LENGTH];
-   const char *overlay = input_overlay_path(false);
-   const char *_msg    = msg_hash_to_str(MSG_OVERLAY_LAYOUT_RESET);
+   settings_t *settings = config_get_ptr();
+   const char *_msg     = msg_hash_to_str(MSG_OVERLAY_LAYOUT_RESET);
 
    input_overlay_edit_finish(input_driver_st.overlay_ptr, false);
 
-   /* The built-in gamepads deleted, back */
+   for (i = 1; i < ARRAY_SIZE(input_overlay_builtin_profiles); i++)
    {
-      unsigned i;
-      for (i = 0; i < ARRAY_SIZE(input_overlay_builtin_profiles); i++)
-      {
-         input_overlay_profile_file(path, sizeof(path),
-               input_overlay_builtin_profiles[i]);
-         if (*path && !path_is_valid(path))
-            input_overlay_builtin_profile_reset(i);
-      }
+      input_overlay_profile_file(path, sizeof(path),
+            input_overlay_builtin_profiles[i]);
+      if (*path && !path_is_valid(path))
+         input_overlay_builtin_profile_reset(i);
    }
+   input_overlay_builtin_profile_reset(0);
 
-   if (input_overlay_is_profile(overlay))
-   {
-      /* A built-in profile as it comes; one of the user's stays */
-      char name[NAME_MAX_LENGTH];
-      int builtin;
-      strlcpy(name, path_basename(overlay), sizeof(name));
-      path_remove_extension(name);
-      if ((builtin = input_overlay_builtin_profile_find(name)) < 0)
-         return;
-      input_overlay_builtin_profile_reset((unsigned)builtin);
-   }
-   else
-   {
-      input_overlay_layout_path(path, sizeof(path), overlay,
-            input_overlay_layout_scope());
-      if (*path && path_is_valid(path))
-         filestream_delete(path);
-   }
+   input_overlay_profile_file(path, sizeof(path),
+         input_overlay_builtin_profiles[0]);
+   configuration_set_string(settings, settings->paths.path_overlay, path);
+   /* Not taken back when the content running closes */
+   if (input_overlay_gamepad_temp)
+      strlcpy(input_overlay_gamepad_prev, path,
+            sizeof(input_overlay_gamepad_prev));
 
-   /* Loaded again, with what the other layouts and the pack say */
    input_overlay_layout_reload(input_overlay_layout_target());
 
    runloop_msg_queue_push(_msg, strlen(_msg), 1, 120, true, NULL,
@@ -2611,13 +2599,17 @@ static bool input_overlay_builtin_pack(unsigned i, char *s, size_t len)
    settings_t *settings = config_get_ptr();
 
    *s = '\0';
-   /* The bundled pad, not the preset, which may be a gamepad itself */
+   /* The Default this build ships, else the bundled pad; not the
+    * preset, which may be a gamepad itself */
    if (i == 0)
    {
       fill_pathname_expand_special(dir, settings->paths.directory_overlay,
             sizeof(dir));
       fill_pathname_join_special(s, dir,
-            "gamepads/neo-retropad/neo-retropad.cfg", len);
+            "gamepads/neo-custom/Default.cfg", len);
+      if (!path_is_valid(s))
+         fill_pathname_join_special(s, dir,
+               "gamepads/neo-retropad/neo-retropad.cfg", len);
    }
    else if (i < ARRAY_SIZE(input_overlay_builtin_profiles))
    {
@@ -2987,6 +2979,8 @@ static const char *input_overlay_profile_for(const char *pack)
       char from[PATH_MAX_LENGTH];
       if (     !input_overlay_builtin_pack(i, from, sizeof(from))
             || (  !string_is_equal(path_basename(from), path_basename(pack))
+               && !(i == 0 && string_is_equal(path_basename(pack),
+                     "neo-retropad.cfg"))
                && !(i == 1 && string_is_equal(path_basename(pack),
                      "Nintendo - Nintendo DSi.cfg"))))
          continue;

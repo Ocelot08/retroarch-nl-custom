@@ -15759,7 +15759,7 @@ MSG_HASH(
    )
 MSG_HASH(
    MENU_ENUM_SUBLABEL_OVERLAY_RESET_LAYOUT,
-   "Put the built-in gamepad shown (Default, Nintendo DS, Nintendo 3DS) back as it comes, and bring back any built-in one that was deleted."
+   "Put Default back as it comes and use it for all content without an override of its own. A deleted Nintendo DS or 3DS gamepad comes back too."
    )
 MSG_HASH(
    MENU_ENUM_LABEL_VALUE_INPUT_OVERLAY_DPAD_METHOD,
@@ -33191,7 +33191,11 @@ MSG_HASH(
    )
 MSG_HASH(
    MSG_OVERLAY_LAYOUT_RESET,
-   "Overlay layout reset."
+   "Default reset, and used for all content."
+   )
+MSG_HASH(
+   MSG_OVERLAY_LAYOUT_RESET_CONFIRM,
+   "Press again to reset Default and use it for all content..."
    )
 MSG_HASH(
    MSG_OVERLAY_LAYOUT_SCOPE_ALL,

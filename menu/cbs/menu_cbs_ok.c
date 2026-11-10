@@ -6711,11 +6711,20 @@ static int action_ok_overlay_edit_layout(const char *path,
    return generic_action_ok_command(CMD_EVENT_RESUME);
 }
 
+/* Asked about first, as Quit is, when confirmations are shown */
 static int action_ok_overlay_reset_layout(const char *path,
       const char *label, unsigned type, size_t idx, size_t entry_idx)
 {
-   input_overlay_layout_reset();
-   return 0;
+   settings_t *settings = config_get_ptr();
+   if (settings->bools.menu_show_confirm)
+   {
+      struct menu_state *menu_st = menu_state_get_ptr();
+      menu_dialog_confirm_set(menu_st,
+            MSG_OVERLAY_LAYOUT_RESET_CONFIRM,
+            CMD_EVENT_OVERLAY_GAMEPAD_RESET);
+      return action_ok_dialog_init(menu_st);
+   }
+   return generic_action_ok_command(CMD_EVENT_OVERLAY_GAMEPAD_RESET);
 }
 
 static int action_ok_overlay_layout_fill(const char *path,

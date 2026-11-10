@@ -100,8 +100,10 @@ Layout**, or **Quick Menu → On-Screen Overlay → Touch Layout** in a game.
   - **Delete Gamepad**: delete any gamepad but Default, a built-in one
     too, after asking. If it is the one shown, the controls change at
     once to the gamepad for all content, or Default.
-  - **Reset Gamepad**: put the built-in gamepad shown back as it comes,
-    and bring back any built-in one that was deleted.
+  - **Reset Gamepad**, after asking: put Default back as this build
+    ships it (`system_overlays/Default.cfg` when there is one, else made
+    from Neo RetroPad) and make it the gamepad for all content without
+    an override of its own; a deleted Nintendo DS or 3DS comes back too.
 
 #### Screenshots
 

@@ -40,6 +40,11 @@ cp "$here/rgui_themes/"*.cfg "$dst/assets/rgui/"
 named="$dst/overlays/gamepads/Named_Overlays_Custom"
 mkdir -p "$named" "$dst/overlays/gamepads/neo-custom/img"
 cp "$here/system_overlays/img/"*.png "$dst/overlays/gamepads/neo-custom/img/"
+# The Default gamepad as it comes, for a new install and Reset Gamepad,
+# when this build ships one (else it is made from Neo RetroPad)
+if [ -f "$here/system_overlays/Default.cfg" ]; then
+   cp "$here/system_overlays/Default.cfg" "$dst/overlays/gamepads/neo-custom/"
+fi
 # The drawn buttons' labels, in the menu's font, kept with the overlays
 # so that they are found wherever the menu's assets are
 cp "$src/retroarch-assets/ozone/regular.ttf" \

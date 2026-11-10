@@ -5007,6 +5007,11 @@ bool command_event(enum event_command cmd, void *data)
          input_overlay_layout_profile_delete_asked();
 #endif
          break;
+      case CMD_EVENT_OVERLAY_GAMEPAD_RESET:
+#ifdef HAVE_OVERLAY
+         input_overlay_layout_reset();
+#endif
+         break;
       case CMD_EVENT_OVERLAY_NEXT:
          /* Switch to the next available overlay screen. */
 #ifdef HAVE_OVERLAY
