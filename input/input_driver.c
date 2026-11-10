@@ -13897,8 +13897,14 @@ static bool input_overlay_builtin_pack(unsigned i, char *s, size_t len)
    settings_t *settings = config_get_ptr();
 
    *s = '\0';
+   /* The bundled pad, not the preset, which may be a gamepad itself */
    if (i == 0)
-      strlcpy(s, settings->paths.path_overlay, len);
+   {
+      fill_pathname_expand_special(dir, settings->paths.directory_overlay,
+            sizeof(dir));
+      fill_pathname_join_special(s, dir,
+            "gamepads/neo-retropad/neo-retropad.cfg", len);
+   }
    else if (i < ARRAY_SIZE(input_overlay_builtin_profiles))
    {
       char name[NAME_MAX_LENGTH];
@@ -14687,6 +14693,18 @@ bool input_overlay_custom_remove(void)
    return input_overlay_custom_write(conf, path, ol);
 }
 
+/* The name of the gamepad shown, or "" */
+size_t input_overlay_layout_profile_current(char *s, size_t len)
+{
+   input_overlay_t *ol = input_overlay_layout_target();
+   *s = '\0';
+   if (!ol || !ol->path || !input_overlay_is_profile(ol->path))
+      return 0;
+   strlcpy(s, path_basename(ol->path), len);
+   path_remove_extension(s);
+   return strlen(s);
+}
+
 struct string_list *input_overlay_layout_profile_list(bool builtin)
 {
    unsigned i;
@@ -14705,7 +14723,9 @@ struct string_list *input_overlay_layout_profile_list(bool builtin)
       {
          input_overlay_profile_file(path, sizeof(path),
                input_overlay_builtin_profiles[i]);
-         if (path_is_valid(path))
+         /* One gone is made again */
+         if (     path_is_valid(path)
+               || input_overlay_builtin_profile_reset(i))
             string_list_append(names, input_overlay_builtin_profiles[i], attr);
       }
 

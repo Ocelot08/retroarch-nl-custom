@@ -2221,6 +2221,7 @@ void input_overlay_gamepad_override(const char *path);
 void input_overlay_gamepad_session_end(void);
 bool input_overlay_layout_profile_delete(const char *name);
 struct string_list *input_overlay_layout_profile_list(bool builtin);
+size_t input_overlay_layout_profile_current(char *s, size_t len);
 
 /* Whether @path is a layout profile's, a gamepad (overlays/gamepads/custom) */
 bool input_overlay_is_profile(const char *path);

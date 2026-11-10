@@ -12904,11 +12904,28 @@ unsigned menu_displaylist_build_list(
 
             if (names)
             {
+               char current[NAME_MAX_LENGTH];
+               input_overlay_layout_profile_current(current, sizeof(current));
                for (i = 0; i < names->size; i++)
-                  if (menu_entries_append(list, names->elems[i].data,
+               {
+                  /* No value, so a tick can show */
+                  if (!menu_entries_append(list, names->elems[i].data,
                            msg_hash_to_str(item), item,
-                           MENU_SETTING_ACTION, 0, i, NULL))
-                     count++;
+                           (type == DISPLAYLIST_OVERLAY_LAYOUT_PROFILE_LOAD_LIST)
+                           ? MENU_SETTING_DROPDOWN_ITEM : MENU_SETTING_ACTION,
+                           0, i, NULL))
+                     continue;
+                  /* The gamepad shown, ticked */
+                  if (     type == DISPLAYLIST_OVERLAY_LAYOUT_PROFILE_LOAD_LIST
+                        && string_is_equal(names->elems[i].data, current))
+                  {
+                     menu_file_list_cbs_t *cbs = (menu_file_list_cbs_t*)
+                        list->list[list->size - 1].actiondata;
+                     if (cbs)
+                        cbs->checked = true;
+                  }
+                  count++;
+               }
                string_list_free(names);
             }
          }
