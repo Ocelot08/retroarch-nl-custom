@@ -221,6 +221,7 @@ void create_gl_context(HWND hwnd, bool *quit)
 #else
    bool debug                           = hwr->debug_context;
 #endif
+   bool cached                          = false;
 
 #ifdef __WINRT__
    win32_hdc                            = (HDC)(hwnd);
@@ -232,6 +233,7 @@ void create_gl_context(HWND hwnd, bool *quit)
 
    if (win32_hrc)
    {
+      cached = true;
       video_driver_cache_context_ack_set();
       RARCH_LOG("[WGL] Using cached GL context.\n");
    }
@@ -268,7 +270,8 @@ void create_gl_context(HWND hwnd, bool *quit)
       return;
    }
 
-   if (core_context || debug)
+   /* A kept context holds the core's objects: it is not made again */
+   if ((core_context || debug) && !cached)
    {
       unsigned i;
       int attribs[16];
@@ -727,6 +730,7 @@ static void *gfx_ctx_wgl_init(void *video_driver)
     * family says what creating the window sets up */
    wndclass.lpfnWndProc = win32_window_proc;
    win32_window_proc_setup(WIN32_WINDOW_WGL);
+   win32_window_tag_presentation(wgl->dxgi_requested);
 
    if (!win32_window_init(&wndclass, true, NULL))
    {
@@ -879,7 +883,7 @@ static uint32_t gfx_ctx_wgl_get_flags(void *data)
          if (string_is_equal(video_driver_get_ident(), "gl1")) { }
          else if (string_is_equal(video_driver_get_ident(), "glcore"))
          {
-#if defined(HAVE_SLANG) && defined(HAVE_SPIRV_CROSS)
+#if defined(HAVE_SLANG) && (defined(HAVE_SPIRV_CROSS) || defined(HAVE_RSLC))
             BIT32_SET(flags, GFX_CTX_FLAGS_SHADERS_SLANG);
 #endif
          }
@@ -897,7 +901,7 @@ static uint32_t gfx_ctx_wgl_get_flags(void *data)
          break;
 
       case GFX_CTX_OPENGL_ES_API:
-#if defined(HAVE_SLANG) && defined(HAVE_SPIRV_CROSS)
+#if defined(HAVE_SLANG) && (defined(HAVE_SPIRV_CROSS) || defined(HAVE_RSLC))
          BIT32_SET(flags, GFX_CTX_FLAGS_SHADERS_SLANG);
 #endif
 #ifdef HAVE_GLSL

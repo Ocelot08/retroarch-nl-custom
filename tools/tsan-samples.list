@@ -11,6 +11,7 @@
 # jumps out of a signal handler by design - TSan reports what runs after
 # it as still inside the handler.
 libretro-common/samples/formats/h264 rh264_lossless_test
+libretro-common/samples/formats/h264 rh264_state_test
 libretro-common/samples/formats/h265 rh265_lossless_test
 libretro-common/samples/formats/image_blit_bands_test image_blit_bands_test
 libretro-common/samples/queues/retro_waitable_spsc_test retro_waitable_spsc_test
@@ -18,6 +19,7 @@ libretro-common/samples/queues/task_queue_budget_test task_queue_budget_test
 libretro-common/samples/queues/task_queue_detach_test task_queue_detach_test
 libretro-common/samples/queues/task_queue_init_failure_test task_queue_init_failure_test
 libretro-common/samples/queues/task_queue_main_thread_test task_queue_main_thread_test
+libretro-common/samples/queues/task_queue_park_test task_queue_park_test
 libretro-common/samples/queues/task_queue_snapshot_test task_queue_snapshot_test
 libretro-common/samples/queues/task_queue_switch_test task_queue_switch_test
 libretro-common/samples/queues/task_queue_title_error_test task_queue_title_error_test
@@ -78,9 +80,12 @@ samples/tasks/bsv_replay_init bsv_replay_init_test
 samples/tasks/image_decode_slice image_decode_slice_test
 samples/tasks/netplay_nat nat_task_serialisation_test
 samples/tasks/progress_push task_progress_push_test
+samples/tasks/steam_dlc steam_dlc_park_test
 samples/frontend/android_lifecycle android_lifecycle_test
 samples/ui/companion_thumbs_handoff companion_thumbs_test
 samples/midi/fmsynth_queue fmsynth_queue_test
 samples/input/joypad_slots joypad_slots_test
 samples/audio/rsound_thread rsound_thread_test
 samples/runloop/log_ring log_ring_test
+libretro-common/samples/formats/image_hdr_blit image_hdr_blit_test
+libretro-common/samples/formats/image_hdr_blit image_hdr_blit_thread_test

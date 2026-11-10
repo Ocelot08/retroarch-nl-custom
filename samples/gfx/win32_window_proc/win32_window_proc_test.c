@@ -171,6 +171,31 @@ static LRESULT CALLBACK focus_loss_proc(HWND hwnd, UINT message,
    return CallWindowProc(focus_loss_chain, hwnd, message, wparam, lparam);
 }
 
+/* What a window gets as it is destroyed - the desktop's size, move,
+ * activation and focus messages - sent from a subclass on its
+ * WM_DESTROY, where a headless server sends none of them. */
+static WNDPROC  going_down_chain;
+static unsigned going_down_reached; /* the frontend, from those messages */
+
+static LRESULT CALLBACK going_down_proc(HWND hwnd, UINT message,
+      WPARAM wparam, LPARAM lparam)
+{
+   if (message == WM_DESTROY)
+   {
+      unsigned before = stub_frontend_calls;
+      CallWindowProc(going_down_chain, hwnd, WM_SIZE, SIZE_RESTORED, 0);
+      CallWindowProc(going_down_chain, hwnd, WM_MOVE, 0, 0);
+      CallWindowProc(going_down_chain, hwnd, WM_DISPLAYCHANGE, 32, 0);
+      CallWindowProc(going_down_chain, hwnd, WM_ACTIVATE, WA_INACTIVE, 0);
+      CallWindowProc(going_down_chain, hwnd, WM_SETFOCUS, 0, 0);
+      CallWindowProc(going_down_chain, hwnd, WM_KILLFOCUS, 0, 0);
+      CallWindowProc(going_down_chain, hwnd, WM_KEYDOWN, VK_RETURN,
+            KEY_LPARAM(0x1C, 0));
+      going_down_reached += stub_frontend_calls - before;
+   }
+   return CallWindowProc(going_down_chain, hwnd, message, wparam, lparam);
+}
+
 int main(int argc, char **argv)
 {
    int fam, in, takes;
@@ -321,6 +346,10 @@ int main(int argc, char **argv)
       int cycle, same = 0, styled = 0, sized = 0, resized = 0;
       const int cycles = 20;
       bool refused;
+      bool excl_in_place = false;
+      bool excl_visible  = false;
+      bool excl_sized    = false;
+      bool excl_back     = false;
       bool big_grew = false;
       bool big_told = false;
 
@@ -370,6 +399,47 @@ int main(int argc, char **argv)
                resized++;
          }
 
+         {
+            unsigned old_scale = settings->uints.video_scale;
+            bool old_save = settings->bools.video_window_save_positions;
+            int core;
+            settings->uints.video_scale = 3;
+            settings->bools.video_window_save_positions = false;
+            for (core = 0; core < 2; core++)
+            {
+               RECT requested, before, after;
+               bool same;
+               stub_set_geometry(320, 240);
+               requested.left = requested.top = 0;
+               requested.right = 900;
+               requested.bottom = 660;
+               AdjustWindowRectEx(&requested,
+                     GetWindowLongPtr(hwnd, GWL_STYLE), GetMenu(hwnd) != NULL,
+                     GetWindowLongPtr(hwnd, GWL_EXSTYLE));
+               SetWindowPos(hwnd, NULL, 0, 0,
+                     requested.right - requested.left,
+                     requested.bottom - requested.top,
+                     SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);
+               pump();
+               GetWindowRect(hwnd, &before);
+               if (core)
+                  stub_set_geometry(960, 720);
+               win32_has_focus(NULL);
+               pump();
+               GetWindowRect(hwnd, &after);
+               same = EqualRect(&before, &after) != 0;
+               if (same != (core == 0))
+               {
+                  fprintf(stderr, "FAIL focus geometry: changed=%u unchanged=%u\n",
+                        core != 0, same);
+                  return 1;
+               }
+            }
+            stub_set_geometry(320, 240);
+            settings->uints.video_scale = old_scale;
+            settings->bools.video_window_save_positions = old_save;
+         }
+
          /* A core whose picture is bigger than the window asked for,
           * with the menu bar on. The window code does not let a window
           * be smaller than the core's picture, so the window that
@@ -408,6 +478,33 @@ int main(int argc, char **argv)
           * place, left to the driver restart */
          settings->bools.video_windowed_fullscreen = false;
          refused = !win32_window_set_fullscreen(VIDEO_SCALE_PACK(640, 480), true);
+
+         /* The exclusive toggle done in place, with the fullscreen
+          * size left at its default of 0x0, which stands for the
+          * monitor's own size: the window has to stay, be visible, and
+          * be the size of the monitor - not a 0x0 window nobody can
+          * see - and come back windowed at the size it had. */
+         {
+            RECT client;
+            win32_window_reset();
+            settings->bools.video_fullscreen = true;
+            excl_in_place = win32_window_set_fullscreen_exclusive(0, true);
+            pump();
+            GetClientRect(hwnd, &client);
+            excl_visible  = win32_get_window() == hwnd && IsWindow(hwnd)
+               && IsWindowVisible(hwnd);
+            excl_sized    = client.right  > 0 && client.bottom > 0
+               && client.right  == mon.rcMonitor.right  - mon.rcMonitor.left
+               && client.bottom == mon.rcMonitor.bottom - mon.rcMonitor.top;
+            win32_window_reset();
+            settings->bools.video_fullscreen = false;
+            excl_back     = win32_window_set_fullscreen_exclusive(
+                  VIDEO_SCALE_PACK(640, 480), false);
+            pump();
+            GetClientRect(hwnd, &client);
+            excl_back     = excl_back && IsWindowVisible(hwnd)
+               && client.right == 640 && client.bottom == 480;
+         }
          settings->bools.video_windowed_fullscreen = true;
 
          win32_monitor_from_window();
@@ -422,6 +519,9 @@ int main(int argc, char **argv)
                big_grew ? "yes" : "no", big_told ? "yes" : "no");
          trace(" exclusive fullscreen left to a restart: %s\n",
                refused ? "yes" : "no");
+         trace(" exclusive fullscreen in place at the monitor's size: toggled %s, window kept %s, monitor-sized %s, back windowed %s\n",
+               excl_in_place ? "yes" : "no", excl_visible ? "yes" : "no",
+               excl_sized ? "yes" : "no", excl_back ? "yes" : "no");
          trace(" destroyed: window %s\n", IsWindow(hwnd) ? "still there" : "gone");
       }
       else
@@ -503,6 +603,198 @@ int main(int argc, char **argv)
             (kept && !IsWindow(kept)) ? "yes" : "no");
       trace(" focus messages from the window going down reached the input driver: %s\n",
             during ? "yes" : "no");
+   }
+
+   /* A window left up while minimised, taken by the next driver of its
+    * family - a device lost or a driver restarted with the window down
+    * on the taskbar. A minimised window has no client area, and the
+    * driver makes its surface for the client area it finds when it is
+    * handed the window: the window is put back up first, as a new
+    * window would be, and the surface is made for a window that has a
+    * size. */
+   {
+      WNDCLASSEX wndclass;
+      HWND kept = NULL, taken = NULL;
+      bool was_kept = false, mode_set = false, iconic = false;
+      unsigned dims = 0;
+
+      strlcpy(settings->arrays.input_driver, "raw",
+            sizeof(settings->arrays.input_driver));
+      settings->bools.video_fullscreen = false;
+      trace_on = false;
+
+      win32_window_reset();
+      win32_monitor_init();
+      memset(&wndclass, 0, sizeof(wndclass));
+      wndclass.lpfnWndProc = proc_for(FAM_VK, IN_WINRAW);
+      if (     win32_window_init(&wndclass, true, NULL)
+            && win32_set_video_mode(NULL, VIDEO_SCALE_PACK(640, 480), false))
+      {
+         kept = win32_get_window();
+         pump();
+         ShowWindow(kept, SW_MINIMIZE);
+         pump();
+         was_kept = win32_window_keep() && IsIconic(kept);
+         pump();
+
+         win32_window_reset();
+         win32_monitor_init();
+         stub_vk_surface_dims = 0;
+         memset(&wndclass, 0, sizeof(wndclass));
+         wndclass.lpfnWndProc = proc_for(FAM_VK, IN_WINRAW);
+         if (win32_window_init(&wndclass, true, NULL))
+            mode_set = win32_set_video_mode(NULL,
+                  VIDEO_SCALE_PACK(640, 480), false);
+         taken  = win32_get_window();
+         dims   = stub_vk_surface_dims;
+         iconic = taken && IsIconic(taken);
+         pump();
+
+         win32_window_release_kept();
+         if (taken)
+         {
+            win32_monitor_from_window();
+            win32_destroy_window();
+         }
+         pump();
+      }
+
+      trace_on = true;
+      trace("== a minimised window left up and taken\n");
+      trace(" kept minimised %s, taken %s, mode set %s, still minimised %s,"
+            " surface has a size %s\n",
+            was_kept ? "yes" : "no",
+            (kept && taken == kept) ? "yes" : "no",
+            mode_set ? "yes" : "no", iconic ? "yes" : "no",
+            (VIDEO_SCALE_W(dims) && VIDEO_SCALE_H(dims)) ? "yes" : "no");
+   }
+
+   /* A window carries the way it was presented on. A Vulkan or OpenGL
+    * window that had a DXGI swap chain is not taken by a driver of the
+    * same family presenting natively - DXGI presentation turned off,
+    * or a core's override that turned it on unloaded - and a new one
+    * is made; a driver presenting the same way as the last takes it. */
+   {
+      WNDCLASSEX wndclass;
+      HWND dxgi_hwnd = NULL, native_hwnd = NULL, again_hwnd = NULL;
+      bool dxgi_kept = false, native_kept = false;
+
+      strlcpy(settings->arrays.input_driver, "raw",
+            sizeof(settings->arrays.input_driver));
+      settings->bools.video_fullscreen = false;
+      trace_on = false;
+
+      win32_window_reset();
+      win32_monitor_init();
+      memset(&wndclass, 0, sizeof(wndclass));
+      wndclass.lpfnWndProc = proc_for(FAM_VK, IN_WINRAW);
+      win32_window_tag_presentation(true);
+      if (     win32_window_init(&wndclass, true, NULL)
+            && win32_set_video_mode(NULL, VIDEO_SCALE_PACK(640, 480), false))
+      {
+         dxgi_hwnd = win32_get_window();
+         pump();
+         dxgi_kept = win32_window_keep();
+         pump();
+
+         win32_window_reset();
+         win32_monitor_init();
+         memset(&wndclass, 0, sizeof(wndclass));
+         wndclass.lpfnWndProc = proc_for(FAM_VK, IN_WINRAW);
+         win32_window_tag_presentation(false);
+         if (     win32_window_init(&wndclass, true, NULL)
+               && win32_set_video_mode(NULL, VIDEO_SCALE_PACK(640, 480), false))
+         {
+            native_hwnd = win32_get_window();
+            pump();
+            win32_window_release_kept();
+            native_kept = win32_window_keep();
+            pump();
+
+            win32_window_reset();
+            win32_monitor_init();
+            memset(&wndclass, 0, sizeof(wndclass));
+            wndclass.lpfnWndProc = proc_for(FAM_VK, IN_WINRAW);
+            win32_window_tag_presentation(false);
+            if (     win32_window_init(&wndclass, true, NULL)
+                  && win32_set_video_mode(NULL, VIDEO_SCALE_PACK(640, 480), false))
+            {
+               again_hwnd = win32_get_window();
+               pump();
+               win32_window_release_kept();
+               win32_monitor_from_window();
+               win32_destroy_window();
+               pump();
+            }
+         }
+      }
+
+      trace_on = true;
+      trace("== a window kept across a change of presentation\n");
+      trace(" dxgi window kept %s, native driver made its own %s, dxgi window gone %s\n",
+            dxgi_kept ? "yes" : "no",
+            (native_hwnd && native_hwnd != dxgi_hwnd) ? "yes" : "no",
+            (dxgi_hwnd && !IsWindow(dxgi_hwnd)) ? "yes" : "no");
+      trace(" native window kept %s, next native driver took it %s\n",
+            native_kept ? "yes" : "no",
+            (again_hwnd && again_hwnd == native_hwnd) ? "yes" : "no");
+   }
+
+   /* A kept window destroyed for a driver presenting the other way
+    * goes down inside the next driver's window creation, before it
+    * has a window, a surface or a context. What the desktop sends a
+    * window on its way down reaches nothing but DefWindowProc. */
+   {
+      WNDCLASSEX wndclass;
+      HWND kept = NULL, next = NULL;
+      bool was_kept = false;
+
+      strlcpy(settings->arrays.input_driver, "raw",
+            sizeof(settings->arrays.input_driver));
+      settings->bools.video_fullscreen = false;
+      trace_on = false;
+
+      win32_window_reset();
+      win32_monitor_init();
+      memset(&wndclass, 0, sizeof(wndclass));
+      wndclass.lpfnWndProc = proc_for(FAM_VK, IN_WINRAW);
+      win32_window_tag_presentation(false);
+      if (     win32_window_init(&wndclass, true, NULL)
+            && win32_set_video_mode(NULL, VIDEO_SCALE_PACK(640, 480), false))
+      {
+         kept = win32_get_window();
+         pump();
+         was_kept = win32_window_keep();
+         pump();
+         going_down_chain   = (WNDPROC)SetWindowLongPtr(kept, GWLP_WNDPROC,
+               (LONG_PTR)going_down_proc);
+         going_down_reached = 0;
+
+         win32_window_reset();
+         win32_monitor_init();
+         memset(&wndclass, 0, sizeof(wndclass));
+         wndclass.lpfnWndProc = proc_for(FAM_VK, IN_WINRAW);
+         win32_window_tag_presentation(true);
+         if (     win32_window_init(&wndclass, true, NULL)
+               && win32_set_video_mode(NULL, VIDEO_SCALE_PACK(640, 480), false))
+         {
+            next = win32_get_window();
+            pump();
+            win32_window_release_kept();
+            win32_monitor_from_window();
+            win32_destroy_window();
+            pump();
+         }
+      }
+
+      trace_on = true;
+      trace("== a kept window destroyed for a driver presenting the other way\n");
+      trace(" kept %s, destroyed in the next driver's window creation %s, next made %s\n",
+            was_kept ? "yes" : "no",
+            (kept && !IsWindow(kept)) ? "yes" : "no",
+            (next && next != kept) ? "yes" : "no");
+      trace(" messages to the window going down reached the frontend: %s\n",
+            going_down_reached ? "yes" : "no");
    }
 
    /* A window that has been replaced loses the focus before it is

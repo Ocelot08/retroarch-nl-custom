@@ -112,8 +112,10 @@ static int der_read_uint(struct der *d, const uint8_t **val, size_t *val_len)
       return -1;
    if (**val & 0x80)
       return -1;   /* negative */
-   while (*val_len > 1 && **val == 0)
+   if (*val_len > 1 && **val == 0)
    {
+      if (!((*val)[1] & 0x80))
+         return -1;   /* not minimal: not DER */
       (*val)++;
       (*val_len)--;
    }
@@ -456,6 +458,65 @@ static int x509_parse_extensions(struct x509_cert *c, struct der *d)
    return 0;
 }
 
+/* RSAPrivateKey (RFC 8017 A.1.2), two-prime, version 0. */
+static int x509_rsa_key_seq(struct rsa_private_key *key, struct der *d)
+{
+   struct der k;
+   const uint8_t *v;
+   size_t vl;
+
+   if (der_enter(d, DER_SEQUENCE, &k) != 0)
+      return -1;
+   if (der_read_uint(&k, &v, &vl) != 0 || vl != 1 || v[0] != 0)
+      return -1;
+   if (     der_read_uint(&k, &key->n,  &key->n_len)  != 0
+         || der_read_uint(&k, &key->e,  &key->e_len)  != 0
+         || der_read_uint(&k, &key->d,  &key->d_len)  != 0
+         || der_read_uint(&k, &key->p,  &key->p_len)  != 0
+         || der_read_uint(&k, &key->q,  &key->q_len)  != 0
+         || der_read_uint(&k, &key->dp, &key->dp_len) != 0
+         || der_read_uint(&k, &key->dq, &key->dq_len) != 0
+         || der_read_uint(&k, &key->qi, &key->qi_len) != 0)
+      return -1;
+   return k.p == k.end ? 0 : -1;
+}
+
+int x509_rsa_private_key_parse(struct rsa_private_key *key,
+      const uint8_t *der, size_t len)
+{
+   struct der d, info, params;
+   const uint8_t *v, *oid;
+   size_t vl, oid_len;
+
+   memset(key, 0, sizeof(*key));
+   d.p   = der;
+   d.end = der + len;
+   if (x509_rsa_key_seq(key, &d) == 0)
+      return d.p == d.end ? 0 : -1;
+
+   /* PrivateKeyInfo (RFC 5208): version 0, rsaEncryption, the
+    * RSAPrivateKey in an OCTET STRING, optional attributes. */
+   memset(key, 0, sizeof(*key));
+   d.p = der;
+   if (der_enter(&d, DER_SEQUENCE, &info) != 0 || d.p != d.end)
+      return -1;
+   if (der_read_uint(&info, &v, &vl) != 0 || vl != 1 || v[0] != 0)
+      return -1;
+   if (der_read_alg(&info, &oid, &oid_len, &params) != 0
+         || !OID_EQ(oid, oid_len, oid_rsa_enc))
+      return -1;
+   if (der_read(&info, DER_OCTET, &v, &vl) != 0)
+      return -1;
+   d.p   = v;
+   d.end = v + vl;
+   if (x509_rsa_key_seq(key, &d) != 0 || d.p != d.end)
+   {
+      memset(key, 0, sizeof(*key));
+      return -1;
+   }
+   return 0;
+}
+
 int x509_parse(struct x509_cert *c, const uint8_t *der, size_t len)
 {
    struct der d, cert, tbs, params;
@@ -603,17 +664,28 @@ int x509_verify_ecdsa_digest(const struct x509_cert *key,
    d.p   = sig;
    d.end = sig + sig_len;
    if (der_enter(&d, DER_SEQUENCE, &sv) != 0
+         || d.p != d.end
          || der_read_uint(&sv, &r, &rl) != 0
          || der_read_uint(&sv, &s, &sl) != 0
          || rl > n || sl > n || sv.p != sv.end)
       return -1;
-   memset(rb, 0, n);
-   memset(sb, 0, n);
-   memcpy(rb + n - rl, r, rl);
-   memcpy(sb + n - sl, s, sl);
+   /* A full-width r or s is lent straight from the signature; only a
+    * shorter one needs a left-padded copy. */
+   if (rl < n)
+   {
+      memset(rb, 0, n - rl);
+      memcpy(rb + n - rl, r, rl);
+      r = rb;
+   }
+   if (sl < n)
+   {
+      memset(sb, 0, n - sl);
+      memcpy(sb + n - sl, s, sl);
+      s = sb;
+   }
    if (n == 32)
-      return p256_ecdsa_verify(key->ec_point, digest, digest_len, rb, sb);
-   return p384_ecdsa_verify(key->ec_point, digest, digest_len, rb, sb);
+      return p256_ecdsa_verify(key->ec_point, digest, digest_len, r, s);
+   return p384_ecdsa_verify(key->ec_point, digest, digest_len, r, s);
 }
 
 int x509_verify_signature(const struct x509_cert *c,
@@ -855,10 +927,13 @@ int x509_match_hostname(const struct x509_cert *c, const char *host)
 
 struct x509_anchor
 {
-   uint8_t *der;
+   const uint8_t *der;
    size_t   der_len;
    struct x509_cert cert;
 };
+
+#include <retro_atomic.h>
+#include <queues/retro_retire.h>
 
 /* The anchors loaded from one source. A store is never changed once
  * published: a reload builds a new one and swaps it in, and the old one
@@ -866,25 +941,68 @@ struct x509_anchor
  * runs over its own reference with no lock held. */
 struct x509_store
 {
+   mpsc_stack_node_t node;   /* lock-free: on the retire list */
    struct x509_anchor *anchors;
    unsigned count;
    unsigned cap;
    const char *src;       /* the source it was loaded from */
    size_t src_len;
    unsigned refs;         /* under the lock: the published slot's + walks' */
+   unsigned owns_der;     /* PEM: decoded copies; DER: read in place */
 };
-
-static struct x509_store *x509_store_cur = NULL;
 
 /* The store is process-wide and TLS handshakes run on several threads
  * (updater, achievements, cloud sync), the first of them building it.
- * A store is built with no lock held; a flag guards only swapping one
- * in and taking or dropping a reference, a few loads and stores, so a
- * reload never frees a store a walk is still reading and there is no
- * lock object to create on first use. */
-#ifdef HAVE_THREADS
+ * A store is built with nothing held. */
+#if defined(HAVE_THREADS) && defined(RETRO_RETIRE_LOCK_FREE) \
+      && !defined(X509_STORE_TEST_FLAG)
+/* Without a lock: a walk reads the published store between entering
+ * and leaving, and a replaced store is freed once no walk is in
+ * (retro_retire.h). */
+#define X509_STORE_LOCK_FREE 1
+static retro_atomic_ptr_t x509_store_slot;
+static retro_retire_t     x509_store_retired;
+
+static void x509_store_free(struct x509_store *st);
+
+static void x509_store_free_node(mpsc_stack_node_t *node)
+{
+   x509_store_free((struct x509_store*)node);
+}
+
+/* The published store, valid until x509_store_leave(). */
+static struct x509_store *x509_store_enter(void)
+{
+   struct x509_store *st;
+   retro_retire_enter(&x509_store_retired);
+   st = (struct x509_store*)retro_atomic_load_acquire_ptr(&x509_store_slot);
+#ifdef X509_STORE_TEST_HOLD
+   X509_STORE_TEST_HOLD();
+#endif
+   return st;
+}
+
+static void x509_store_leave(void)
+{
+   retro_retire_leave(&x509_store_retired, x509_store_free_node);
+}
+
+/* @old was replaced: it goes once no walk is in. */
+static void x509_store_retire(struct x509_store *old)
+{
+   retro_retire(&x509_store_retired, old ? &old->node : NULL,
+         x509_store_free_node);
+}
+#else
+static struct x509_store *x509_store_cur = NULL;
+#endif
+
+/* Elsewhere a flag guards only swapping a store in and taking or
+ * dropping a reference, a few loads and stores, so a reload never
+ * frees a store a walk is still reading and there is no lock object to
+ * create on first use. */
+#if defined(HAVE_THREADS) && !defined(X509_STORE_LOCK_FREE)
 #include <rthreads/rthreads.h>
-#include <retro_atomic.h>
 static retro_atomic_int_t x509_store_busy;
 static void x509_store_lock(void)
 {
@@ -893,7 +1011,7 @@ static void x509_store_lock(void)
 }
 #define X509_LOCK()   x509_store_lock()
 #define X509_UNLOCK() retro_atomic_store_release_int(&x509_store_busy, 0)
-#else
+#elif !defined(X509_STORE_LOCK_FREE)
 #define X509_LOCK()   do { } while (0)
 #define X509_UNLOCK() do { } while (0)
 #endif
@@ -903,12 +1021,14 @@ static void x509_store_free(struct x509_store *st)
    unsigned i;
    if (!st)
       return;
-   for (i = 0; i < st->count; i++)
-      free(st->anchors[i].der);
+   if (st->owns_der)
+      for (i = 0; i < st->count; i++)
+         free((uint8_t*)st->anchors[i].der);
    free(st->anchors);
    free(st);
 }
 
+#ifndef X509_STORE_LOCK_FREE
 /* Under the lock. Nonzero when that was the last reference. */
 static int x509_store_unref_locked(struct x509_store *st)
 {
@@ -926,14 +1046,46 @@ static struct x509_store *x509_store_publish_locked(struct x509_store *st)
    x509_store_cur = st;
    return x509_store_unref_locked(old) ? old : NULL;
 }
+#endif
 
 void x509_trust_free(void)
 {
+#ifdef X509_STORE_LOCK_FREE
+   x509_store_retire((struct x509_store*)
+         retro_atomic_exchange_ptr(&x509_store_slot, NULL));
+#else
    struct x509_store *old;
    X509_LOCK();
    old = x509_store_publish_locked(NULL);
    X509_UNLOCK();
    x509_store_free(old);
+#endif
+}
+
+/* @der appended as an anchor: 1 when taken, 0 when it is unparseable
+ * or has a key this code cannot use (P-384 roots), -1 out of memory. */
+static int x509_store_push(struct x509_store *st, const uint8_t *der,
+      size_t der_len)
+{
+   struct x509_anchor *a;
+   if (st->count == st->cap)
+   {
+      struct x509_anchor *grown;
+      unsigned cap = st->cap ? st->cap * 2 : 64;
+      grown = (struct x509_anchor*)realloc(st->anchors, cap * sizeof(*grown));
+      if (!grown)
+         return -1;
+      st->anchors = grown;
+      st->cap     = cap;
+   }
+   a          = &st->anchors[st->count];
+   a->der     = der;
+   a->der_len = der_len;
+   if (x509_parse(&a->cert, der, der_len) != 0
+         || a->cert.key_type == X509_KEY_NONE)
+      return 0;
+   st->count++;
+   return 1;
 }
 
 /* Every certificate in @pem added to @st's anchors. */
@@ -950,8 +1102,8 @@ static int x509_store_append_pem(struct x509_store *st, const char *pem, size_t 
       char   *clean;
       size_t  n;
       int     der_len = 0;
+      int     r;
       uint8_t *der;
-      struct x509_anchor *a;
 
       b = NULL;
       for (q = p; q + sizeof(begin) - 1 <= e; q++)
@@ -989,31 +1141,32 @@ static int x509_store_append_pem(struct x509_store *st, const char *pem, size_t 
          continue;
       }
 
-      if (st->count == st->cap)
-      {
-         struct x509_anchor *grown;
-         unsigned cap = st->cap ? st->cap * 2 : 64;
-         grown = (struct x509_anchor*)realloc(st->anchors, cap * sizeof(*grown));
-         if (!grown)
-         {
-            free(der);
-            return -1;
-         }
-         st->anchors = grown;
-         st->cap     = cap;
-      }
-      a          = &st->anchors[st->count];
-      a->der     = der;
-      a->der_len = (size_t)der_len;
-      if (x509_parse(&a->cert, der, (size_t)der_len) != 0
-            || a->cert.key_type == X509_KEY_NONE)
-      {
-         /* Unparseable, or a key this code cannot use (P-384 roots):
-          * not an anchor here. */
+      r = x509_store_push(st, der, (size_t)der_len);
+      if (r <= 0)
          free(der);
-         continue;
-      }
-      st->count++;
+      if (r < 0)
+         return -1;
+   }
+   return (int)st->count;
+}
+
+/* Every certificate in @blob, a run of DER SEQUENCEs, added to @st's
+ * anchors in place. */
+static int x509_store_append_der(struct x509_store *st,
+      const uint8_t *blob, size_t len)
+{
+   struct der d;
+   d.p   = blob;
+   d.end = blob + len;
+   while (d.p < d.end)
+   {
+      const uint8_t *start = d.p;
+      const uint8_t *v;
+      size_t vl;
+      if (der_read(&d, DER_SEQUENCE, &v, &vl) != 0)
+         return -1;
+      if (x509_store_push(st, start, (size_t)(d.p - start)) < 0)
+         return -1;
    }
    return (int)st->count;
 }
@@ -1030,24 +1183,60 @@ static int x509_store_is(const struct x509_store *st, const char *src,
 }
 
 static int x509_trust_load(const char *const *parts, const size_t *lens,
-      unsigned count, const char *src, size_t src_len)
+      unsigned count, const char *src, size_t src_len, int pem)
 {
    struct x509_store *st, *old;
    unsigned i;
    int      n = 0;
 
+#ifdef X509_STORE_LOCK_FREE
+   old = x509_store_enter();
+   if (x509_store_is(old, src, src_len))
+      n = (int)old->count;
+   x509_store_leave();
+#else
    X509_LOCK();
    if (x509_store_is(x509_store_cur, src, src_len))
       n = (int)x509_store_cur->count;
    X509_UNLOCK();
+#endif
    if (n)
       return n;
 
    if (!(st = (struct x509_store*)calloc(1, sizeof(*st))))
       n = -1;
+   else
+      st->owns_der = pem ? 1 : 0;
    for (i = 0; i < count && n >= 0; i++)
-      n = x509_store_append_pem(st, parts[i], lens[i]);
+      n = pem ? x509_store_append_pem(st, parts[i], lens[i])
+              : x509_store_append_der(st, (const uint8_t*)parts[i], lens[i]);
 
+#ifdef X509_STORE_LOCK_FREE
+   if (n >= 0)
+   {
+      st->src     = src;
+      st->src_len = src_len;
+   }
+   for (;;)
+   {
+      struct x509_store *cur = x509_store_enter();
+      if (n >= 0 && x509_store_is(cur, src, src_len))
+      {
+         n = (int)cur->count;   /* another caller's build won; ours goes */
+         x509_store_leave();
+         break;
+      }
+      x509_store_leave();
+      /* the store we looked at, if still published, is ours to replace */
+      if (retro_atomic_cas_ptr(&x509_store_slot, cur, n >= 0 ? st : NULL))
+      {
+         if (n >= 0)
+            st = NULL;
+         x509_store_retire(cur);
+         break;
+      }
+   }
+#else
    X509_LOCK();
    if (n >= 0 && x509_store_is(x509_store_cur, src, src_len))
    {
@@ -1065,20 +1254,28 @@ static int x509_trust_load(const char *const *parts, const size_t *lens,
       old         = x509_store_publish_locked(NULL);
    X509_UNLOCK();
    x509_store_free(old);
+#endif
    x509_store_free(st);
    return n;
 }
 
 int x509_trust_load_pem(const char *pem, size_t len)
 {
-   return x509_trust_load(&pem, &len, 1, pem, len);
+   return x509_trust_load(&pem, &len, 1, pem, len, 1);
 }
 
 int x509_trust_load_pem_parts(const char *const *parts, const size_t *lens,
       unsigned count)
 {
    /* the part table is the source: loaded once, as a single one is */
-   return x509_trust_load(parts, lens, count, (const char*)parts, count);
+   return x509_trust_load(parts, lens, count, (const char*)parts, count, 1);
+}
+
+int x509_trust_load_der_parts(const unsigned char *const *parts,
+      const size_t *lens, unsigned count)
+{
+   return x509_trust_load((const char *const*)parts, lens, count,
+         (const char*)parts, count, 0);
 }
 
 /* ---- chain -------------------------------------------------------- */
@@ -1098,13 +1295,31 @@ static int x509_name_eq(const struct x509_cert *a, const struct x509_cert *b)
 int x509_verify_chain(const uint8_t **ders, const size_t *lens, unsigned n,
       const char *host, time_t now, char *info, size_t info_len)
 {
+   return x509_verify_chain_ex(ders, lens, n, host, now, NULL, NULL, 0, 0,
+         info, info_len);
+}
+
+int x509_verify_chain_ex(const uint8_t **ders, const size_t *lens, unsigned n,
+      const char *host, time_t now,
+      const uint8_t *const *trust, const size_t *trust_lens, unsigned trust_count,
+      unsigned flags, char *info, size_t info_len)
+{
    /* Parsed chain on the heap: one x509_cert is ~200 bytes and a
     * server may send a dozen. */
    struct x509_cert *certs;
    const struct x509_cert *cur;
    struct x509_store *st = NULL;
+   /* the caller's anchors in place of the store's */
+   struct x509_anchor *own = NULL;
+   const struct x509_anchor *anchors = NULL;
+   unsigned anchor_count = 0;
+#ifdef X509_STORE_LOCK_FREE
+   int entered = 0;
+#endif
    unsigned i, depth;
    unsigned used = 0;   /* bitmask of chain certs already on the path */
+   unsigned ku_need = (flags & X509_VERIFY_KEY_ENCIPHERMENT)
+      ? X509_KU_KEY_ENCIPHERMENT : X509_KU_DIGITAL_SIGNATURE;
    int ret = -1;
 
    if (!n || n > 16)
@@ -1137,9 +1352,10 @@ int x509_verify_chain(const uint8_t **ders, const size_t *lens, unsigned n,
       x509_info(info, info_len, "certificate not for server authentication");
       goto done;
    }
-   if (certs[0].key_usage >= 0 && !(certs[0].key_usage & X509_KU_DIGITAL_SIGNATURE))
+   if (certs[0].key_usage >= 0 && !(certs[0].key_usage & ku_need))
    {
-      x509_info(info, info_len, "certificate key cannot sign");
+      x509_info(info, info_len, (flags & X509_VERIFY_KEY_ENCIPHERMENT)
+            ? "certificate key cannot encipher" : "certificate key cannot sign");
       goto done;
    }
    if (certs[0].is_ca == 1 && n > 1)
@@ -1148,12 +1364,42 @@ int x509_verify_chain(const uint8_t **ders, const size_t *lens, unsigned n,
       goto done;
    }
 
-   /* The walk reads the store through its own reference: a reload
-    * meanwhile swaps in a new one and leaves this one to the walk. */
-   X509_LOCK();
-   if ((st = x509_store_cur))
-      st->refs++;
-   X509_UNLOCK();
+   if (trust)
+   {
+      if (trust_count && !(own = (struct x509_anchor*)malloc(
+                  trust_count * sizeof(*own))))
+         goto done;
+      for (i = 0; i < trust_count; i++)
+      {
+         own[anchor_count].der     = trust[i];
+         own[anchor_count].der_len = trust_lens[i];
+         if (x509_parse(&own[anchor_count].cert, trust[i], trust_lens[i]) == 0)
+            anchor_count++;
+      }
+      anchors = own;
+   }
+   else
+   {
+      /* The walk reads the store through its own reference: a reload
+       * meanwhile swaps in a new one and leaves this one to the walk. */
+#ifdef X509_STORE_LOCK_FREE
+      st      = x509_store_enter();
+      entered = 1;
+#else
+      X509_LOCK();
+#ifdef X509_STORE_TEST_HOLD
+      X509_STORE_TEST_HOLD();
+#endif
+      if ((st = x509_store_cur))
+         st->refs++;
+      X509_UNLOCK();
+#endif
+      if (st)
+      {
+         anchors      = st->anchors;
+         anchor_count = st->count;
+      }
+   }
 
    cur  = &certs[0];
    used = 1;
@@ -1187,9 +1433,9 @@ int x509_verify_chain(const uint8_t **ders, const size_t *lens, unsigned n,
       }
 
       /* A trust anchor issuing this one ends the walk. */
-      for (j = 0; st && j < st->count; j++)
+      for (j = 0; j < anchor_count; j++)
       {
-         const struct x509_cert *a = &st->anchors[j].cert;
+         const struct x509_cert *a = &anchors[j].cert;
          if (x509_name_eq(a, cur) && x509_verify_signature(cur, a) == 0)
          {
             ret = 0;
@@ -1212,7 +1458,7 @@ int x509_verify_chain(const uint8_t **ders, const size_t *lens, unsigned n,
       }
       if (!issuer)
       {
-         x509_info(info, info_len, (st && st->count)
+         x509_info(info, info_len, anchor_count
                ? "issuer not found or signature invalid"
                : "no trust anchors loaded");
          goto done;
@@ -1222,6 +1468,10 @@ int x509_verify_chain(const uint8_t **ders, const size_t *lens, unsigned n,
    x509_info(info, info_len, "chain too long");
 
 done:
+#ifdef X509_STORE_LOCK_FREE
+   if (entered)
+      x509_store_leave();
+#else
    if (st)
    {
       int last;
@@ -1231,6 +1481,8 @@ done:
       if (last)
          x509_store_free(st);
    }
+#endif
+   free(own);
    free(certs);
    return ret;
 }

@@ -82,10 +82,11 @@
  *
  * What this test does NOT assert
  * ------------------------------
- * Nothing about compressed (rzip) states: HAVE_COMPRESSION is off for
- * this binary, so the uncompressed intfstream path is the one under
- * test.  Nothing about cheevos or replay blocks, which are compiled
- * out.
+ * Little about compressed (rzip) states: HAVE_COMPRESSION is off for
+ * the default binary, so the uncompressed intfstream path is the one
+ * under test.  The RZIP=1 build turns it on, runs every lane through
+ * rzip with compression off, and adds the one that needs it (13).
+ * Nothing about cheevos or replay blocks, which are compiled out.
  *
  * The clock
  * ---------
@@ -164,9 +165,25 @@ static uint64_t clock_step = 0;
 
 retro_time_t cpu_features_get_time_usec(void)
 {
-   retro_time_t t = (retro_time_t)clock_now;
-   clock_now     += clock_step;
-   return t;
+   /* Atomic: with a task parked, the worker's queue reads the clock
+    * while this thread's gather may too. */
+   return (retro_time_t)__atomic_fetch_add(&clock_now,
+         __atomic_load_n(&clock_step, __ATOMIC_RELAXED), __ATOMIC_RELAXED);
+}
+
+#ifdef HAVE_COMPRESSION
+/* rzip sizes its chunk compressor's pool from this; the rest of
+ * features_cpu.c is not linked, the clock above being the test's */
+unsigned cpu_features_get_core_amount(void) { return 2; }
+#endif
+
+/* task_save.c's parks, counted on the way into the real queue. */
+static unsigned park_calls = 0;
+void __real_task_queue_park(retro_task_t *task, retro_time_t horizon_usec);
+void __wrap_task_queue_park(retro_task_t *task, retro_time_t horizon_usec)
+{
+   __atomic_fetch_add(&park_calls, 1, __ATOMIC_RELAXED);
+   __real_task_queue_park(task, horizon_usec);
 }
 
 /* The other half of not linking features_cpu.c.  intfstream_get_crc()
@@ -796,12 +813,13 @@ static void test_short_file(void)
  * 8. Mutual exclusion between save/load tasks.
  *
  *    Every task this file pushes is TASK_TYPE_BLOCKING, so the queue
- *    admits at most one of them at a time and refuses the rest.  Two
- *    of the fixes above rest on that rule and one of them is only
- *    severe because of it - a save task that retried a failed open
- *    forever did not merely fail to save, it held the single blocking
- *    slot for the rest of the session, so no state could be saved or
- *    loaded again without a restart.
+ *    admits at most one of them at a time.  The rest are held behind
+ *    it, in order, up to a bound, and refused past it.  Two of the
+ *    fixes above rest on that rule and one of them is only severe
+ *    because of it - a save task that retried a failed open forever
+ *    did not merely fail to save, it held the single blocking slot for
+ *    the rest of the session, so no state could be saved or loaded
+ *    again without a restart.
  *
  *    The refusal path is also where task_push_save_state has to undo
  *    everything it built - the task, its title, the state struct, and
@@ -813,7 +831,7 @@ static void test_blocking_exclusion(void)
 {
    const char *first  = "sst_excl_a.state";
    const char *second = "sst_excl_b.state";
-   int         i;
+   int         i, accepted;
 
    frontend_reset();
    core_fill(40 * TEST_SAVE_STATE_CHUNK);
@@ -829,16 +847,20 @@ static void test_blocking_exclusion(void)
 
    okf(queue_busy(), "the first blocking task is running");
 
-   /* Push several more while it runs.  Each must be refused, and each
-    * refusal must free everything it allocated. */
-   for (i = 0; i < 8; i++)
+   /* Push several more while it runs.  The first few are held behind
+    * it, the rest refused, and each refusal must free everything it
+    * allocated. */
+   for (i = 0, accepted = 0; i < 8; i++)
    {
-      content_save_state(second, true);
+      if (content_save_state(second, true))
+         accepted++;
       task_queue_check();
    }
 
+   okf(accepted > 0 && accepted < 8,
+       "saves behind one in flight are held up to a bound, then refused");
    okf(file_size(second) == -1,
-       "a second save is refused while one is in flight");
+       "a held save waits for the one in flight");
 
    /* A load refused the same way leaves no load pending: left set, the
     * flag held a content close and a movie recording waiting forever on
@@ -853,7 +875,7 @@ static void test_blocking_exclusion(void)
          fclose(f);
       }
       ok = content_load_state(third, false, false);
-      okf(!ok, "a load is refused while a save is in flight");
+      okf(!ok, "a load is refused while the hold is full");
       okf(!content_load_state_in_progress(NULL),
           "the refused load is not left pending");
       filestream_delete(third);
@@ -864,6 +886,8 @@ static void test_blocking_exclusion(void)
    okf(!queue_busy(), "the queue drains after the refusals");
    okf(file_size(first) == (long)content_get_serialized_size(),
        "the admitted save completes intact despite the refusals");
+   okf(file_size(second) == (long)content_get_serialized_size(),
+       "the held saves run once the first is through");
 
    filestream_delete(first);
    filestream_delete(second);
@@ -937,6 +961,66 @@ static void test_threaded_roundtrip(void)
    okf(memcmp(expect, core_mem, sz) == 0,
        "threaded queue: round-trip is byte-exact");
 
+   free(expect);
+   filestream_delete(path);
+}
+
+/* A load pushed before the core's second frame waits for it parked, a
+ * look about once a frame, and loads once the frame is in.  The clock
+ * advances here so a park's horizon can pass. */
+static void test_threaded_load_waits_for_frames(void)
+{
+   const char *path = "sst_gate.state";
+   size_t sz        = 3 * TEST_SAVE_STATE_CHUNK + 5;
+   uint8_t *expect;
+   unsigned parks;
+   int i;
+
+   frontend_reset();
+   core_fill(sz);
+   expect = (uint8_t*)malloc(sz);
+   memcpy(expect, core_mem, sz);
+   filestream_delete(path);
+
+   content_save_state(path, true);
+   pump_threaded();
+   memset(core_mem, 0xA5, sz);
+
+   stub_video.frame_count = 0;
+   __atomic_store_n(&clock_step, 2000, __ATOMIC_RELAXED);
+   __atomic_store_n(&park_calls, 0, __ATOMIC_RELAXED);
+   content_load_state(path, false, false);
+   for (i = 0; i < 50; i++)
+   {
+      task_queue_check();
+      retro_sleep(1);
+   }
+   parks = __atomic_load_n(&park_calls, __ATOMIC_RELAXED);
+   okf(parks >= 1,
+       "threaded queue: a load before the second frame parks");
+   okf(parks <= 50,
+       "threaded queue: it looks about once a frame while it waits");
+   okf(memcmp(expect, core_mem, sz) != 0,
+       "threaded queue: nothing is loaded before the second frame");
+
+   /* With the clock stopped a parked task cannot come due, so once a
+    * pass in flight has settled the handler is not looking; a gather
+    * orders its last look before the write and the write before its
+    * next one. */
+   __atomic_store_n(&clock_step, 0, __ATOMIC_RELAXED);
+   for (i = 0; i < 20; i++)
+   {
+      task_queue_check();
+      retro_sleep(1);
+   }
+   stub_video.frame_count = 2;
+   task_queue_check();
+   __atomic_store_n(&clock_step, 2000, __ATOMIC_RELAXED);
+   pump_threaded();
+   okf(memcmp(expect, core_mem, sz) == 0,
+       "threaded queue: the state loads once the second frame is in");
+
+   __atomic_store_n(&clock_step, 0, __ATOMIC_RELAXED);
    free(expect);
    filestream_delete(path);
 }
@@ -1235,6 +1319,116 @@ static void test_notify_without_allocation(void)
    filestream_delete(path);
 }
 
+/* -----------------------------------------------------------------
+ * Load State pressed while a save is still writing.
+ *
+ *    It was turned away by the queue and dropped without a word: the
+ *    hotkey did nothing. It is held behind the save now and runs when
+ *    the save is through - after it, so it loads what the save wrote,
+ *    not the file the save replaced.
+ * ----------------------------------------------------------------- */
+static void test_load_held_behind_save(void)
+{
+   const char *path = "sst_held.state";
+   size_t      n    = 40 * TEST_SAVE_STATE_CHUNK;
+
+   frontend_reset();
+   core_fill(n);
+   filestream_delete(path);
+   clock_step = 0;
+
+   /* an older state in the file, so the next save backs it up first */
+   content_save_state(path, true);
+   pump(1000);
+   okf(file_size(path) > 0, "held: the first save is written");
+
+   /* the save in flight for a while: one observation spends the budget */
+   clock_step = TEST_TICK_BUDGET_US;
+   memset(core_mem, 0x11, n);
+   okf(content_save_state(path, true), "held: the second save is pushed");
+   task_queue_check();
+   /* its backup read of the older state first, then the write */
+   okf(queue_busy(), "held: the second save is in flight");
+
+   memset(core_mem, 0x22, n);
+   told_calls = 0;
+   okf(content_load_state_notify(path, false, false, told_cb, NULL),
+       "held: Load State during the save is taken, not refused");
+   okf(content_load_state_in_progress(NULL),
+       "held: and counts as pending, for a close to wait on");
+
+   pump(20000);
+   okf(!queue_busy() && !content_load_state_in_progress(NULL)
+         && !content_save_state_in_progress(NULL),
+       "held: the save and the load both finish");
+   okf(told_calls == 1 && !told_error,
+       "held: the load is told it was applied");
+   okf(core_mem[0] == 0x11 && core_mem[n - 1] == 0x11,
+       "held: the load runs after the save and loads what it wrote");
+
+   clock_step = 0;
+   filestream_delete(path);
+}
+
+#ifdef HAVE_COMPRESSION
+/* -----------------------------------------------------------------
+ * 13. Undo puts back the file a save replaced, as it was.
+ *
+ *     A save over a slot first keeps the file there, for undo. That
+ *     backup used to be read through rzip - the old state inflated -
+ *     and an undo wrote it back through rzip again, deflated afresh
+ *     under whatever the compression setting had since become. It is
+ *     now the file's own bytes, read and written back as they are:
+ *     nothing inflated on every save over a slot, nothing deflated on
+ *     undo, and the slot comes back as it was. The setting is turned
+ *     between the save and the one over it, both ways, so a backup
+ *     that went through rzip would come back in the other form.
+ * ----------------------------------------------------------------- */
+static void test_undo_save_restores_file(void)
+{
+   const char *path = "sst_undo_file.state";
+   int z;
+
+   for (z = 0; z < 2; z++)
+   {
+      void   *was = NULL, *over = NULL, *back = NULL;
+      int64_t n_was = -1, n_over = -2, n_back = -3;
+
+      frontend_reset();
+      filestream_delete(path);
+      core_fill(3 * TEST_SAVE_STATE_CHUNK + 123);
+      stub_settings.bools.savestate_file_compression = z;
+      content_save_state(path, true);
+      pump(1000);
+      if (!filestream_read_file(path, &was, &n_was))
+         n_was = -1;
+
+      stub_settings.bools.savestate_file_compression = !z;
+      memset(core_mem, 0x5A, core_len);
+      content_save_state(path, true);
+      pump(1000);
+      if (!filestream_read_file(path, &over, &n_over))
+         n_over = -2;
+      okf(n_over > 0 && (n_over != n_was || memcmp(was, over, (size_t)n_was)),
+          z ? "a plain save over a compressed slot replaces it"
+            : "a compressed save over a plain slot replaces it");
+
+      okf(content_undo_save_state(), "the undo of that save is pushed");
+      pump(1000);
+      if (!filestream_read_file(path, &back, &n_back))
+         n_back = -3;
+      okf(n_was > 0 && n_back == n_was && !memcmp(was, back, (size_t)n_was),
+          z ? "undo puts the compressed slot back byte for byte"
+            : "undo puts the plain slot back byte for byte");
+
+      free(was);
+      free(over);
+      free(back);
+   }
+   filestream_delete(path);
+}
+#endif
+
 static int run_default_lane(void)
 {
    printf("== task_save.c I/O regression oracle ==\n");
@@ -1261,6 +1455,10 @@ static int run_default_lane(void)
    test_undo_snapshot_failure_keeps_previous();
    test_undo_allocates_nothing();
    test_notify_without_allocation();
+   test_load_held_behind_save();
+#ifdef HAVE_COMPRESSION
+   test_undo_save_restores_file();
+#endif
 
    content_reset_savestate_backups();
    task_queue_deinit();
@@ -1276,6 +1474,7 @@ static int run_threaded_lane(void)
    task_queue_init(true, msg_push_stub);
 
    test_threaded_roundtrip();
+   test_threaded_load_waits_for_frames();
 
    content_reset_savestate_backups();
    task_queue_deinit();

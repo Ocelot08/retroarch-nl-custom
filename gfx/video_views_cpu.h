@@ -29,6 +29,7 @@
 
 #include "video_views.h"
 #include "video_defines.h"
+#include "video_turn.h"
 
 typedef struct video_views_cpu
 {
@@ -36,7 +37,14 @@ typedef struct video_views_cpu
    /* A placement the surface cuts, scaled whole */
    uint32_t *scratch;
    size_t scratch_size;
+   /* A view turned, ahead of its scaling */
+   uint8_t *turned;
+   size_t turned_size;
    unsigned next;
+   /* Quarter turns counter-clockwise each view is drawn at, in its own
+    * placement, as the layout laid it out for the core's rotation; set
+    * by a driver that does not turn the composed surface itself */
+   unsigned rot;
 } video_views_cpu_t;
 
 static INLINE void video_views_cpu_free(video_views_cpu_t *cpu)
@@ -45,8 +53,11 @@ static INLINE void video_views_cpu_free(video_views_cpu_t *cpu)
    for (i = 0; i < VIDEO_VIEWS_MAX_PLACEMENTS; i++)
       scaler_ctx_gen_reset(&cpu->scalers[i]);
    free(cpu->scratch);
+   free(cpu->turned);
    cpu->scratch      = NULL;
    cpu->scratch_size = 0;
+   cpu->turned       = NULL;
+   cpu->turned_size  = 0;
 }
 
 /* A scaler from @in_w x @in_h to @out_w x @out_h through @type: one
@@ -147,10 +158,34 @@ static INLINE void video_views_cpu_draw_view(video_views_cpu_t *cpu,
       uint8_t *pixels, unsigned stride,
       const video_views_rect_t *dst, const video_views_rect_t *cut)
 {
-   unsigned bpp = (fmt == SCALER_FMT_RGB565) ? 2 : 4;
-   video_views_cpu_draw(cpu, fmt, type,
-         (const uint8_t*)frame + (size_t)v->y * pitch + (size_t)v->x * bpp,
-         v->width, v->height, pitch, pixels, stride, dst, cut);
+   unsigned tw, th;
+   size_t size;
+   unsigned bpp      = (fmt == SCALER_FMT_RGB565) ? 2 : 4;
+   const uint8_t *in = (const uint8_t*)frame + (size_t)v->y * pitch
+      + (size_t)v->x * bpp;
+
+   if (!(cpu->rot & 3))
+   {
+      video_views_cpu_draw(cpu, fmt, type, in, v->width, v->height, pitch,
+            pixels, stride, dst, cut);
+      return;
+   }
+   /* Turned first, then scaled like any other */
+   tw   = (cpu->rot & 1) ? v->height : v->width;
+   th   = (cpu->rot & 1) ? v->width  : v->height;
+   size = (size_t)tw * th * bpp;
+   if (size > cpu->turned_size)
+   {
+      uint8_t *grown = (uint8_t*)realloc(cpu->turned, size);
+      if (!grown)
+         return;
+      cpu->turned      = grown;
+      cpu->turned_size = size;
+   }
+   video_turn_copy(cpu->turned, (size_t)tw * bpp, in, pitch,
+         v->width, v->height, bpp, cpu->rot & 3);
+   video_views_cpu_draw(cpu, fmt, type, cpu->turned, tw, th, tw * bpp,
+         pixels, stride, dst, cut);
 }
 
 /* The scale a driver whose display hardware scales a surface to the
@@ -203,6 +238,83 @@ static INLINE void video_views_cpu_rect(const video_views_rect_t *r,
    out->dims = VIDEO_SCALE_PACK(x1 - x0, y1 - y0);
 }
 
+/* Placement @p of @layout at @scale, in a target of the layout's size
+ * at that scale, @dims, or with @offscreen the canvas of both eyes side
+ * by side: the whole of it in @dst, and in @cut the part drawn, inside
+ * its own eye's area and the target. False when nothing is. */
+static INLINE bool video_views_cpu_cut(const video_views_layout_t *layout,
+      const video_views_placement_t *p, float scale, unsigned dims,
+      bool offscreen, video_views_rect_t *dst, video_views_rect_t *cut)
+{
+   video_views_rect_t area;
+   int x0, y0, x1, y1, ax, ay;
+   unsigned tdims = offscreen
+      ? VIDEO_SCALE_PACK(2 * VIDEO_SCALE_W(dims), VIDEO_SCALE_H(dims))
+      : dims;
+   video_views_cpu_rect(&p->dst, scale, dst);
+   if (offscreen)
+   {
+      area.pos  = VIDEO_POS_PACK(p->area ? VIDEO_SCALE_W(dims) : 0, 0);
+      area.dims = dims;
+   }
+   else if (layout->num_areas)
+      video_views_cpu_rect(&layout->areas[p->area], scale, &area);
+   else
+   {
+      area.pos  = VIDEO_POS_PACK(0, 0);
+      area.dims = dims;
+   }
+   if (!video_views_clip(dst, tdims, cut))
+      return false;
+   x0 = VIDEO_POS_X(cut->pos);
+   y0 = VIDEO_POS_Y(cut->pos);
+   x1 = x0 + (int)VIDEO_SCALE_W(cut->dims);
+   y1 = y0 + (int)VIDEO_SCALE_H(cut->dims);
+   ax = VIDEO_POS_X(area.pos);
+   ay = VIDEO_POS_Y(area.pos);
+   if (x0 < ax)
+      x0 = ax;
+   if (y0 < ay)
+      y0 = ay;
+   if (x1 > ax + (int)VIDEO_SCALE_W(area.dims))
+      x1 = ax + (int)VIDEO_SCALE_W(area.dims);
+   if (y1 > ay + (int)VIDEO_SCALE_H(area.dims))
+      y1 = ay + (int)VIDEO_SCALE_H(area.dims);
+   if (     x1 <= x0 || y1 <= y0
+         || !VIDEO_SCALE_W(dst->dims) || !VIDEO_SCALE_H(dst->dims))
+      return false;
+   cut->pos  = VIDEO_POS_PACK(x0, y0);
+   cut->dims = VIDEO_SCALE_PACK(x1 - x0, y1 - y0);
+   return true;
+}
+
+/* @layout's placements drawn at @scale into the XRGB8888 @target, rows
+ * @tstride pixels apart: the layout's size at that scale, @dims, or with
+ * @offscreen the canvas of both eyes side by side, unblended. Cleared
+ * first. Each view straight from the frame. */
+static INLINE void video_views_cpu_draw_placements(video_views_cpu_t *cpu,
+      const video_views_map_t *map, const video_views_layout_t *layout,
+      const void *frame, unsigned pitch, enum scaler_pix_fmt fmt,
+      enum scaler_type type, float scale, unsigned dims, bool offscreen,
+      uint32_t *target, unsigned tstride)
+{
+   unsigned i, y;
+   unsigned tw = offscreen ? 2 * VIDEO_SCALE_W(dims) : VIDEO_SCALE_W(dims);
+
+   for (y = 0; y < VIDEO_SCALE_H(dims); y++)
+      memset(target + (size_t)y * tstride, 0, tw * sizeof(uint32_t));
+   for (i = 0; i < layout->num_placements; i++)
+   {
+      video_views_rect_t dst, cut;
+      const video_views_placement_t *p = &layout->placements[i];
+      if (video_views_cpu_cut(layout, p, scale, dims, offscreen,
+               &dst, &cut))
+         video_views_cpu_draw_view(cpu, fmt, type, &map->views[p->view],
+               frame, pitch, (uint8_t*)target, tstride * sizeof(uint32_t),
+               &dst, &cut);
+   }
+}
+
 /* @layout's views composed at @scale into the XRGB8888 surface at
  * @pixels, rows @stride pixels apart, of the layout's size at that
  * scale (video_views_cpu_dims). Anaglyph and interlaced through
@@ -214,65 +326,17 @@ static INLINE void video_views_cpu_compose(video_views_cpu_t *cpu,
       enum scaler_type type, float scale, unsigned dims,
       uint32_t *pixels, unsigned stride, uint32_t *canvas)
 {
-   unsigned i, y;
-   bool offscreen    = layout->offscreen && canvas;
-   unsigned tdims    = offscreen
-      ? VIDEO_SCALE_PACK(2 * VIDEO_SCALE_W(dims), VIDEO_SCALE_H(dims))
-      : dims;
-   uint32_t *target  = offscreen ? canvas : pixels;
-   unsigned tstride  = offscreen ? VIDEO_SCALE_W(tdims) : stride;
-
-   for (y = 0; y < VIDEO_SCALE_H(tdims); y++)
-      memset(target + (size_t)y * tstride, 0,
-            VIDEO_SCALE_W(tdims) * sizeof(uint32_t));
-   for (i = 0; i < layout->num_placements; i++)
+   bool offscreen = layout->offscreen && canvas;
+   if (!offscreen)
    {
-      video_views_rect_t dst, cut;
-      const video_views_placement_t *p = &layout->placements[i];
-      video_views_rect_t area;
-      video_views_cpu_rect(&p->dst, scale, &dst);
-      /* Within its own eye's area, and the target */
-      if (offscreen)
-      {
-         area.pos  = VIDEO_POS_PACK(p->area ? VIDEO_SCALE_W(dims) : 0, 0);
-         area.dims = dims;
-      }
-      else if (layout->num_areas)
-         video_views_cpu_rect(&layout->areas[p->area], scale, &area);
-      else
-      {
-         area.pos  = VIDEO_POS_PACK(0, 0);
-         area.dims = dims;
-      }
-      if (!video_views_clip(&dst, tdims, &cut))
-         continue;
-      {
-         int x0 = VIDEO_POS_X(cut.pos), y0 = VIDEO_POS_Y(cut.pos);
-         int x1 = x0 + (int)VIDEO_SCALE_W(cut.dims);
-         int y1 = y0 + (int)VIDEO_SCALE_H(cut.dims);
-         int ax = VIDEO_POS_X(area.pos), ay = VIDEO_POS_Y(area.pos);
-         if (x0 < ax)
-            x0 = ax;
-         if (y0 < ay)
-            y0 = ay;
-         if (x1 > ax + (int)VIDEO_SCALE_W(area.dims))
-            x1 = ax + (int)VIDEO_SCALE_W(area.dims);
-         if (y1 > ay + (int)VIDEO_SCALE_H(area.dims))
-            y1 = ay + (int)VIDEO_SCALE_H(area.dims);
-         if (x1 <= x0 || y1 <= y0)
-            continue;
-         cut.pos  = VIDEO_POS_PACK(x0, y0);
-         cut.dims = VIDEO_SCALE_PACK(x1 - x0, y1 - y0);
-      }
-      if (!VIDEO_SCALE_W(dst.dims) || !VIDEO_SCALE_H(dst.dims))
-         continue;
-      video_views_cpu_draw_view(cpu, fmt, type, &map->views[p->view],
-            frame, pitch, (uint8_t*)target, tstride * sizeof(uint32_t),
-            &dst, &cut);
+      video_views_cpu_draw_placements(cpu, map, layout, frame, pitch, fmt,
+            type, scale, dims, false, pixels, stride);
+      return;
    }
-   if (offscreen)
-      video_views_blend_xrgb8888(canvas, VIDEO_SCALE_W(tdims), pixels,
-            stride, dims, layout->stereo_mode);
+   video_views_cpu_draw_placements(cpu, map, layout, frame, pitch, fmt,
+         type, scale, dims, true, canvas, 2 * VIDEO_SCALE_W(dims));
+   video_views_blend_xrgb8888(canvas, 2 * VIDEO_SCALE_W(dims), pixels,
+         stride, dims, layout->stereo_mode);
 }
 
 #endif

@@ -43,7 +43,7 @@
 #include "../font_driver.h"
 #include "../video_views.h"
 #define DEPRECATED
-#include "../../ctr/gpu_old.h"
+#include "../../os/ctr/gpu_old.h"
 #undef DEPRECATED
 #include "ctr_gu.h"
 
@@ -126,6 +126,8 @@ extern PrintConsole* ctrConsole;
 extern const u8 ctr_sprite_shbin[];
 extern const u32 ctr_sprite_shbin_size;
 
+
+#define CTR_SW_LEND_SLOTS 2
 
 typedef struct ctr_video
 {
@@ -217,6 +219,16 @@ typedef struct ctr_video
    /* overlay[].texture are the overlay pack's (load_textures) */
    bool overlay_borrowed;
 #endif
+   /* Linear buffers lent to the core, in turn: the GPU copies a frame
+    * out of the one it was drawn in after that frame has been pushed,
+    * so the next is drawn in the other. */
+   struct
+   {
+      void    *buffer[CTR_SW_LEND_SLOTS];
+      unsigned dims;
+      unsigned next;
+   } sw_lend;
+
    bool rgb32;
    bool vsync;
    bool smooth;
@@ -293,9 +305,11 @@ static bool ctr_bottom_screen_enabled  = true;
 
 #ifdef HAVE_OVERLAY
 static void ctr_render_overlay(ctr_video_t *ctr);
+#endif
 static uintptr_t ctr_load_texture(void *video_data, void *data,
       bool threaded, enum texture_filter_type filter_type);
-#endif
+static void ctr_unload_texture(void *data, bool threaded,
+      uintptr_t handle);
 static void ctr_set_bottom_screen_enable(bool enabled, bool idle);
 
 /*
@@ -902,12 +916,11 @@ static void ctr_update_viewport(ctr_video_t* ctr)
 
 /* The png at @name under @dir, decoded here and uploaded through the
  * driver's own load. False when there is no such file. */
-static bool ctr_load_png_texture(const char *name, const char *dir,
-      uintptr_t *tex)
+static bool ctr_load_png_texture(ctr_video_t *ctr, const char *name,
+      const char *dir, uintptr_t *tex)
 {
    char path[PATH_MAX_LENGTH];
    struct texture_image ti;
-   bool ok;
 
    if (!name || !*name)
       return false;
@@ -916,9 +929,9 @@ static bool ctr_load_png_texture(const char *name, const char *dir,
    ti.supports_rgba = gfx_surface_wants_rgba();
    if (!image_texture_load(&ti, path))
       return false;
-   ok = video_driver_texture_load(&ti, TEXTURE_FILTER_MIPMAP_LINEAR, tex);
+   *tex = ctr_load_texture(ctr, &ti, false, TEXTURE_FILTER_MIPMAP_LINEAR);
    image_texture_free(&ti);
-   return ok;
+   return *tex != 0;
 }
 
 static const char *ctr_texture_path(unsigned id)
@@ -1061,7 +1074,7 @@ static bool ctr_load_bottom_texture(void *data)
       else
          dir_assets = settings->paths.directory_bottom_assets;
 
-      if (ctr_load_png_texture(ctr_texture_path(i), dir_assets,
+      if (ctr_load_png_texture(ctr, ctr_texture_path(i), dir_assets,
             &ctr->bottom_textures[i].texture))
       {
          struct ctr_bottom_texture_data *o = &ctr->bottom_textures[i];
@@ -1295,14 +1308,14 @@ static void ctr_bottom_menu_control(void* data,
 
       if (texture)
       {
-         linearFree(texture->data);
+         ctr_unload_texture(ctr, false, o->texture);
          linearFree(o->frame_coords);
          o->texture = 0;
       }
 
       if (ctr_update_state_date_from_file(ctr))
       {
-         if (ctr_load_png_texture(
+         if (ctr_load_png_texture(ctr,
                   ctr_texture_path(CTR_TEXTURE_STATE_THUMBNAIL),
                   dir_get_ptr(RARCH_DIR_SAVESTATE), &o->texture))
          {
@@ -2107,6 +2120,60 @@ static void* ctr_init(const video_info_t* video)
 #define CTR_INSPECT_MEMORY_USAGE
 #endif
 
+/* The lent buffers go; the cached frame may name one, so it goes first */
+static void ctr_sw_lend_release(ctr_video_t *ctr)
+{
+   unsigned i;
+   if (ctr->sw_lend.buffer[0])
+      video_driver_cached_frame_retire();
+   for (i = 0; i < CTR_SW_LEND_SLOTS; i++)
+   {
+      linearFree(ctr->sw_lend.buffer[i]);
+      ctr->sw_lend.buffer[i] = NULL;
+   }
+   ctr->sw_lend.dims = 0;
+}
+
+/* Linear memory at the tight pitch, the GPU's own copy taking it from
+ * there (ctr_frame): the frame is never copied by the CPU. Declined
+ * for a pitch that path does not take. */
+static bool ctr_get_current_software_framebuffer(void *data,
+      struct retro_framebuffer *fb)
+{
+   ctr_video_t *ctr = (ctr_video_t*)data;
+   unsigned bpp, dims, i;
+   size_t pitch;
+
+   if (!ctr || !fb || !fb->width || !fb->height)
+      return false;
+   bpp   = ctr->rgb32 ? 4 : 2;
+   pitch = (size_t)fb->width * bpp;
+   if (     (pitch & 0xF) || pitch <= 0x40
+         || fb->width  > ctr->texture_width
+         || fb->height > ctr->texture_height)
+      return false;
+   dims = VIDEO_SCALE_PACK(fb->width, fb->height);
+   if (ctr->sw_lend.dims != dims)
+   {
+      ctr_sw_lend_release(ctr);
+      for (i = 0; i < CTR_SW_LEND_SLOTS; i++)
+         if (!(ctr->sw_lend.buffer[i] = linearMemAlign(pitch * fb->height, 128)))
+         {
+            ctr_sw_lend_release(ctr);
+            return false;
+         }
+      ctr->sw_lend.dims = dims;
+      ctr->sw_lend.next = 0;
+   }
+   fb->data         = ctr->sw_lend.buffer[ctr->sw_lend.next];
+   fb->pitch        = pitch;
+   fb->format       = ctr->rgb32
+      ? RETRO_PIXEL_FORMAT_XRGB8888 : RETRO_PIXEL_FORMAT_RGB565;
+   fb->memory_flags = RETRO_MEMORY_TYPE_CACHED;
+   ctr->sw_lend.next = (ctr->sw_lend.next + 1) % CTR_SW_LEND_SLOTS;
+   return true;
+}
+
 static bool ctr_frame(void* data, const void* frame,
       unsigned dims,
       uint64_t frame_count,
@@ -2750,13 +2817,14 @@ static void ctr_free(void* data)
       ctr_texture_t *texture = (ctr_texture_t *) o->texture;
       if (texture)
       {
-         linearFree(texture->data);
+         ctr_unload_texture(ctr, false, o->texture);
          linearFree(o->frame_coords);
          o->texture = 0;
       }
    }
    free(ctr->bottom_textures);
    linearFree(ctr->display_list);
+   ctr_sw_lend_release(ctr);
    linearFree(ctr->texture_linear);
    linearFree(ctr->texture_swizzled);
    linearFree(ctr->frame_coords);
@@ -3335,7 +3403,7 @@ static const video_poke_interface_t ctr_poke_interface = {
    NULL, /* show_mouse */
    NULL, /* grab_mouse_toggle */
    NULL, /* get_current_shader */
-   NULL, /* get_current_software_framebuffer */
+   ctr_get_current_software_framebuffer,
    NULL, /* get_hw_render_interface */
    NULL, /* set_hdr_menu_nits */
    NULL, /* set_hdr_paper_white_nits */

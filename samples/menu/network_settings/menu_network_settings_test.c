@@ -11,7 +11,8 @@
  * each screen yields its rows. With Cloud Sync on the SMB or NFS
  * driver, the entry that opens the share settings it uses is in the
  * Cloud Sync screen too, under that driver only, and does what the
- * Network one does. */
+ * Network one does. Minimum Audio Latency is reachable from Settings >
+ * Latency, and picking from its list sets the value picked. */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -32,9 +33,12 @@
 #include "../../../configuration.h"
 #include "../../../retroarch.h"
 #include "../../../config.def.h"
+#include "../../../gfx/gfx_display.h"
+#include "../../../gfx/gfx_animation.h"
 #include "../../../menu/menu_setting.h"
 #include "../../../menu/menu_entries.h"
 #include "../../../frontend/frontend_driver.h"
+#include "../../../input/input_driver.h"
 
 static unsigned failures;
 #define CHECK(cond, what) do { if (cond) fprintf(stderr, "ok:   %s\n", what); \
@@ -147,10 +151,71 @@ static long pick_uint(enum msg_hash_enums e, const char *want)
       if (!cbs || !cbs->action_ok)
          return -1;
       cbs->action_ok(buf->list[i].path, buf->list[i].label,
-            buf->list[i].type, i, i);
+            buf->list[i].type, i, buf->list[i].entry_idx);
       return (long)*setting->value.target.unsigned_integer;
    }
    return -1;
+}
+
+static void media_settings(const char *cfg_path)
+{
+   settings_t *settings = config_get_ptr();
+   file_list_t *buf;
+   menu_file_list_cbs_t *cbs;
+   size_t i;
+   bool found = false;
+   bool show_browser = settings->bools.settings_show_file_browser;
+   bool kiosk = settings->bools.kiosk_mode_enable;
+   config_file_t *cfg;
+   unsigned seek = 0, timeout = 1;
+   CHECK(settings->uints.media_player_seek_seconds == 5
+         && settings->uints.media_player_controls_timeout == 3, "media control defaults");
+   settings->bools.settings_show_file_browser = true;
+   settings->bools.kiosk_mode_enable = false;
+   open_list(DISPLAYLIST_LOAD_CONTENT_LIST,
+         MENU_ENUM_LABEL_LOAD_CONTENT_LIST_STR, MENU_ENUM_LABEL_LOAD_CONTENT_LIST);
+   buf = selection_buf();
+   for (i = 0; buf && i + 1 < buf->size; i++)
+      if (string_is_equal(buf->list[i].label, MENU_ENUM_LABEL_MENU_FILE_BROWSER_SETTINGS_STR))
+      {
+         found = string_is_equal(buf->list[i + 1].label, MENU_ENUM_LABEL_MEDIA_PLAYER_SETTINGS_STR);
+         break;
+      }
+   CHECK(found, "Media Player appears directly below File Browser");
+   cbs = entry_cbs(MENU_ENUM_LABEL_MEDIA_PLAYER_SETTINGS_STR);
+   CHECK(cbs && cbs->action_ok, "Media Player has an OK action");
+   CHECK(string_is_equal(msg_hash_to_str(MENU_ENUM_LABEL_DEFERRED_MEDIA_PLAYER_SETTINGS_LIST),
+            MENU_ENUM_LABEL_DEFERRED_MEDIA_PLAYER_SETTINGS_LIST_STR), "deferred media label resolves");
+   if (found && cbs && cbs->action_ok)
+   {
+      i++;
+      cbs->action_ok(buf->list[i].path, buf->list[i].label, buf->list[i].type, i, 0);
+      menu_driver_iterate(menu_state_get_ptr(), disp_get_ptr(), anim_get_ptr(),
+            settings, MENU_ACTION_NOOP, cpu_features_get_time_usec());
+      CHECK(list_has_label(MENU_ENUM_LABEL_MEDIA_PLAYER_SEEK_SECONDS_STR)
+            && list_has_label(MENU_ENUM_LABEL_MEDIA_PLAYER_CONTROLS_TIMEOUT_STR),
+            "Media Player OK opens both backed settings");
+   }
+   CHECK(pick_uint(MENU_ENUM_LABEL_MEDIA_PLAYER_SEEK_SECONDS, "12") == 12, "seek step is editable");
+   CHECK(pick_uint(MENU_ENUM_LABEL_MEDIA_PLAYER_SEEK_SECONDS, "0") == -1, "zero seek step is not offered");
+   CHECK(pick_uint(MENU_ENUM_LABEL_MEDIA_PLAYER_CONTROLS_TIMEOUT, "0") == 0, "controls can remain visible");
+   CHECK(config_save_file(cfg_path), "media settings save");
+   cfg = config_file_new_from_path_to_string(cfg_path);
+   CHECK(cfg && config_get_uint(cfg, "media_player_seek_seconds", &seek) && seek == 12
+         && config_get_uint(cfg, "media_player_controls_timeout", &timeout) && timeout == 0,
+         "saved media settings retain selected values");
+   if (cfg) config_file_free(cfg);
+   settings->bools.kiosk_mode_enable = true;
+   open_list(DISPLAYLIST_LOAD_CONTENT_LIST,
+         MENU_ENUM_LABEL_LOAD_CONTENT_LIST_STR, MENU_ENUM_LABEL_LOAD_CONTENT_LIST);
+   CHECK(!list_has_label(MENU_ENUM_LABEL_MEDIA_PLAYER_SETTINGS_STR), "kiosk hides media settings");
+   settings->bools.kiosk_mode_enable = false;
+   settings->bools.settings_show_file_browser = false;
+   open_list(DISPLAYLIST_LOAD_CONTENT_LIST,
+         MENU_ENUM_LABEL_LOAD_CONTENT_LIST_STR, MENU_ENUM_LABEL_LOAD_CONTENT_LIST);
+   CHECK(!list_has_label(MENU_ENUM_LABEL_MEDIA_PLAYER_SETTINGS_STR), "browser settings visibility respected");
+   settings->bools.settings_show_file_browser = show_browser;
+   settings->bools.kiosk_mode_enable = kiosk;
 }
 
 int main(int argc, char *argv[])
@@ -159,9 +224,10 @@ int main(int argc, char *argv[])
    char fixture_dir[128], cmd[300];
    char *rarch_argv[8];
    int rarch_argc = 0;
+   const char *menu_driver = argc > 1 ? argv[1] : "rgui";
    size_t n;
 
-   (void)argc; (void)argv;
+
    snprintf(fixture_dir, sizeof(fixture_dir), "/tmp/menu_net_%ld", (long)getpid());
    snprintf(cmd, sizeof(cmd), "mkdir -p %s", fixture_dir);
    if (system(cmd) != 0)
@@ -173,8 +239,8 @@ int main(int argc, char *argv[])
          return 1;
       fprintf(cfg, "video_driver = \"null\"\naudio_driver = \"null\"\n"
             "input_driver = \"null\"\ninput_joypad_driver = \"null\"\n"
-            "menu_driver = \"rgui\"\nvideo_threaded = \"false\"\n"
-            "smb_client_enable = \"true\"\n");
+            "menu_driver = \"%s\"\nvideo_threaded = \"false\"\n"
+            "smb_client_enable = \"true\"\n", menu_driver);
 #if defined(HAVE_CLOUDSYNC) && defined(HAVE_NFSCLIENT)
       fprintf(cfg, "cloud_sync_nfs_subdir = \"retroarch\"\n");
 #endif
@@ -200,6 +266,9 @@ int main(int argc, char *argv[])
       fprintf(stderr, "FAIL: the menu came up without an entry list\n");
       return 1;
    }
+
+   CHECK(string_is_equal(menu_driver_ident(), menu_driver), "requested menu initialized");
+   media_settings(cfg_path);
 
    /* the labels the deferred lists are pushed with must be identifiers */
 #ifdef HAVE_SMBCLIENT
@@ -345,6 +414,46 @@ int main(int argc, char *argv[])
          "SMB Read-Ahead: picking 1024 sets 1024");
    CHECK(DEFAULT_SMB_CLIENT_READAHEAD == 0, "SMB Read-Ahead is off by default");
 #endif
+
+   /* Minimum Audio Latency is under Settings > Latency as well as Audio
+    * > Output, and its list starts at its minimum of 1 */
+   n = open_list(DISPLAYLIST_LATENCY_SETTINGS_LIST,
+         msg_hash_to_str(MENU_ENUM_LABEL_DEFERRED_LATENCY_SETTINGS_LIST),
+         MENU_ENUM_LABEL_DEFERRED_LATENCY_SETTINGS_LIST);
+   CHECK(n > 0 && list_has_label(MENU_ENUM_LABEL_AUDIO_LATENCY_FLOOR_STR),
+         "Minimum Audio Latency is under Settings > Latency");
+   CHECK(pick_uint(MENU_ENUM_LABEL_AUDIO_LATENCY_FLOOR, "1") == 1,
+         "Minimum Audio Latency: picking 1 sets 1");
+   CHECK(pick_uint(MENU_ENUM_LABEL_AUDIO_LATENCY_FLOOR, "2") == 2,
+         "Minimum Audio Latency: picking 2 sets 2");
+   CHECK(pick_uint(MENU_ENUM_LABEL_AUDIO_LATENCY_FLOOR, "16") == 16,
+         "Minimum Audio Latency: picking 16 sets 16");
+   CHECK(pick_uint(MENU_ENUM_LABEL_AUDIO_LATENCY_FLOOR, "0") == -1,
+         "Minimum Audio Latency: 0 is not offered");
+
+   /* Mouse Index lists only the mice there are; the one after an index
+    * left out is still picked by its own index */
+   input_config_set_mouse_display_name(0, "First Mouse");
+   input_config_set_mouse_display_name(2, "Third Mouse");
+   CHECK(pick_uint(MENU_ENUM_LABEL_INPUT_MOUSE_INDEX, "#2: N/A") == -1,
+         "Mouse Index: #2, with no mouse, is not offered");
+   CHECK(pick_uint(MENU_ENUM_LABEL_INPUT_MOUSE_INDEX, "#3: Third Mouse") == 2,
+         "Mouse Index: picking #3 sets #3");
+   CHECK(pick_uint(MENU_ENUM_LABEL_INPUT_MOUSE_INDEX, "#1: First Mouse") == 0,
+         "Mouse Index: picking #1 sets #1");
+   input_config_clear_mouse_info();
+
+   /* Keyboard Index lists All and the keyboards there are, the same */
+   input_config_set_keyboard_display_name(0, "First Keyboard");
+   input_config_set_keyboard_display_name(2, "Third Keyboard");
+   CHECK(pick_uint(MENU_ENUM_LABEL_INPUT_KEYBOARD_INDEX, "#2: N/A") == -1,
+         "Keyboard Index: #2, with no keyboard, is not offered");
+   CHECK(pick_uint(MENU_ENUM_LABEL_INPUT_KEYBOARD_INDEX,
+            "#3: Third Keyboard") == 3,
+         "Keyboard Index: picking #3 sets #3");
+   CHECK(pick_uint(MENU_ENUM_LABEL_INPUT_KEYBOARD_INDEX, "All") == 0,
+         "Keyboard Index: picking All sets All");
+   input_config_clear_keyboard_display_names();
 
    /* and neither sits in the Quick Menu */
    n = open_list(DISPLAYLIST_CONTENT_SETTINGS,

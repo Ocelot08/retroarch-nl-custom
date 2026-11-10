@@ -280,6 +280,13 @@ static void gfx_ctx_wl_swap_buffers(void *data)
     * properly. */
    if (wl->suspended)
    {
+      if (wl->vk.context.flags & VK_CTX_FLAG_HAS_ACQUIRED_SWAPCHAIN)
+      {
+         wl->vk.context.flags &= ~VK_CTX_FLAG_HAS_ACQUIRED_SWAPCHAIN;
+         wl->vk.context.flags |= VK_CTX_FLAG_DEFERRED_PRESENT;
+      }
+      wl->vk.context.flags |= VK_CTX_FLAG_FRAME_SLOT_PENDING;
+      vulkan_context_continue_frame(&wl->vk);
       flush_wayland_fd(&wl->input);
       return;
    }
@@ -292,9 +299,11 @@ static void gfx_ctx_wl_swap_buffers(void *data)
    if (wl->present.clock)
       wl_present_request(&wl->present, wl->surface);
 
-   if (wl->vk.context.flags & VK_CTX_FLAG_HAS_ACQUIRED_SWAPCHAIN)
+   if (wl->vk.context.flags & (VK_CTX_FLAG_HAS_ACQUIRED_SWAPCHAIN
+            | VK_CTX_FLAG_DEFERRED_PRESENT))
    {
-      wl->vk.context.flags &= ~VK_CTX_FLAG_HAS_ACQUIRED_SWAPCHAIN;
+      wl->vk.context.flags &= ~(VK_CTX_FLAG_HAS_ACQUIRED_SWAPCHAIN
+            | VK_CTX_FLAG_DEFERRED_PRESENT);
       /* No swapchain - the window is minimised or zero-sized, and
        * the create is retried in vulkan_acquire_next_image() below,
        * which throttles that path itself. Nothing to present and
@@ -316,7 +325,7 @@ static uint32_t gfx_ctx_wl_get_flags(void *data)
 
    BIT32_SET(flags, GFX_CTX_FLAGS_FULLSCREEN_IN_PLACE);
 
-#if defined(HAVE_SLANG) && defined(HAVE_SPIRV_CROSS)
+#if defined(HAVE_SLANG) && (defined(HAVE_SPIRV_CROSS) || defined(HAVE_RSLC))
    BIT32_SET(flags, GFX_CTX_FLAGS_SHADERS_SLANG);
 #endif
 

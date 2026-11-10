@@ -10,12 +10,21 @@ LIBRETRO_COMM_DIR := ../../..
 SOURCES := \
 	video_player_test.c \
 	$(LIBRETRO_COMM_DIR)/formats/video_player.c \
+	$(LIBRETRO_COMM_DIR)/compat/compat_strl.c \
 	$(LIBRETRO_COMM_DIR)/features/features_cpu.c \
 	$(LIBRETRO_COMM_DIR)/time/rtime.c
 
 CFLAGS += -Wall -pedantic -std=gnu99 -g1 -O1 -I$(LIBRETRO_COMM_DIR)/include
 
+ifeq ($(FAULT_ALLOC),1)
+   CFLAGS += -DVP_TEST_CALLOC_FAULTS
+   LDFLAGS += -Wl,--wrap=calloc
+endif
+
 ifneq ($(THREADS),0)
+   ifeq ($(FAULT_ALLOC),1)
+      LDFLAGS += -Wl,--wrap=sthread_create
+   endif
    CFLAGS  += -DHAVE_THREADS
    SOURCES += $(LIBRETRO_COMM_DIR)/rthreads/rthreads.c \
               $(LIBRETRO_COMM_DIR)/rthreads/retro_eventcount.c \

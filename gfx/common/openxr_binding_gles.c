@@ -41,8 +41,8 @@ bool openxr_binding_gles_requirements(const openxr_runtime_t *rt)
       RARCH_ERR("[OpenXR] The runtime lacks functions headset output needs.\n");
       return false;
    }
-   memset(&reqs, 0, sizeof(reqs));
    reqs.type = XR_TYPE_GRAPHICS_REQUIREMENTS_OPENGL_ES_KHR;
+   reqs.next = NULL;
    if (XR_FAILED(res = get_reqs(rt->instance, rt->system, &reqs)))
    {
       RARCH_ERR("[OpenXR] xrGetOpenGLESGraphicsRequirementsKHR failed (%d).\n",
@@ -57,11 +57,16 @@ bool openxr_binding_gles_requirements(const openxr_runtime_t *rt)
    return true;
 }
 
-int64_t openxr_binding_gles_format(const openxr_swapchains_t *sc)
+int64_t openxr_binding_gles_format(const openxr_swapchains_t *sc,
+      bool srgb_write_control)
 {
+   /* gl2's values are already sRGB-encoded. */
+   if (     srgb_write_control
+         && openxr_swapchains_supports(sc, OPENXR_GLES_SRGB8_ALPHA8))
+      return OPENXR_GLES_SRGB8_ALPHA8;
    if (openxr_swapchains_supports(sc, OPENXR_GLES_RGBA8))
       return OPENXR_GLES_RGBA8;
-   /* GLES has no GL_FRAMEBUFFER_SRGB: the values are encoded twice. */
+   /* Without the extension the copy encodes the values a second time. */
    if (openxr_swapchains_supports(sc, OPENXR_GLES_SRGB8_ALPHA8))
    {
       RARCH_WARN("[OpenXR] Only an sRGB swapchain format is offered; the output may look washed out.\n");
@@ -78,9 +83,11 @@ XrResult openxr_binding_gles_images(void *user, XrSwapchain swapchain,
    XrResult res;
    XrSwapchainImageOpenGLESKHR imgs[OPENXR_MAX_IMAGES];
    openxr_gles_images_t *li = (openxr_gles_images_t*)user;
-   memset(imgs, 0, sizeof(imgs));
    for (i = 0; i < OPENXR_MAX_IMAGES; i++)
+   {
       imgs[i].type = XR_TYPE_SWAPCHAIN_IMAGE_OPENGL_ES_KHR;
+      imgs[i].next = NULL;
+   }
    res = li->sc->EnumerateSwapchainImages(swapchain, *count, count,
          (XrSwapchainImageBaseHeader*)imgs);
    for (i = 0; XR_SUCCEEDED(res) && i < *count; i++)

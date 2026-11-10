@@ -189,9 +189,13 @@ void gt_async_flush(void)
    }
 }
 unsigned video_driver_get_disp_flags(void) { return 0; }
-void video_driver_get_video_output_size(unsigned *dims,
-      char *n, size_t l) { *dims = VIDEO_SCALE_PACK(1920, 1080); (void)n; (void)l; }
-void video_driver_get_viewport_info(void *vp) { (void)vp; }
+/* Both answer bool in the frontend: a display of 1920x1080 and no
+ * viewport. Declared void, the caller read a stale register for the
+ * display's answer and the downscale cap came out 1920 or 0 by chance. */
+bool video_driver_get_video_output_size(unsigned *dims,
+      char *n, size_t l)
+{ *dims = VIDEO_SCALE_PACK(1920, 1080); (void)n; (void)l; return true; }
+bool video_driver_get_viewport_info(void *vp) { (void)vp; return false; }
 
 /* --- inert frontend surface --- */
 typedef struct { char pad[65536]; } gt_blob_t;
@@ -199,9 +203,18 @@ static gt_blob_t gt_blob;
 void *config_get_ptr(void)        { return &gt_blob; }
 void *disp_get_ptr(void)          { return &gt_blob; }
 void *menu_state_get_ptr(void)    { return &gt_blob; }
+int menu_driver_media_startup_token(void) { return 0; }
 void *runloop_state_get_ptr(void) { return &gt_blob; }
 void *video_state_get_ptr(void)   { return &gt_blob; }
+/* Lane 15 sets these: a content switch and a loaded content */
+int  gt_content_switching;
+int  gt_content_loaded;
+bool runloop_is_content_switching(void) { return gt_content_switching != 0; }
+bool runloop_content_loaded(void)       { return gt_content_loaded    != 0; }
 void dir_set(int t, const char *p) { (void)t; (void)p; }
+/* The configured savestate folder the state preview starts from */
+static char gt_dir_savestate[1];
+char *dir_get_ptr(int t) { (void)t; return gt_dir_savestate; }
 void runloop_path_set_redirect(void *a, const char *b, const char *c)
 { (void)a; (void)b; (void)c; }
 const char *msg_hash_to_str(unsigned id) { (void)id; return ""; }
@@ -346,8 +359,10 @@ static void gt_lend_unload(uintptr_t id)
       }
 }
 
-void *video_driver_texture_lend(uintptr_t id, unsigned slot, size_t pitch)
+void *video_driver_texture_lend(uintptr_t id, unsigned slot, size_t pitch, size_t *out_pitch)
 {
+   if (out_pitch)
+      *out_pitch = pitch;
    if (!gt_lend_mode || slot >= GT_LEND_SLOTS || !pitch)
       return NULL;
    if ((int)slot == gt_lend_refuse)
@@ -449,4 +464,13 @@ void gt_lend_reset(void)
       free(gt_grave_buf[k]);
       gt_grave_buf[k] = NULL;
    }
+}
+
+bool video_driver_texture_lend_needs_refresh(void) { return false; }
+bool video_thread_lend_get(int idx, void **mem, size_t *pitch)
+{
+   (void)idx;
+   (void)mem;
+   (void)pitch;
+   return false;
 }

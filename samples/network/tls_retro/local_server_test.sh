@@ -12,6 +12,17 @@ make -s tls_fetch
 # MinGW build of the tools
 RUN=${RUNNER:-}
 EXE=${EXE:-}
+# Until a server listens on port $1, five seconds at most. It is asked of
+# the socket table, not by connecting: a server that counts its
+# connections would count a probe. Without ss, the old fixed wait.
+listening() {
+   command -v ss >/dev/null 2>&1 || { sleep 0.4; return 0; }
+   n=0
+   until ss -ltnH "sport = :$1" 2>/dev/null | grep -q .; do
+      n=$((n + 1)); [ $n -ge 250 ] && return 0
+      sleep 0.02
+   done
+}
 openssl req -x509 -newkey rsa:2048 -nodes -keyout $D/ca.key -out $D/ca.pem -days 2 -subj "/CN=tls_retro test CA" 2>/dev/null
 mkcert() { # name keyalg [pkeyopt]
    openssl req -newkey "$2" $3 -nodes -keyout $D/$1.key -out $D/$1.csr -subj "/CN=$1" 2>/dev/null
@@ -68,7 +79,7 @@ mkleaf viap384 ip384
 run() { # label cert cipher curve expect_rc host mode ca [rounds] [server opts]
    CHAIN=""; [ -f $D/$2.chain.pem ] && CHAIN="-cert_chain $D/$2.chain.pem"
    openssl s_server -accept 44331 -cert $D/$2.pem $CHAIN -key $D/$2.key -tls1_2 -cipher "$3" -named_curve $4 -www ${10:-} >/dev/null 2>&1 &
-   SRV=$!; sleep 0.4
+   SRV=$!; listening 44331
    set +e; $RUN ./tls_fetch$EXE $6 44331 $7 "$8" ${9:-1} >/dev/null 2>&1; rc=$?; set -e
    kill $SRV 2>/dev/null; wait $SRV 2>/dev/null || true
    if [ $rc -eq $5 ]; then echo "ok:   $1"; else echo "FAIL: $1 (rc=$rc, want $5)"; exit 1; fi
@@ -107,7 +118,7 @@ run "chain: server omitting the intermediate is refused" nointer ECDHE-RSA-AES12
 run13() { # label cert ciphersuite expect_rc host mode ca [rounds] [server opts]
    CHAIN=""; [ -f $D/$2.chain.pem ] && CHAIN="-cert_chain $D/$2.chain.pem"
    openssl s_server -accept 44331 -cert $D/$2.pem $CHAIN -key $D/$2.key -tls1_3 -ciphersuites "$3" -www ${9:-} >/dev/null 2>&1 &
-   SRV=$!; sleep 0.4
+   SRV=$!; listening 44331
    set +e; $RUN ./tls_fetch$EXE $5 44331 $6 "$7" ${8:-1} >/dev/null 2>&1; rc=$?; set -e
    kill $SRV 2>/dev/null; wait $SRV 2>/dev/null || true
    if [ $rc -eq $4 ]; then echo "ok:   $1"; else echo "FAIL: $1 (rc=$rc, want $4)"; exit 1; fi
@@ -156,7 +167,7 @@ fi
 make -s tls_threads
 for key in rsa p256; do
    openssl s_server -accept 44331 -cert $D/$key.pem -key $D/$key.key -www >/dev/null 2>&1 &
-   SRV=$!; sleep 0.4
+   SRV=$!; listening 44331
    set +e; $RUN ./tls_threads$EXE localhost 44331 $D/ca.pem > $D/thr.out 2>&1; rc=$?; set -e
    kill $SRV 2>/dev/null; wait $SRV 2>/dev/null || true
    if [ $rc -eq 0 ]; then echo "ok:   concurrent first-use verification from six threads ($key)"; else echo "FAIL: threads ($key): $(cat $D/thr.out)"; exit 1; fi
@@ -166,7 +177,7 @@ done
 make -s tls_fetch_noaes
 noaes() { # label version-option expected-suite
    openssl s_server -accept 44331 -cert $D/rsa.pem -key $D/rsa.key $2 -www >/dev/null 2>&1 &
-   SRV=$!; sleep 0.4
+   SRV=$!; listening 44331
    set +e; TLS_FETCH_SUITE=1 $RUN ./tls_fetch_noaes$EXE localhost 44331 0 $D/ca.pem > $D/noaes.out 2>&1; rc=$?; set -e
    kill $SRV 2>/dev/null; wait $SRV 2>/dev/null || true
    if [ $rc -eq 0 ] && grep -q "^suite $3" $D/noaes.out; then echo "ok:   $1"
@@ -183,7 +194,7 @@ head -c 3158073 /dev/urandom > $D/www/body.bin
 SUM=$(openssl dgst -sha256 -r $D/www/body.bin | cut -d' ' -f1)
 http() { # label version cipher-option cipher
    (cd $D/www && exec openssl s_server -accept 44331 -cert $D/rsa.pem -key $D/rsa.key $2 $3 "$4" -WWW) >/dev/null 2>&1 &
-   SRV=$!; sleep 0.4
+   SRV=$!; listening 44331
    set +e; $RUN ./tls_http$EXE 44331 body.bin $SUM $D/ca.pem > $D/http.out 2>&1; rc=$?; set -e
    kill $SRV 2>/dev/null; wait $SRV 2>/dev/null || true
    if [ $rc -eq 0 ]; then echo "ok:   $1"; else echo "FAIL: $1: $(cat $D/http.out)"; exit 1; fi
@@ -192,6 +203,141 @@ http "net_http over TLS 1.2, AES-128-GCM"        -tls1_2 -cipher       ECDHE-RSA
 http "net_http over TLS 1.2, ChaCha20-Poly1305"  -tls1_2 -cipher       ECDHE-RSA-CHACHA20-POLY1305
 http "net_http over TLS 1.3, AES-128-GCM"        -tls1_3 -ciphersuites TLS_AES_128_GCM_SHA256
 http "net_http over TLS 1.3, ChaCha20-Poly1305"  -tls1_3 -ciphersuites TLS_CHACHA20_POLY1305_SHA256
+# One connection's own settings (ssl_socket_retro_configure): its own
+# trust anchor in place of the bundle, a client certificate when the
+# server asks for one, and the RSA key exchange and CBC suites, which a
+# client offers only when told to. Each GET checks the body's hash, so
+# the CBC records' MAC and padding are checked in both directions.
+make -s tls_config
+openssl x509 -in $D/ca.pem -outform DER -out $D/ca.der
+openssl x509 -in $D/p256.pem -outform DER -out $D/other.der
+openssl req -x509 -newkey rsa:2048 -nodes -keyout $D/cca.key -out $D/cca.pem -days 2 -subj "/CN=client CA" 2>/dev/null
+openssl req -newkey rsa:2048 -nodes -keyout $D/cli.key -out $D/cli.csr -subj "/CN=client" 2>/dev/null
+openssl x509 -req -in $D/cli.csr -CA $D/cca.pem -CAkey $D/cca.key -CAcreateserial -out $D/cli.pem -days 2 2>/dev/null
+openssl x509 -in $D/cli.pem -outform DER -out $D/cli.der
+openssl rsa -in $D/cli.key -traditional -outform DER -out $D/cli.key.der 2>/dev/null
+openssl pkcs8 -topk8 -nocrypt -in $D/cli.key -outform DER -out $D/cli.p8.der
+mkdir -p $D/cfgwww
+head -c 1000003 /dev/urandom > $D/cfgwww/b.bin
+CSUM=$(openssl dgst -sha256 -r $D/cfgwww/b.bin | cut -d' ' -f1)
+cfg() { # label expect_rc want_output server-options -- client-options
+   L=$1; W=$2; O=$3; shift 3
+   SOPT=""; while [ "$1" != "--" ]; do SOPT="$SOPT $1"; shift; done; shift
+   (cd $D/cfgwww && exec openssl s_server -accept 44331 -cert $D/rsa.pem -key $D/rsa.key $SOPT -WWW) >/dev/null 2>&1 &
+   SRV=$!; listening 44331
+   set +e; $RUN ./tls_config$EXE "$@" > $D/cfg.out 2>&1; rc=$?; set -e
+   kill $SRV 2>/dev/null; wait $SRV 2>/dev/null || true
+   if [ $rc -eq $W ] && grep -q "$O" $D/cfg.out; then echo "ok:   $L"
+   else echo "FAIL: $L (rc=$rc, want $W): $(cat $D/cfg.out)"; exit 1; fi
+}
+G="-g b.bin $CSUM"
+cfg "own trust anchor in place of the bundle"         0 "TLS 1.3" -- localhost 44331 -t $D/ca.der $G
+cfg "own trust anchor that signed nothing: refused"   1 "FAILED" -- localhost 44331 -t $D/other.der $G
+cfg "no hostname check: an address passes"            0 "TLS 1.3" -- 127.0.0.1 44331 -t $D/ca.der -H $G
+cfg "hostname still checked otherwise"                1 "FAILED" -- 127.0.0.1 44331 -t $D/ca.der $G
+cfg "no verification"                                 0 "TLS 1.3" -- localhost 44331 -n $G
+cfg "a suite list without a known suite: refused"     1 "refused" -- localhost 44331 -t $D/ca.der -s 0005
+for s in AES128-SHA:002f AES256-SHA:0035 AES128-SHA256:003c AES256-SHA256:003d \
+      AES128-GCM-SHA256:009c AES256-GCM-SHA384:009d ECDHE-RSA-AES128-SHA:c013 \
+      ECDHE-RSA-AES256-SHA:c014 ECDHE-RSA-AES128-SHA256:c027 ECDHE-RSA-AES256-SHA384:c028; do
+   cfg "TLS 1.2 ${s%%:*}, offered by the client" 0 "suite ${s##*:}" -tls1_2 -cipher ${s%%:*} -- \
+      localhost 44331 -t $D/ca.der -s ${s##*:} $G
+done
+cfg "client certificate the server requires"          0 "TLS 1.2 suite c02f" -Verify 1 -CAfile $D/cca.pem -- \
+   localhost 44331 -t $D/ca.der -c $D/cli.der -k $D/cli.key.der $G
+cfg "client certificate, PKCS#8 key"                  0 "TLS 1.2" -Verify 1 -CAfile $D/cca.pem -- \
+   localhost 44331 -t $D/ca.der -c $D/cli.der -k $D/cli.p8.der $G
+cfg "no client certificate where one is required"     1 "failed" -Verify 1 -CAfile $D/cca.pem -- \
+   localhost 44331 -t $D/ca.der $G
+cfg "client certificate requested, none to give"      0 "TLS 1.2" -tls1_2 -verify 1 -CAfile $D/cca.pem -- \
+   localhost 44331 -t $D/ca.der $G
+cfg "client certificate signed with SHA-384"          0 "TLS 1.2" -Verify 1 -CAfile $D/cca.pem -client_sigalgs RSA+SHA384 -- \
+   localhost 44331 -t $D/ca.der -c $D/cli.der -k $D/cli.key.der $G
+cfg "client certificate signed with SHA-1"            0 "TLS 1.2" -Verify 1 -CAfile $D/cca.pem -client_sigalgs RSA+SHA1 -cipher DEFAULT:@SECLEVEL=0 -- \
+   localhost 44331 -t $D/ca.der -c $D/cli.der -k $D/cli.key.der $G
+cfg "client certificate over RSA key exchange and AES-256-CBC-SHA" 0 "suite 0035" \
+   -tls1_2 -cipher AES256-SHA -Verify 1 -CAfile $D/cca.pem -- \
+   localhost 44331 -t $D/ca.der -c $D/cli.der -k $D/cli.key.der -s 0035 $G
+# net_http with one connection's own settings (net_http_connection_set_tls):
+# the 3 MiB body over a client certificate and AES-256-CBC. Such a
+# connection is its own, never taken from or handed to the pool: a
+# keep-alive server below logs each connection, and a GET with another
+# trust anchor or none must fail or pass on its own settings, whatever
+# the transfer before it left open.
+openssl req -newkey rsa:2048 -nodes -keyout $D/untr.key -out $D/untr.csr -subj "/CN=localhost" 2>/dev/null
+printf 'subjectAltName=DNS:localhost\nbasicConstraints=CA:FALSE\n' > $D/untr.ext
+openssl x509 -req -in $D/untr.csr -CA $D/cca.pem -CAkey $D/cca.key -CAcreateserial -out $D/untr.pem -days 2 -extfile $D/untr.ext 2>/dev/null
+openssl x509 -in $D/cca.pem -outform DER -out $D/cca.der
+(cd $D/www && exec openssl s_server -accept 44331 -cert $D/rsa.pem -key $D/rsa.key -tls1_2 -cipher AES256-SHA -Verify 1 -CAfile $D/cca.pem -WWW) >/dev/null 2>&1 &
+SRV=$!; listening 44331
+set +e; $RUN ./tls_http$EXE 44331 body.bin $SUM $D/ca.pem -t $D/ca.der -c $D/cli.der -k $D/cli.key.der -s 0035 -g > $D/http.out 2>&1; rc=$?; set -e
+kill $SRV 2>/dev/null; wait $SRV 2>/dev/null || true
+if [ $rc -eq 0 ]; then echo "ok:   net_http with its own settings: client certificate, AES-256-CBC"
+else echo "FAIL: net_http with its own settings (rc=$rc): $(cat $D/http.out)"; exit 1; fi
+cat > $D/ka.py << 'PYEOF'
+import http.server, os, ssl, sys
+port, cert, key, root, log = sys.argv[1:6]
+log = os.path.abspath(log)
+class H(http.server.SimpleHTTPRequestHandler):
+    protocol_version = "HTTP/1.1"
+    def log_message(self, *a): pass
+class S(http.server.ThreadingHTTPServer):
+    allow_reuse_address = True
+    def handle_error(self, *a): pass   # a refused handshake
+    def get_request(self):
+        s, a = super().get_request()
+        with open(log, "a") as f: f.write("conn\n")
+        return s, a
+ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+ctx.load_cert_chain(cert, key)
+os.chdir(root)
+srv = S(("127.0.0.1", int(port)), H)
+srv.socket = ctx.wrap_socket(srv.socket, server_side=True, do_handshake_on_connect=False)
+srv.serve_forever()
+PYEOF
+pool() { # label leaf want-rc want-output want-connections -- steps
+   L=$1; LEAF=$2; W=$3; O=$4; C=$5; shift 6
+   rm -f $D/ka.log
+   python3 $D/ka.py 44331 $D/$LEAF.pem $D/$LEAF.key $D/www $D/ka.log & SRV=$!; listening 44331
+   set +e; $RUN ./tls_http$EXE 44331 body.bin $SUM $D/ca.pem "$@" > $D/http.out 2>&1; rc=$?; set -e
+   kill $SRV 2>/dev/null; wait $SRV 2>/dev/null || true
+   N=$(wc -l < $D/ka.log 2>/dev/null || echo 0)
+   if [ $rc -eq $W ] && grep -q "$O" $D/http.out && [ $N -eq $C ]; then echo "ok:   $L"
+   else echo "FAIL: $L (rc=$rc, want $W; $N connections, want $C): $(cat $D/http.out)"; exit 1; fi
+}
+pool "net_http keeps one connection for two GETs"         rsa   0 "get 2 ok"     1 -- -u -u
+pool "a pooled connection is not lent to other settings"   rsa   1 "get 2 failed" 2 -- -u -t $D/other.der -g
+pool "nor one with its own settings to a later GET"        untr  1 "get 2 failed" 2 -- -t $D/cca.der -g -u
+pool "settings of its own, a connection each time"         rsa   0 "get 2 ok"     2 -- -t $D/ca.der -g -g
+# A CBC record changed in flight fails its MAC: the transfer stops there
+# with a record error rather than handing over the altered bytes.
+cat > $D/flip.py << 'PYEOF'
+import socket, sys, threading
+lst = socket.socket(); lst.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+lst.bind(("127.0.0.1", 44332)); lst.listen(1)
+c, _ = lst.accept(); s = socket.create_connection(("127.0.0.1", 44331))
+def up():
+    while True:
+        b = c.recv(65536)
+        if not b: break
+        s.sendall(b)
+threading.Thread(target=up, daemon=True).start()
+seen = 0
+while True:
+    b = bytearray(s.recv(65536))
+    if not b: break
+    if seen <= 300000 < seen + len(b): b[300000 - seen] ^= 1
+    seen += len(b); c.sendall(bytes(b))
+c.close()
+PYEOF
+for s in AES256-SHA:0035 AES128-SHA256:003c ECDHE-RSA-AES256-SHA384:c028; do
+   (cd $D/cfgwww && exec openssl s_server -accept 44331 -cert $D/rsa.pem -key $D/rsa.key -tls1_2 -cipher ${s%%:*} -WWW) >/dev/null 2>&1 &
+   SRV=$!; python3 $D/flip.py & PRX=$!; listening 44331; listening 44332
+   set +e; $RUN ./tls_config$EXE localhost 44332 -t $D/ca.der -s ${s##*:} $G > $D/cfg.out 2>&1; rc=$?; set -e
+   kill $SRV $PRX 2>/dev/null || true; wait $SRV $PRX 2>/dev/null || true
+   if [ $rc -eq 1 ] && grep -q "receive error -4" $D/cfg.out; then echo "ok:   ${s%%:*}: a record changed in flight is refused"
+   else echo "FAIL: ${s%%:*}: changed record (rc=$rc): $(cat $D/cfg.out)"; exit 1; fi
+done
 # A server that goes silent mid-handshake: the read bound ends it.
 make -s tls_stall
 $RUN ./tls_stall$EXE

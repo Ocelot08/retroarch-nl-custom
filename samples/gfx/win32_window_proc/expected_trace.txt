@@ -2697,10 +2697,19 @@
  same window 20, right style 20, right size 20, resize seen 20
  a window grown to fit a bigger core: grew yes, driver told its real size yes
  exclusive fullscreen left to a restart: yes
+ exclusive fullscreen in place at the monitor's size: toggled yes, window kept yes, monitor-sized yes, back windowed yes
  destroyed: window gone
 == a window left up and not taken
  kept yes, next made yes, kept gone yes
  focus messages from the window going down reached the input driver: no
+== a minimised window left up and taken
+ kept minimised yes, taken yes, mode set yes, still minimised no, surface has a size yes
+== a window kept across a change of presentation
+ dxgi window kept yes, native driver made its own yes, dxgi window gone yes
+ native window kept yes, next native driver took it yes
+== a kept window destroyed for a driver presenting the other way
+ kept yes, destroyed in the next driver's window creation yes, next made yes
+ messages to the window going down reached the frontend: no
 == a replaced window loses the focus late
  second window made yes
  its loss reached the input driver: no

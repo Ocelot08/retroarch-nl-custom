@@ -32,6 +32,7 @@
 #include "../../configuration.h"
 #include "../../file_path_special.h"
 #include "../../tasks/task_content.h"
+#include "../../tasks/tasks_internal.h"
 #include "../../core.h"
 #include "../../core_info.h"
 #include "../../core_option_manager.h"
@@ -103,9 +104,12 @@ static int action_start_override_file_info(
       const char *path, const char *label,
       unsigned type, size_t idx, size_t entry_idx)
 {
+   uint8_t before[MAX_USERS];
    struct menu_state *menu_st      = menu_state_get_ptr();
    rarch_system_info_t *sys_info   = &runloop_state_get_ptr()->system;
+   input_config_plays_as_players(before);
    config_load_override(sys_info);
+   input_autoconfigure_plays_as_reread(before);
 
    /* Refresh menu */
    menu_st->flags                 |=  MENU_ST_FLAG_ENTRIES_NEED_REFRESH
@@ -190,6 +194,30 @@ static int action_start_audio_dsp_plugin_file_load(
    return 0;
 }
 
+#ifdef HAVE_VULKAN_CUSTOM_DRIVER
+static int action_start_vulkan_driver_path(
+      const char *path, const char *label,
+      unsigned type, size_t idx, size_t entry_idx)
+{
+   settings_t *settings = config_get_ptr();
+
+   if (!settings)
+      return -1;
+
+   if (*settings->paths.path_vulkan_driver)
+   {
+      struct menu_state *menu_st = menu_state_get_ptr();
+      configuration_set_string(settings,
+            settings->paths.path_vulkan_driver, "");
+      /* Rebinds the sublabel too */
+      menu_st->flags            |=  MENU_ST_FLAG_ENTRIES_NEED_REFRESH
+                                 |  MENU_ST_FLAG_PREVENT_POPULATE;
+   }
+
+   return 0;
+}
+#endif
+
 static int generic_action_start_performance_counters(struct retro_perf_counter **counters,
       unsigned offset, unsigned type, const char *label)
 {
@@ -232,7 +260,7 @@ static int action_start_input_desc(
    {
       unsigned user_idx    = (type - MENU_SETTINGS_INPUT_DESC_BEGIN) / RARCH_ANALOG_BIND_LIST_END;
       unsigned btn_idx     = (type - MENU_SETTINGS_INPUT_DESC_BEGIN) - RARCH_ANALOG_BIND_LIST_END * user_idx;
-      unsigned mapped_port = settings->uints.input_remap_ports[user_idx];
+      unsigned mapped_port = input_remapping_user_port(user_idx);
 
       if (     (user_idx    >= MAX_USERS)
             || (mapped_port >= MAX_USERS)
@@ -285,7 +313,7 @@ static int action_start_shader_action_parameter_generic(
    if (!shader_info.data)
       return 0;
 
-   /* Reset to initial via the owning-thread setter; initial and the
+   /* Reset to initial via the driver-level setter; initial and the
     * range are stable outside set_shader's blocking window. */
    param          = &shader_info.data->parameters
       [parameter];
@@ -566,8 +594,11 @@ static int action_start_manual_content_scan_dir(
       const char *path, const char *label,
       unsigned type, size_t idx, size_t entry_idx)
 {
+   struct menu_state *menu_st = menu_state_get_ptr();
    /* Reset content directory */
    manual_content_scan_set_menu_content_dir("");
+   /* Content Location's list drops the stored location's entry */
+   menu_st->flags             |=  MENU_ST_FLAG_ENTRIES_NEED_REFRESH;
    return 0;
 }
 
@@ -905,6 +936,11 @@ static int menu_cbs_init_bind_start_compare_label(menu_file_list_cbs_t *cbs)
          case MENU_ENUM_LABEL_AUDIO_DSP_PLUGIN:
             BIND_ACTION_START(cbs, action_start_audio_dsp_plugin_file_load);
             break;
+#ifdef HAVE_VULKAN_CUSTOM_DRIVER
+         case MENU_ENUM_LABEL_VIDEO_VULKAN_DRIVER_PATH:
+            BIND_ACTION_START(cbs, action_start_vulkan_driver_path);
+            break;
+#endif
          case MENU_ENUM_LABEL_VIDEO_SHADER_PASS:
 #if defined(HAVE_CG) || defined(HAVE_GLSL) || defined(HAVE_SLANG) || defined(HAVE_HLSL)
             BIND_ACTION_START(cbs, action_start_shader_pass);

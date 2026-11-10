@@ -72,6 +72,10 @@ RETRO_BEGIN_DECLS
 #define FILE_PATH_MAIN_CONFIG "retroarch.cfg"
 #define FILE_PATH_SALAMANDER_CONFIG "retroarch-salamander.cfg"
 #endif
+/* Salamander config key: the core salamander last launched, until that
+ * core's frontend has started. Still set at the next boot, it names a
+ * core that never came up. */
+#define SALAMANDER_CONFIG_PENDING_KEY "libretro_path_pending"
 #define FILE_PATH_BACKGROUND_IMAGE "bg.png"
 #define FILE_PATH_TTF_FONT "font.ttf"
 #define FILE_PATH_RUNTIME_EXTENSION ".lrtl"
@@ -93,6 +97,10 @@ RETRO_BEGIN_DECLS
 #define FILE_PATH_CORE_INFO_CACHE "core_info.cache"
 #define FILE_PATH_CORE_PROBE_CACHE "core_probe.cache"
 #define FILE_PATH_CORE_INFO_CACHE_REFRESH "core_info.refresh"
+
+/* sizes of zip plus decompression space required rounded up to nearest 50MB */
+#define ASSETS_ZIP_PLUS_DECOMPRESSION_SIZE 209715200 /* 200MB */
+#define DATABASE_RDB_ZIP_PLUS_DECOMPRESSION_SIZE 262144000 /* 250MB */
 
 #ifdef HAVE_LAKKA
  #ifdef HAVE_LAKKA_SERVER

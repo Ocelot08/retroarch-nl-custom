@@ -37,6 +37,8 @@
  * would only collide with those. */
 #ifdef HAVE_THREADS
 
+#include "video_thread_movie.h"
+
 RETRO_BEGIN_DECLS
 
 enum video_thread_win_flags
@@ -52,11 +54,14 @@ enum thread_cmd
    CMD_VIDEO_NONE = 0,
    CMD_INIT,
    CMD_SET_SHADER,
+   CMD_SHADER_LOAD_BEGIN,
+   CMD_SHADER_LOAD_STEP,
    CMD_FREE,
    CMD_ALIVE, /* Blocking alive check. Used when paused. */
    CMD_SET_VIEWPORT,
    CMD_SET_ROTATION,
    CMD_READ_VIEWPORT,
+   CMD_READ_VIEWPORT_HDR,
 
    CMD_OVERLAY_ENABLE,
    CMD_OVERLAY_LOAD,
@@ -88,6 +93,7 @@ enum thread_cmd
    CMD_POKE_SET_VIEW_COUNT,
    CMD_POKE_HW_CONTEXT_DESTROYING,
    CMD_POKE_SET_FRAME_FORMAT,
+   CMD_POLL_PRESENTABLE, /* Re-asks the context, deferred: no frame needed. */
 
    CMD_DUMMY = INT_MAX
 };
@@ -103,6 +109,11 @@ typedef struct thread_packet
 {
    union
    {
+      struct
+      {
+         uint16_t *buffer;
+         struct rpng_hdr_metadata *metadata;
+      } hdr_viewport;
       const char *str;
       void *v;
       int i;
@@ -218,8 +229,18 @@ enum video_thread_async_kind
 {
    VIDEO_THREAD_ASYNC_LOAD = 0,
    VIDEO_THREAD_ASYNC_UPDATE,
-   VIDEO_THREAD_ASYNC_IMPORT
+   VIDEO_THREAD_ASYNC_IMPORT,
+   VIDEO_THREAD_ASYNC_JOB
 };
+
+/* Cold render-owner job. Payload and node survive through done/release.
+ * Results are opaque, never texture handles. Missing drivers are valid input. */
+typedef struct video_thread_async_job
+{
+   uintptr_t (*run)(void *driver_data, const video_poke_interface_t *poke,
+         void *user);
+   void *user;
+} video_thread_async_job_t;
 
 typedef struct video_thread_async_load
 {
@@ -242,6 +263,9 @@ typedef struct video_thread_async_load
    uint8_t lend;
    int8_t  lent_idx[2];
    void   *lent_mem[2];
+   size_t  lent_pitch[2];
+   uint8_t lend_padded;
+   uint8_t lend_refresh;
 } video_thread_async_load_t;
 
 /* Deep enough for the burst an overlay issues between two frames - one
@@ -388,10 +412,27 @@ enum video_thread_vp_slot
 
 /* One menu texture frame, owned by whichever side of the triple
  * buffer holds it. */
+#define VIDEO_THREAD_MENU_MEM 6
+#define VIDEO_THREAD_MENU_EMPTY 0
+#define VIDEO_THREAD_MENU_READY 1
+#define VIDEO_THREAD_MENU_CPU   2
+#define VIDEO_THREAD_MENU_GPU   3
+#define VIDEO_THREAD_MENU_BUILD 4
+
+struct video_thread_menu_mem
+{
+   void *ptr;
+   size_t size;
+   uintptr_t id;
+   unsigned pitch_align;
+   retro_atomic_int_t state;
+};
+
 struct video_thread_menu_texture
 {
    void *frame;
    size_t frame_cap;
+   unsigned mem;
    unsigned dims;
    float alpha;
    bool rgb32;
@@ -399,7 +440,6 @@ struct video_thread_menu_texture
 
 typedef struct thread_video
 {
-   retro_time_t last_time;
    /* Asynchronous texture uploads, see video_thread_async_post(). */
    struct
    {
@@ -412,15 +452,20 @@ typedef struct thread_video
    /* Upload memory the driver lent under the wrapper, one record per
     * texture slot. The video thread owns every field but busy, which
     * it sets when an update leaves the GPU reading the slot and clears
-    * once the driver says the read is done; the main thread reads busy
-    * alone, by the index the lend came back with. */
+    * once the driver says the read is done. For per-write mappings it
+    * publishes fresh memory/pitch before clearing busy; the main thread
+    * reads those only after readiness and before posting that slot. */
    struct
    {
       void *mem;
       uintptr_t id;
+      size_t pitch;
+      size_t row_pitch;
       retro_atomic_int_t busy;
       unsigned slot;
       bool used;
+      bool refresh;
+      bool padded;
    } lend[VIDEO_THREAD_LEND_MAX];
    unsigned lend_busy;      /* records busy, the video thread's count */
    bool lend_used;          /* anything was ever lent: the video thread's */
@@ -468,10 +513,9 @@ typedef struct thread_video
 
    /* Display pacing. render_time is the video thread's moving average
     * of driver->frame(), video thread only and carried to the hold in
-    * the stats snapshot; core_time is the main thread's moving average
-    * of the time between one frame handoff's return and the next
-    * handoff's arrival, and run_start is when the last handoff
-    * returned. Both main-thread only. */
+    * the stats snapshot. Its main-thread counterparts, core_time and
+    * run_start (when the last handoff returned), are with the main
+    * thread's fields below pad_main. */
    retro_time_t render_time;
    retro_time_t present_wait; /* the wait in the driver's present, averaged as render_time is */
    retro_time_t fence_wait;   /* the frame fence waited out before it, averaged the same */
@@ -479,12 +523,19 @@ typedef struct thread_video
    retro_time_t slack_min;       /* the least a frame had to spare in the window */
    retro_time_t slack_window_at;  /* when the window began */
    unsigned miss_run;            /* frames in a row that missed their vblank */
-   retro_time_t core_time;
    /* The last frame presented had queued behind another: the next
     * hold runs a period longer to drain it. Video thread only. */
    unsigned drain_cooldown;
+   /* The view count the driver has, and a smaller one it takes once
+    * views_shrink_left more frames have drawn. Video thread only. */
+   unsigned views_count;
+   unsigned views_shrink_to;
+   unsigned views_shrink_left;
    /* Video thread sets it, the hold takes it with a fetch_and */
    retro_atomic_int_t drain_pending;
+   retro_atomic_int_t movie_capable;
+   video_thread_movie_state_t movie_state;
+   video_thread_movie_t movie_next;
    /* Fast-forward, from the frame info at the push: the hold stands
     * down for it. Distinct from nonblock, which vsync-off also sets. */
    bool fast_forward;
@@ -495,6 +546,16 @@ typedef struct thread_video
     * info at the push: the hold keeps the content's period over the
     * stopped core */
    bool menu_content_rate;
+   /* What the main thread writes every frame, kept off the lines the
+    * video thread writes (see VIDEO_THREAD_LINE): the push's clock and
+    * display pacing's moving averages and schedule, then the values it
+    * publishes for the video thread, on a line of their own. */
+   unsigned char pad_main[VIDEO_THREAD_LINE];
+   retro_time_t last_time;
+   /* core_time: the main thread's moving average of the time between
+    * one frame handoff's return and the next handoff's arrival; see
+    * render_time, its video thread counterpart. */
+   retro_time_t core_time;
    /* Display pacing's schedule: when the next content frame is due,
     * accumulated in the content's own period. Main thread. The
     * period itself is published for the video thread in
@@ -505,6 +566,9 @@ typedef struct thread_video
    retro_time_t content_due;
    retro_time_t content_period;
    retro_time_t run_start;
+   /* Frames Driver Pacing released, the driver's sleep in the hold's
+    * place (video_thread_pace_hold). Main thread. */
+   uint64_t driver_released;
    /* Handoff cost, this window and the last full one. Main thread. */
    struct
    {
@@ -519,6 +583,14 @@ typedef struct thread_video
       bool counting;                       /* overlay was up last push */
       video_thread_handoff_stats_t last;
    } handoff;
+   unsigned char pad_main_pub[VIDEO_THREAD_LINE];
+   /* The main thread's inputs the video thread carries into the stats
+    * snapshot (core_time, display_pacing) and consults when it judges
+    * a queued frame (the content period), in microseconds. */
+   retro_atomic_int_t core_time_us;
+   retro_atomic_int_t display_pacing_pub;
+   retro_atomic_int_t content_period_us;
+   unsigned char pad_main_end[VIDEO_THREAD_LINE];
    bool display_pacing;
    bool present_repeat;
    /* Log the geometry clamp once per session, not per frame. */
@@ -530,12 +602,6 @@ typedef struct thread_video
    /* present_group while present_repeat, else 0: what present_last()
     * on the main thread answers with. Video thread publishes it. */
    retro_atomic_int_t repeat_group;
-   /* The main thread's inputs the video thread carries into the stats
-    * snapshot (core_time, display_pacing) and consults when it judges
-    * a queued frame (the content period), in microseconds. */
-   retro_atomic_int_t core_time_us;
-   retro_atomic_int_t display_pacing_pub;
-   retro_atomic_int_t content_period_us;
    /* What the hold adds to its margin for a driver whose present waits
     * for the vblank, in microseconds: written by the video thread, which
     * sees each frame's wait, and read by the hold. See
@@ -578,9 +644,6 @@ typedef struct thread_video
     * and taken under this lock. */
    slock_t *lock;
 #endif
-   /* Widget state lock depth user_acquire() released on the owner's
-    * behalf, retaken when the slot is released */
-   unsigned user_widgets_depth;
 #ifdef HAVE_GFX_WIDGETS
    /* Main thread: the panels' text for the next frame pushed,
     * staged by video_thread_status_text() */
@@ -638,15 +701,17 @@ typedef struct thread_video
     * at every apply. */
    int *alpha_applied;
 
-   /* The menu texture: the main thread copies each frame into the
+   /* The menu texture: the main thread fills the next frame in the
     * triple buffer's back slot and publishes it, the video thread takes
     * the newest at its next apply and hands it to the driver, which
-    * copies the pixels there and keeps no pointer. Neither waits on the
-    * other. 'enable' carries the enable and full-screen flags, written
+    * copies CPU slots or retains upload storage until GPU retirement. 'enable' carries the enable and full-screen flags, written
     * by the main thread, read at every apply. */
    struct
    {
       struct video_thread_menu_texture slot[3];
+      struct video_thread_menu_mem mem[VIDEO_THREAD_MENU_MEM];
+      size_t refused_size;
+      retro_atomic_int_t request_dims;
       retro_triple_buffer_t frames;
       retro_atomic_int_t enable;     /* VIDEO_THREAD_TEXTURE_* */
    } texture;
@@ -766,6 +831,8 @@ typedef struct thread_video
       size_t   buffer_size;
       struct video_thread_frame_slot
       {
+         video_thread_movie_t movie;
+         bool movie_control; /* immutable while queued or claimed */
          uint64_t count;
          /* When the core handed this frame over, on the main thread's
           * clock; the latency readout measures from here. */
@@ -809,8 +876,13 @@ typedef struct thread_video
 #endif
 #ifdef HAVE_VIDEO_FILTER
          /* A raw core frame for this thread to run the software filter
-          * on: its bytes per pixel, 0 for a frame ready to draw */
+          * on: its bytes per pixel, 0 for a frame ready to draw; and
+          * the filter, output buffer and output bytes per pixel it was
+          * staged with, which stay until a later frame retires them */
          unsigned filter_bpp;
+         unsigned filter_out_bpp;
+         void    *filter;
+         void    *filter_buf;
 #endif
          /* A frame still in the core's source pixel format, for this
           * thread to convert before the filter and the driver */
@@ -831,6 +903,11 @@ typedef struct thread_video
           * video_info.stat_text points here. Only copied when there is
           * text, so a frame without the overlay carries none. */
          char stat_text[VIDEO_STAT_TEXT_SIZE];
+#ifdef HAVE_VIDEO_WINDOWS
+         /* The screens' windows this frame was handed, for the same
+          * reason: video_info.windows points here when it has them. */
+         video_windows_frame_t windows;
+#endif
       } slot[2];
       /* Zero-copy: the slot handed to the core through
        * get_current_software_framebuffer, VIDEO_THREAD_LEND_SPARE for
@@ -852,6 +929,11 @@ typedef struct thread_video
        * Opaque here so this header needs no API types; see
        * video_thread_hw.c. */
       void *hw_ring;
+      /* 1 while hw_ring hands one GL context between the threads: the
+       * video thread reads this, not hw_ring, at every pass - the ring
+       * is set up on the main thread, and this is stored after it with
+       * release, so a thread that sees 1 sees the ring. */
+      retro_atomic_int_t hw_handoff;
       uint64_t zero_copy_count;
    } frame;
 
@@ -981,6 +1063,11 @@ void video_thread_set_raise_priority(bool raise);
  */
 bool video_thread_host_hold(void (*on_exit)(void));
 
+#ifdef _WIN32
+/* Set on the host thread; released there after the kept window. */
+bool video_thread_host_set_cleanup(void (*cleanup)(void));
+#endif
+
 /* True while the thread is held and waiting for its next driver. */
 bool video_thread_host_is_held(void);
 
@@ -1009,6 +1096,12 @@ bool video_thread_font_init(
 uintptr_t video_thread_run_blocking(custom_command_method_t func,
       void *data);
 
+/* Main thread: func(data) queued to run on the video thread before its
+ * next frame, its answer dropped; nothing waits. False when it could
+ * not be queued (no wrapper, the queue full, or called on the video
+ * thread), for the caller to run it another way. */
+bool video_thread_run_queued(custom_command_method_t func, void *data);
+
 uintptr_t video_thread_texture_handle(void *data,
       custom_command_method_t func);
 
@@ -1029,6 +1122,10 @@ bool video_thread_async_post(video_thread_async_load_t *n);
  * it. Never waits. Main thread. */
 bool video_thread_lend_ready(int idx);
 
+/* After readiness, while the surface owns the slot until its next post.
+ * NULL memory revokes a loan whose mapping no longer fits. */
+bool video_thread_lend_get(int idx, void **mem, size_t *pitch);
+
 /* Whether the wrapped driver updates textures in place; false while
  * no wrapper is up. video_driver_texture_can_update() asks this so a
  * wrapper forwarder is never mistaken for a capability. */
@@ -1042,6 +1139,8 @@ bool video_thread_is_video_thread(void);
  * Main thread; video_thread_frame() calls it, callers that upload
  * while no frames are being pushed can call it themselves. */
 void video_thread_async_poll(void);
+
+bool video_thread_movie_supported(void);
 
 /* Barrier: wait until the video thread is idle (no pending frame).
  * Must be called from the main thread before freeing GPU resources
@@ -1102,6 +1201,10 @@ bool video_thread_get_handoff_stats(video_thread_handoff_stats_t *out);
  * main thread first. */
 void video_thread_main_pump(void);
 
+void video_thread_core_context_take(void);
+
+void video_thread_core_context_release(void);
+
 /* From the video thread, while it is answering a synchronous command:
  * runs fn on the thread waiting for the reply and returns when it has
  * run. That thread is the core's, which is where a driver must go to
@@ -1110,6 +1213,12 @@ void video_thread_main_pump(void);
 void video_thread_call_on_waiter(void (*fn)(void *data), void *data);
 
 void video_thread_wait_idle(void);
+
+/* Main thread: tightly packed menu pixels for set_texture_frame with
+ * the same dimensions/format. Valid until another loan request, menu
+ * publication or reinit. NULL when unavailable. */
+void *video_thread_get_menu_framebuffer(unsigned dims, bool rgb32,
+      size_t *pitch);
 
 /* The wrapper's invalidate_hw_render_cache, and what a hardware core's
  * set_image(NULL) means under the ring. Main thread. On return no
@@ -1120,18 +1229,25 @@ void video_thread_wait_idle(void);
 void video_thread_invalidate_hw_render_cache(void *data);
 
 /* GPU recording under the wrapper, main thread. The video thread reads
- * back each frame it draws through a dedicated recording reader; this
+ * back each frame it draws through the driver's poke record_read; this
  * takes the newest since the last call without waiting for one.
- * Returns 1 with *frame set (width * height BGR24 rows, bottom up, as
- * read_viewport() leaves them), 0 when nothing new has arrived since a
- * frame was last taken, -1 when there is nothing to record yet, and -2
- * when the driver has no recording reader, for the caller to use
- * read_viewport(). Starts the readbacks on first use and again at a new
- * output size. Viewport changes are scaled and letterboxed by the worker. */
-int video_thread_record_take(void *data, unsigned dims,
-      const uint8_t **frame);
+ * Returns 1 with *frame set (width * height rows, B,G,R,X with @bgrx,
+ * else BGR24) and *bottom_up to their order, 0 when nothing new has
+ * arrived since a frame was last taken, -1 when there is nothing to
+ * record yet, and -2 when the driver has no recording reader, for the
+ * caller to use read_viewport(). Starts the readbacks on first use and
+ * again at a new output size or format. Viewport changes are scaled and
+ * letterboxed by the worker. */
+int video_thread_record_take(void *data, unsigned dims, bool bgrx,
+      const uint8_t **frame, bool *bottom_up);
+/* Whether video_thread_record_take() reads back on the video thread,
+ * in either format, rather than returning -2. Main thread. */
+bool video_thread_record_has_reader(void *data);
 /* Stops the readbacks; the buffers go once no frame names them. */
 void video_thread_record_stop(void *data);
+/* Main controller, after detaching from future frames. One ring snapshot;
+ * true while a queued or drawing frame still names this GPU recorder. */
+bool video_thread_record_gpu_in_flight(void *data, const void *recorder);
 
 #ifdef HAVE_GFX_WIDGETS
 /* Main thread: stages the on-screen panels' text to travel with the
@@ -1144,6 +1260,10 @@ void video_thread_status_text(const char *s);
  * format of in_bpp bytes per pixel; the worker runs the software
  * filter on it before drawing. */
 void video_thread_defer_filter(unsigned in_bpp);
+/* Main thread: a filter and its output buffer replaced while frames
+ * staged with them may still be drawn, for the video thread to free
+ * once they have been. False with no wrapper running. */
+bool video_thread_retire_filter(void *filter, void *buffer);
 #endif
 
 /* Source pixel formats the video thread converts on the frame's way to

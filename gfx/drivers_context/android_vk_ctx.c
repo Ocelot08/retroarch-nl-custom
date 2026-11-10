@@ -27,6 +27,10 @@
 #endif
 
 #include "../common/vulkan_common.h"
+#include "../common/android_windows.h"
+#ifdef HAVE_VULKAN_CUSTOM_DRIVER
+#include "../common/vulkan_custom_driver.h"
+#endif
 
 #include "../../frontend/frontend_driver.h"
 #include "../../frontend/drivers/platform_unix.h"
@@ -54,6 +58,7 @@ static void android_gfx_ctx_vk_destroy(void *data)
    if (!and)
       return;
 
+   android_windows_free(and, android_windows_destroy);
    vulkan_context_destroy(&and->vk, android_app_window(android_app));
 
    if (and->vk.context.queue_lock)
@@ -147,6 +152,40 @@ static bool android_gfx_ctx_vk_set_resize(void *data, unsigned dims)
    return true;
 }
 
+/* Makes the surface, and the device on the context's first call. A custom
+ * driver that fails there gets the context made again on the system
+ * driver. */
+static bool android_gfx_ctx_vk_first_surface(android_ctx_data_vk_t *and,
+      ANativeWindow *window)
+{
+#ifdef HAVE_VULKAN_CUSTOM_DRIVER
+   /* A later set_video_mode has the renderer's objects on the device. */
+   bool first = (and->vk.context.device == VK_NULL_HANDLE);
+#endif
+   if (vulkan_surface_create(&and->vk, VULKAN_WSI_ANDROID,
+            NULL, window, and->dims, and->swap_interval))
+   {
+#ifdef HAVE_VULKAN_CUSTOM_DRIVER
+      vulkan_custom_driver_started();
+#endif
+      return true;
+   }
+#ifdef HAVE_VULKAN_CUSTOM_DRIVER
+   if (first && vulkan_custom_driver_current())
+   {
+      /* This init made it, before the core's context_reset: drop it. */
+      and->vk.flags |= VK_DATA_FLAG_DROP_CONTEXT;
+      vulkan_context_destroy(&and->vk, true);
+      vulkan_custom_driver_failed();
+      memset(&and->vk, 0, sizeof(and->vk));
+      return     vulkan_context_init(&and->vk, VULKAN_WSI_ANDROID)
+            &&   vulkan_surface_create(&and->vk, VULKAN_WSI_ANDROID,
+                  NULL, window, and->dims, and->swap_interval);
+   }
+#endif
+   return false;
+}
+
 static bool android_gfx_ctx_vk_set_video_mode(void *data,
       unsigned dims,
       bool fullscreen)
@@ -156,9 +195,8 @@ static bool android_gfx_ctx_vk_set_video_mode(void *data,
    int32_t w                       = ANativeWindow_getWidth(android_app_window(android_app));
    int32_t h                       = ANativeWindow_getHeight(android_app_window(android_app));
    and->dims                       = VIDEO_SCALE_PACK(w, h);
-   if (!vulkan_surface_create(&and->vk, VULKAN_WSI_ANDROID,
-            NULL, android_app_window(android_app),
-            and->dims, and->swap_interval))
+   if (!android_gfx_ctx_vk_first_surface(and,
+            android_app_window(android_app)))
    {
       RARCH_ERR("[Vulkan] Failed to create surface.\n");
       return false;
@@ -296,7 +334,7 @@ static uint32_t android_gfx_ctx_vk_get_flags(void *data)
 {
    uint32_t flags = 0;
 
-#if defined(HAVE_SLANG) && defined(HAVE_SPIRV_CROSS)
+#if defined(HAVE_SLANG) && (defined(HAVE_SPIRV_CROSS) || defined(HAVE_RSLC))
    BIT32_SET(flags, GFX_CTX_FLAGS_SHADERS_SLANG);
 #endif
 
@@ -304,6 +342,19 @@ static uint32_t android_gfx_ctx_vk_get_flags(void *data)
 }
 
 static void android_gfx_ctx_vk_set_flags(void *data, uint32_t flags) { }
+
+/* The renderer makes the second display's VkSurfaceKHR from the
+ * window's ANativeWindow itself */
+static const gfx_ctx_window_driver_t android_gfx_ctx_vk_windows = {
+   android_windows_create,
+   android_windows_update,
+   android_windows_poll,
+   NULL, /* bind_gl */
+   NULL, /* present_gl */
+   android_windows_destroy,
+   android_windows_keep,
+   android_windows_take
+};
 
 const gfx_ctx_driver_t gfx_ctx_vk_android = {
    android_gfx_ctx_vk_init,
@@ -339,5 +390,11 @@ const gfx_ctx_driver_t gfx_ctx_vk_android = {
    NULL,                                     /* make_current */
    android_gfx_ctx_vk_create_surface,
    android_gfx_ctx_vk_destroy_surface,
-   android_gfx_ctx_vk_presentable
+   android_gfx_ctx_vk_presentable,
+   NULL, /* last_present_time */
+   NULL, /* release_current */
+   NULL, /* shared_context_new */
+   NULL, /* shared_context_bind */
+   NULL, /* shared_context_free */
+   &android_gfx_ctx_vk_windows
 };

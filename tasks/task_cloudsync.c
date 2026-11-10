@@ -72,10 +72,7 @@ enum task_cloud_sync_phase
 typedef struct
 {
    MD5_CTX        md5;
-   int64_t        map_len;
-   int64_t        pos;
    RFILE         *file;  /* NULL when idle */
-   const uint8_t *map;
 } tcs_hash_t;
 
 struct tcs_fetched;
@@ -847,8 +844,8 @@ static void task_cloud_sync_update_progress(retro_task_t *task)
    /* Entries of a directory whose sync toggle is off are stepped over
     * in one go, so counting them would leave the bar short of 100 when
     * they sort last - and stuck below the in-scope share otherwise. */
-   val = (sync_state->server_idx - sync_state->server_skipped)
-       + sync_state->current_idx;
+   val = (unsigned long)((sync_state->server_idx - sync_state->server_skipped)
+       + sync_state->current_idx);
 
    if (sync_state->server_manifest)
       count += sync_state->server_manifest->size
@@ -972,12 +969,14 @@ static void task_cloud_sync_md5_hex(char *hash, MD5_CTX *md5)
    hash[32] = '\0';
 }
 
+/* Octets per chunk of a file's hash. */
+#define CS_HASH_CHUNK (256 * 1024)
+
 static char *task_cloud_sync_md5_rfile(RFILE *file)
 {
-   MD5_CTX md5;
-   const uint8_t *map     = NULL;
-   int64_t        map_len = 0;
-   char          *hash    = (char*)malloc(33);
+   MD5_CTX        md5;
+   unsigned char *buf  = NULL;
+   char          *hash = (char*)malloc(33);
 
    if (!hash)
       return NULL;
@@ -996,64 +995,43 @@ static char *task_cloud_sync_md5_rfile(RFILE *file)
     * other way round. */
    filestream_seek(file, 0, RETRO_VFS_SEEK_POSITION_START);
 
-   /* The files are opened with HINT_FREQUENT_ACCESS, so where the
-    * platform maps them the whole file is already addressable and
-    * there is nothing to copy.  This used to read the mapping out of
-    * the VFS handle directly - the only place in the tree that did -
-    * which meant a task reaching past filestream into a struct it
-    * does not own, and getting no answer at all from a
-    * frontend-supplied VFS.  filestream_get_mapped_ptr() answers the
-    * same question through the layer that owns it, and NULL is a
-    * normal answer, so the read loop below stays the general case. */
-   if ((map = filestream_get_mapped_ptr(file, &map_len)) && map_len > 0)
-      MD5_Update(&md5, map, (size_t)map_len);
-   else
+   /* Hashed where it lies when the stream can lend it - the files are
+    * opened with HINT_FREQUENT_ACCESS, so where the platform maps them
+    * nothing is copied - and read into a buffer made on first need
+    * otherwise. 256 KB at a time either way, same reasoning as
+    * intfstream_get_crc: at 4 KB a call it is call overhead, not
+    * hashing. */
+   for (;;)
    {
-      /* 256 KB reads, same reasoning as intfstream_get_crc: hashing a
-       * large savestate at 4 KB a call is call overhead, not hashing.
-       * Heap once per file; this is a background sync path.
-       *
-       * Allocated here rather than before the branch above, where it
-       * was malloc'd and freed on every mapped hash as well without a
-       * byte of it ever being touched. */
-      size_t         buf_len = 256 * 1024;
-      unsigned char *buf     = (unsigned char*)malloc(buf_len);
-      int            rv;
+      const uint8_t *ptr = NULL;
+      int64_t        n   = filestream_view(file, CS_HASH_CHUNK, &ptr);
 
-      if (!buf)
+      if (n < 0)
       {
-         free(hash);
-         return NULL;
+         if (!buf && !(buf = (unsigned char*)malloc(CS_HASH_CHUNK)))
+         {
+            free(hash);
+            return NULL;
+         }
+         n   = filestream_read(file, buf, CS_HASH_CHUNK);
+         ptr = buf;
       }
-
-      do
-      {
-         rv = (int)filestream_read(file, buf, (int64_t)buf_len);
-         if (rv > 0)
-            MD5_Update(&md5, buf, rv);
-      } while (rv > 0);
-
-      free(buf);
+      if (n <= 0)
+         break;
+      MD5_Update(&md5, ptr, (unsigned long)n);
    }
+   free(buf);
 
    task_cloud_sync_md5_hex(hash, &md5);
    return hash;
 }
-
-/* Reads per chunk of the current file's hash. */
-#define CS_HASH_CHUNK (256 * 1024)
 
 /* Starts @h on @file, from its start. */
 static void task_cloud_sync_hash_begin(tcs_hash_t *h, RFILE *file)
 {
    MD5_Init(&h->md5);
    filestream_seek(file, 0, RETRO_VFS_SEEK_POSITION_START);
-   h->file    = file;
-   h->pos     = 0;
-   h->map_len = 0;
-   h->map     = filestream_get_mapped_ptr(file, &h->map_len);
-   if (h->map_len <= 0)
-      h->map  = NULL;
+   h->file = file;
 }
 
 /* Hashes @h's file a chunk at a time while @b allows. True once it is
@@ -1065,22 +1043,18 @@ static bool task_cloud_sync_hash_step(tcs_hash_t *h, uint8_t *buf,
 {
    for (;;)
    {
-      int64_t n;
+      const uint8_t *ptr = NULL;
+      int64_t        n;
       if (!task_nbio_slice_within_budget(b, 0, 0))
          return false;
-      if (h->map)
+      if ((n = filestream_view(h->file, CS_HASH_CHUNK, &ptr)) < 0)
       {
-         n = h->map_len - h->pos;
-         if (n > CS_HASH_CHUNK)
-            n = CS_HASH_CHUNK;
-         if (n > 0)
-            MD5_Update(&h->md5, h->map + h->pos, (size_t)n);
+         n   = filestream_read(h->file, buf, CS_HASH_CHUNK);
+         ptr = buf;
       }
-      else if ((n = filestream_read(h->file, buf, CS_HASH_CHUNK)) > 0)
-         MD5_Update(&h->md5, buf, (size_t)n);
       if (n <= 0)
          break;
-      h->pos += n;
+      MD5_Update(&h->md5, ptr, (unsigned long)n);
    }
    task_cloud_sync_md5_hex(hash, &h->md5);
    h->file = NULL;
@@ -1162,9 +1136,22 @@ static bool task_cloud_sync_backup_file(struct item_file *file,
 
    if (!path_mkdir(new_dir))
       RARCH_ERR(CSPFX "Could not create backup directory \"%s\".\n", new_dir);
-   else if (filestream_rename(file->path, new_path) != 0)
+   else if (filestream_rename(file->path, new_path) == 0)
+      ok = true;
+   /* A rename cannot cross volumes, or leave a SAF tree on Android, and
+    * the backups live under the assets directory wherever saves are.
+    * This runs on the task thread, so a blocking copy holds up nothing. */
+   else if (filestream_copy(file->path, new_path) != 0)
       RARCH_ERR(CSPFX "Could not back \"%s\" up to \"%s\".\n",
             file->path, new_path);
+   /* The caller needs the local file gone; a backup of a file that is
+    * still there would only pile up. */
+   else if (filestream_delete(file->path) != 0)
+   {
+      filestream_delete(new_path);
+      RARCH_ERR(CSPFX "Could not remove \"%s\" after backing it up.\n",
+            file->path);
+   }
    else
       ok = true;
 
@@ -2390,16 +2377,36 @@ static void task_cloud_sync_task_handler(retro_task_t *task)
 /* Runs on the main thread before the state is released. A sync that
  * failed, or finished with failures or conflicts, reports its title -
  * the sync's own summary - as the error. */
+/* A sync asked for while one ran, without a pusher waiting on it -
+ * Sync Now, Resolve: Keep Local, Resolve: Keep Server, or a content
+ * load's or close's sync: run once that one is through, with the
+ * conflict resolution asked for last, a resolution winning over a
+ * plain sync. -1: none. Turned away, the menu's choices did nothing
+ * while an automatic sync ran. Frame thread only: every push and this
+ * task's callback run there. */
+static int tcs_followup_mode = -1;
+
+static bool task_push_cloud_sync_with_mode(int conflict_resolution,
+      retro_task_callback_t cb, void *cb_data);
+
 static void task_cloud_sync_cb(retro_task_t *task, void *task_data,
       void *user_data, const char *error)
 {
    task_cloud_sync_state_t *sync_state = (task_cloud_sync_state_t *)task->state;
 
-   if (!sync_state || !sync_state->cb)
-      return;
-   if (!error && (sync_state->failures || sync_state->conflicts))
-      error = task->title ? task->title : "Cloud Sync failed";
-   sync_state->cb(task, NULL, sync_state->cb_data, error);
+   if (sync_state && sync_state->cb)
+   {
+      if (!error && (sync_state->failures || sync_state->conflicts))
+         error = task->title ? task->title : "Cloud Sync failed";
+      sync_state->cb(task, NULL, sync_state->cb_data, error);
+   }
+
+   if (tcs_followup_mode >= 0)
+   {
+      int mode          = tcs_followup_mode;
+      tcs_followup_mode = -1;
+      task_push_cloud_sync_with_mode(mode, NULL, NULL);
+   }
 }
 
 /* Releases the sync's state when the task retires. Every manifest owns
@@ -2468,8 +2475,10 @@ static bool task_cloud_sync_task_finder(retro_task_t *task, void *user_data)
    if (!task)
       return false;
 
-   /* there can be only one */
-   return task->handler == task_cloud_sync_task_handler;
+   /* there can be only one; a finished one, waiting for its callback,
+    * is no longer running and starts the follow-up from there */
+   return     task->handler == task_cloud_sync_task_handler
+          && !(task_get_flags(task) & RETRO_TASK_FLG_FINISHED);
 }
 
 static bool task_push_cloud_sync_with_mode(int conflict_resolution,
@@ -2492,8 +2501,16 @@ static bool task_push_cloud_sync_with_mode(int conflict_resolution,
    find_data.func = task_cloud_sync_task_finder;
    if (task_queue_find(&find_data))
    {
-      RARCH_LOG(CSPFX "Already in progress.\n");
-      return false;
+      /* A pusher waiting on its own sync is told it was not run */
+      if (cb)
+      {
+         RARCH_LOG(CSPFX "Already in progress.\n");
+         return false;
+      }
+      if (conflict_resolution || tcs_followup_mode < 0)
+         tcs_followup_mode = conflict_resolution;
+      RARCH_LOG(CSPFX "In progress: another sync follows it.\n");
+      return true;
    }
 
    sync_state = (task_cloud_sync_state_t *)calloc(1, sizeof(task_cloud_sync_state_t));

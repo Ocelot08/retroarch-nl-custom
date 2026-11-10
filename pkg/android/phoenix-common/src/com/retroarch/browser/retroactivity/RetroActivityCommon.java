@@ -177,6 +177,8 @@ public class RetroActivityCommon extends NativeActivity
    * the same links at once. */
   private final Object mSymlinkLock = new Object();
   private Object mInputDeviceListener;
+  /* API 17+: the second display's Presentation; null below */
+  private SecondDisplayController secondDisplay;
 
   /* Keep the API 16 interface off the activity loaded on Android 2.x. */
   @TargetApi(16)
@@ -257,6 +259,8 @@ public class RetroActivityCommon extends NativeActivity
 
     PlayCoreManager.getInstance().onCreate(this);
     super.onCreate(savedInstanceState);
+    if (Build.VERSION.SDK_INT >= 17)
+      secondDisplay = new SecondDisplayController(this);
 
     /* super.onCreate has loaded the native library and started the
      * native thread; it now waits on the permission gate until this
@@ -265,6 +269,24 @@ public class RetroActivityCommon extends NativeActivity
       resolveStartupPermissions();
     else
       mStartupSettingsPaused = true;
+  }
+
+  @Override
+  protected void onStart()
+  {
+    super.onStart();
+    if (secondDisplay != null)
+      secondDisplay.onStart();
+  }
+
+  @Override
+  protected void onStop()
+  {
+    /* The second display lets go of its surface while the app thread
+     * still answers */
+    if (secondDisplay != null)
+      secondDisplay.onStop();
+    super.onStop();
   }
 
   @Override
@@ -1696,6 +1718,8 @@ public class RetroActivityCommon extends NativeActivity
     boolean hasOldOrientation = false;
 
     super.onConfigurationChanged(newConfig);
+    if (secondDisplay != null)
+      secondDisplay.onConfigurationChanged();
 
     Log.i("RetroActivity", "onConfigurationChanged: orientation is now " + newConfig.orientation);
 
@@ -1885,7 +1909,7 @@ public class RetroActivityCommon extends NativeActivity
         keyboardActive = true;
         keyboardSuppressWatcher = true;
         keyboardEditText.setText(initialText != null ? initialText : "");
-        keyboardEditText.setSelection(keyboardEditText.getText().length());
+        keyboardEditText.setSelection(0, keyboardEditText.getText().length());
         keyboardSuppressWatcher = false;
         if (label != null)
           keyboardEditText.setHint(label);
@@ -1894,10 +1918,42 @@ public class RetroActivityCommon extends NativeActivity
         keyboardEditText.setFocusableInTouchMode(true);
         keyboardEditText.requestFocus();
 
-        InputMethodManager imm = (InputMethodManager)
-              getSystemService(Context.INPUT_METHOD_SERVICE);
-        if (imm != null)
-          imm.showSoftInput(keyboardEditText, InputMethodManager.SHOW_FORCED);
+        askForKeyboard();
+      }
+    });
+  }
+
+  private void askForKeyboard() {
+    InputMethodManager imm = (InputMethodManager)
+          getSystemService(Context.INPUT_METHOD_SERVICE);
+    if (imm != null)
+      imm.showSoftInput(keyboardEditText, InputMethodManager.SHOW_FORCED);
+  }
+
+  /**
+   * Shows the second display on display ordinal of the last published
+   * list, or hides it for 0; request numbers the request. Called from
+   * native code on any thread; posts to the UI thread and returns.
+   */
+  public void setSecondDisplay(final int ordinal, final int request) {
+    runOnUiThread(new Runnable() {
+      @Override public void run() {
+        if (secondDisplay != null)
+          secondDisplay.show(ordinal, request);
+      }
+    });
+  }
+
+  /**
+   * Moves this Activity onto the display whose id is displayId; move
+   * numbers the move. Called from native code on any thread; posts to
+   * the UI thread and returns.
+   */
+  public void moveToDisplay(final int displayId, final int move) {
+    runOnUiThread(new Runnable() {
+      @Override public void run() {
+        if (secondDisplay != null)
+          secondDisplay.moveTo(displayId, move);
       }
     });
   }
@@ -1921,6 +1977,31 @@ public class RetroActivityCommon extends NativeActivity
         keyboardEditText.setVisibility(View.GONE);
       }
     });
+  }
+
+  @TargetApi(29)
+  @Override
+  public void onTopResumedActivityChanged(boolean top) {
+    super.onTopResumedActivityChanged(top);
+    if (secondDisplay != null)
+      secondDisplay.onTopResumedChanged(top);
+  }
+
+  /* On a one-focus system the IME refuses the field while another
+   * window holds the focus; it serves the field again only after this
+   * returns */
+  @Override
+  public void onWindowFocusChanged(boolean hasFocus) {
+    super.onWindowFocusChanged(hasFocus);
+    if (secondDisplay != null)
+      secondDisplay.onFocusChanged(hasFocus);
+    if (hasFocus && keyboardActive && keyboardEditText != null)
+      keyboardEditText.post(new Runnable() {
+        @Override public void run() {
+          if (keyboardActive)
+            askForKeyboard();
+        }
+      });
   }
 
   /////////////// JNI methods ///////////////

@@ -51,14 +51,18 @@ void openxr_host_stage_changed(openxr_host_t *h)
 }
 
 /* A recenter's remake: what the core drew in the old seated space keeps
- * its poses in the new, so its world moves with the screens. Run in the
- * swap's locked span: no headset frame shows the new space without it. */
+ * its poses in the new, so its world moves with the screens. The views
+ * handed out move here; a projection already published carries with
+ * the space the swap publishes. */
 static void openxr_host_carry(void *user, int from, int to)
 {
    openxr_host_t *h = (openxr_host_t*)user;
+   unsigned i;
    if (h->given_seq == from)
       h->given_seq = to;
-   openxr_frame_move_projection(h->frame, from, to);
+   for (i = 0; i < 4; i++)
+      if (h->handed[i].seq == from)
+         h->handed[i].seq = to;
 }
 
 static bool openxr_host_make_space(openxr_host_t *h,
@@ -108,7 +112,8 @@ static bool openxr_host_track_space(openxr_host_t *h, bool carry)
    return true;
 }
 
-bool openxr_host_sample(openxr_host_t *h, uint32_t *frame_flags)
+bool openxr_host_sample(openxr_host_t *h, unsigned ahead,
+      uint32_t *frame_flags)
 {
    XrTime time;
    XrDuration period;
@@ -121,7 +126,7 @@ bool openxr_host_sample(openxr_host_t *h, uint32_t *frame_flags)
       return false;
    period = openxr_frame_period(h->frame);
    if (period > 0)
-      time += period;
+      time += period * (XrDuration)(1 + ahead);
    recenters = openxr_frame_recenters(h->frame);
    stage     = retro_atomic_load_acquire_int(&h->stage_moves);
 
@@ -154,25 +159,48 @@ bool openxr_host_sample(openxr_host_t *h, uint32_t *frame_flags)
       h->origin_changed = false;
    }
    h->tracking_seq = retro_atomic_load_acquire_int(&h->session->track_seq);
+   h->tracking_time = time;
    return openxr_tracking_sample(&h->tracking, h->session,
          h->session->track_space, time);
 }
 
-bool openxr_host_eye_state(openxr_host_t *h,
-      struct retro_vr_eye_state out[2])
+/* The hands where the last sample put the head. */
+bool openxr_host_locate_hands(openxr_host_t *h)
 {
+   if (!h->tracking.valid)
+      return false;
+   return openxr_frame_locate_hands(h->frame, h->session->track_space,
+         h->tracking_time, &h->tracking.hands);
+}
+
+bool openxr_host_eye_state(openxr_host_t *h,
+      struct retro_vr_eye_state out[2], unsigned *token)
+{
+   unsigned i;
    if (!h->tracking.valid)
       return false;
    openxr_tracking_eye(&h->tracking.views[0], &out[0]);
    openxr_tracking_eye(&h->tracking.views[1], &out[1]);
-   /* The core draws its frame from these: the projection shows them. */
-   h->given[0]     = h->tracking.views[0];
-   h->given[1]     = h->tracking.views[1];
-   h->given_seq    = h->tracking_seq;
+   i                      = h->handed_count & 3;
+   h->handed[i].views[0]  = h->tracking.views[0];
+   h->handed[i].views[1]  = h->tracking.views[1];
+   h->handed[i].seq       = h->tracking_seq;
+   *token                 = h->handed_count++;
+   return true;
+}
+
+void openxr_host_give(openxr_host_t *h, unsigned token)
+{
+   unsigned i = token & 3;
+   /* Overwritten since: four eyes handed out after it and none drawn */
+   if (h->handed_count - token > 4)
+      return;
+   h->given[0]     = h->handed[i].views[0];
+   h->given[1]     = h->handed[i].views[1];
+   h->given_seq    = h->handed[i].seq;
    h->given_valid  = true;
    h->given_kept   = false;
    h->kept_pending = false;
-   return true;
 }
 
 bool openxr_host_head_pose(const openxr_host_t *h,
@@ -181,6 +209,15 @@ bool openxr_host_head_pose(const openxr_host_t *h,
    if (!h->tracking.valid)
       return false;
    *out = h->tracking.head;
+   return true;
+}
+
+bool openxr_host_controller_poses(const openxr_host_t *h,
+      struct retro_vr_controller_poses *out)
+{
+   if (!h->tracking.valid)
+      return false;
+   *out = h->tracking.hands;
    return true;
 }
 
@@ -306,15 +343,21 @@ static int openxr_host_track_in_stage(const openxr_host_t *h,
       return -1;
    if (time <= 0 || !h->session->track_space)
       return 0;
-   memset(&rci, 0, sizeof(rci));
-   rci.type               = XR_TYPE_REFERENCE_SPACE_CREATE_INFO;
-   rci.referenceSpaceType = XR_REFERENCE_SPACE_TYPE_STAGE;
+   rci.type                               = XR_TYPE_REFERENCE_SPACE_CREATE_INFO;
+   rci.next                               = NULL;
+   rci.poseInReferenceSpace.orientation.x = 0.0f;
+   rci.poseInReferenceSpace.orientation.y = 0.0f;
+   rci.poseInReferenceSpace.orientation.z = 0.0f;
+   rci.poseInReferenceSpace.position.x    = 0.0f;
+   rci.poseInReferenceSpace.position.y    = 0.0f;
+   rci.poseInReferenceSpace.position.z    = 0.0f;
+   rci.referenceSpaceType                 = XR_REFERENCE_SPACE_TYPE_STAGE;
    rci.poseInReferenceSpace.orientation.w = 1.0f;
    if (XR_FAILED(h->session->CreateReferenceSpace(h->session->session,
                &rci, &stage)))
       return -1;
-   memset(&loc, 0, sizeof(loc));
    loc.type = XR_TYPE_SPACE_LOCATION;
+   loc.next = NULL;
    ok       = XR_SUCCEEDED(h->session->LocateSpace(h->session->track_space,
             stage, time, &loc))
       && (loc.locationFlags & valid) == valid;

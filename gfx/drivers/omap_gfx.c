@@ -930,8 +930,6 @@ static void omap_render_msg(omap_video_t *vid, const char *msg)
          const uint8_t *src = NULL; \
          base_x               = (line_x + (pen_x)) + glyph->draw_offset_x; \
          base_y               = (line_y + (pen_y)) + glyph->draw_offset_y; \
-         max_width            = vid_width  - base_x; \
-         max_height           = vid_height - base_y; \
          glyph_width          = VIDEO_SCALE_W(glyph->dims); \
          glyph_height         = VIDEO_SCALE_H(glyph->dims); \
          src                  = atlas->buffer + VIDEO_SCALE_W(glyph->atlas_pos) + \
@@ -948,7 +946,12 @@ static void omap_render_msg(omap_video_t *vid, const char *msg)
             glyph_height += base_y; \
             base_y        = 0; \
          } \
-         if (max_width <= 0 || max_height <= 0) \
+         /* Clipped to nothing: wholly off the page's left or top, or \
+          * past its right or bottom */ \
+         max_width            = vid_width  - base_x; \
+         max_height           = vid_height - base_y; \
+         if (     glyph_width <= 0 || glyph_height <= 0 \
+               || max_width   <= 0 || max_height   <= 0) \
             break; \
          if (glyph_width > max_width) \
             glyph_width = max_width; \
@@ -974,7 +977,6 @@ static void omap_render_msg(omap_video_t *vid, const char *msg)
 /* FIXME/TODO: Filters not supported. */
 static void *omap_init(const video_info_t *video)
 {
-   settings_t *settings = config_get_ptr();
    omap_video_t *vid    = (omap_video_t*)calloc(1, sizeof(omap_video_t));
    if (!vid)
       return NULL;
@@ -1094,6 +1096,8 @@ static void omap_views_draw(omap_video_t *vid, const void *frame,
       vid->views_seen = true;
       RARCH_LOG("[Omap] Views drawn straight from the frame.\n");
    }
+   /* Each view turned in its own place, as the layout laid them out */
+   vid->views_cpu.rot = video_driver_get_rotation_snapshot();
    video_views_cpu_compose(&vid->views_cpu, &info->views, layout,
          frame, pitch, direct ? SCALER_FMT_ARGB8888 : SCALER_FMT_RGB565,
          info->video_smooth ? SCALER_TYPE_BILINEAR : SCALER_TYPE_POINT,

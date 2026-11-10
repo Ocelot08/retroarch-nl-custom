@@ -7,7 +7,7 @@ typedef int HRESULT;
 typedef unsigned DWORD;
 #define S_OK 0
 typedef struct { int64_t QuadPart; } LARGE_INTEGER;
-typedef struct { unsigned PresentCount, PresentRefreshCount, SyncRefreshCount; LARGE_INTEGER SyncQPCTime; } DXGI_FRAME_STATISTICS;
+typedef struct { unsigned PresentCount, PresentRefreshCount, SyncRefreshCount; LARGE_INTEGER SyncQPCTime, SyncGPUTime; } DXGI_FRAME_STATISTICS;
 typedef uint64_t UINT64;
 #define WAIT_OBJECT_0 0u
 #define WAIT_TIMEOUT 258u
@@ -20,6 +20,7 @@ typedef uint64_t UINT64;
 
 typedef struct queue ID3D12CommandQueue;
 typedef struct chain IDXGISwapChain3;
+typedef struct fence ID3D12Fence;
 typedef void ID3D12CommandList;
 struct queue_vtable {
    HRESULT (*Wait)(ID3D12CommandQueue *, void *, UINT64);
@@ -34,10 +35,16 @@ struct chain_vtable {
 };
 struct queue { struct queue_vtable *lpVtbl; };
 struct chain { struct chain_vtable *lpVtbl; };
+struct fence_vtable {
+   UINT64 (*GetCompletedValue)(ID3D12Fence *);
+   HRESULT (*SetEventOnCompletion)(ID3D12Fence *, UINT64, void *);
+};
+struct fence { struct fence_vtable *lpVtbl; };
 typedef struct ra_dxgi_bridge {
    ID3D12CommandQueue *queue;
    IDXGISwapChain3 *chain;
-   void *ready, *done, *latency, *lists[2];
+   void *ready, *latency, *event, *device, *lists[2];
+   ID3D12Fence *done;
    unsigned current_index, present_count;
    int64_t present_submitted_qpc;
    int failed, tearing, occluded, resized;
@@ -47,6 +54,17 @@ typedef struct ra_dxgi_bridge {
 static DWORD wait_result;
 static HRESULT probe_result, present_result, queue_result, signal_result;
 static unsigned waits, probes, copies, presents, order;
+static UINT64 completed;
+static UINT64 get_completed(ID3D12Fence *fence)
+{ (void)fence; return completed; }
+static UINT64 event_value;
+static unsigned event_sets;
+static HRESULT event_result;
+static HRESULT set_event(ID3D12Fence *fence, UINT64 value, void *event)
+{
+   (void)fence; assert(event == (void *)&event_value);
+   event_value = value; ++event_sets; return event_result;
+}
 static unsigned expected_interval = 1, expected_flags;
 static HRESULT count_result, stats_result;
 static DXGI_FRAME_STATISTICS frame_stats;
@@ -93,15 +111,55 @@ int main(void)
 {
    struct queue_vtable queue_methods = { queue_wait, copy, signal_done };
    struct chain_vtable chain_methods = { present, current, get_count, get_stats };
+   struct fence_vtable fence_methods = { get_completed, set_event };
+   ID3D12Fence fence;
    ID3D12CommandQueue queue;
    IDXGISwapChain3 chain;
    ra_dxgi_bridge_t bridge;
    queue.lpVtbl = &queue_methods; chain.lpVtbl = &chain_methods;
    memset(&bridge, 0, sizeof(bridge)); bridge.queue = &queue; bridge.chain = &chain;
+   fence.lpVtbl = &fence_methods; bridge.done = &fence;
+   bridge.event = &event_value;
+   assert(ra_dxgi_bridge_presentable(&bridge));
    assert(ra_dxgi_bridge_index(&bridge, 1) == 1 && waits == 1 && probes == 0);
    assert(ra_dxgi_bridge_present(&bridge, 7, 1));
    assert(order == 4 && copies == 1 && presents == 1 && waited == 7 && signalled == 1);
    assert(ra_dxgi_bridge_last_use(&bridge, 1) == 1 && bridge.sequence == 1);
+   {
+      unsigned i, before = waits;
+      /* A target the GPU is still copying into is a busy window, not a
+       * missing one: presentable() is what the runloop reads as "no
+       * window" and sleeps a whole frame for, so it must stay true, and
+       * must not wait or probe for it. */
+      for (i = 0; i < 10000; i++)
+         assert(ra_dxgi_bridge_presentable(&bridge));
+      assert(waits == before && presents == 1 && copies == 1 && probes == 0);
+      assert(event_sets == 0 && !bridge.failed);
+      /* The wait for it is the producer's, at the target: armed on the
+       * target's last use, and over when that completes. */
+      assert(ra_dxgi_bridge_wait_target(&bridge, 1));
+      assert(event_sets == 1 && event_value == 1 && waits == before + 1);
+      wait_result = WAIT_TIMEOUT;
+      assert(!ra_dxgi_bridge_wait_target(&bridge, 1) && !bridge.failed);
+      wait_result = WAIT_OBJECT_0;
+      event_result = -1;
+      assert(!ra_dxgi_bridge_wait_target(&bridge, 1) && bridge.failed);
+      bridge.failed = 0; event_result = 0;
+      /* Free: one fence read, no event, no wait. */
+      completed = 1; before = waits;
+      assert(ra_dxgi_bridge_wait_target(&bridge, 1));
+      assert(ra_dxgi_bridge_wait_target(&bridge, 0));
+      assert(waits == before && event_sets == 3);
+      assert(!ra_dxgi_bridge_wait_target(&bridge, 2));
+      assert(ra_dxgi_bridge_presentable(&bridge));
+      /* A removed device is not waited on, and reaches the fallback. */
+      completed = ~(UINT64)0;
+      assert(!ra_dxgi_bridge_wait_target(&bridge, 1) && bridge.failed);
+      assert(ra_dxgi_bridge_presentable(&bridge) && waits == before);
+      bridge.failed = 0; completed = 1;
+      /* The lanes below count the frame-latency waits from here. */
+      waits = 1;
+   }
    probe_result = DXGI_STATUS_OCCLUDED;
    assert(ra_dxgi_bridge_index(&bridge, 1) == ~0u && waits == 1);
    assert(!ra_dxgi_bridge_failed(&bridge));

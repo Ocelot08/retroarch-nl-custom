@@ -44,6 +44,9 @@
 #include "tasks_internal.h"
 #include "../input/input_driver.h"
 #include "../input/bsv/bsvmovie.h"
+#ifdef HAVE_NETWORKING
+#include "../network/netplay/netplay.h"
+#endif
 
 #ifdef HAVE_STATESTREAM
 #if DEBUG
@@ -120,15 +123,21 @@ static bool bsv_movie_init_record(
    time_t time_lil              = swap_if_big64(t);
    uint32_t state_size          = 0;
    uint32_t header[REPLAY_HEADER_LEN]  = {0};
-   intfstream_t *file           = intfstream_open_file(path,
-         RETRO_VFS_FILE_ACCESS_WRITE | RETRO_VFS_FILE_ACCESS_READ,
-         RETRO_VFS_FILE_ACCESS_HINT_NONE);
+   intfstream_t *file           = NULL;
    settings_t *settings         = config_get_ptr();
 #ifdef HAVE_STATESTREAM
    bool is_small                = false;
    uint32_t superblock_size;
    uint32_t block_size;
 #endif
+
+#ifdef HAVE_NETWORKING
+   if (!netplay_bsv_movie_init(handle))
+      return false;
+#endif
+   file = intfstream_open_file(path,
+         RETRO_VFS_FILE_ACCESS_WRITE | RETRO_VFS_FILE_ACCESS_READ,
+         RETRO_VFS_FILE_ACCESS_HINT_NONE);
 
    if (!file)
    {
@@ -197,7 +206,8 @@ static bool bsv_movie_init_record(
    if (!handle->superblocks || !handle->blocks)
       return false;
 #endif
-   if (state_size)
+   /* Netplay writes its first confirmed state instead. */
+   if (state_size && !BSV_MOVIE_IS_NETPLAY(handle))
       return bsv_movie_reset_recording(handle);
    
    handle->min_file_pos = sizeof(header);
@@ -221,6 +231,8 @@ void bsv_movie_free(bsv_movie_t *handle)
       free(handle->last_save);
    if (handle->cur_save)
       free(handle->cur_save);
+   free(handle->ckpt_scratch[0]);
+   free(handle->ckpt_scratch[1]);
 
    free(handle);
 }
@@ -474,6 +486,8 @@ bool movie_stop_record(input_driver_state_t *input_st)
       movie = input_st->bsv_movie_state_next_handle;
    if (!movie)
       return false;
+   if (movie->netplay_error)
+      RARCH_WARN("[Replay] Netplay recording stopped: %s.\n", movie->netplay_error);
    runloop_msg_queue_push(_msg, strlen(_msg), 2, 180, true, NULL,
          MESSAGE_QUEUE_ICON_DEFAULT, MESSAGE_QUEUE_CATEGORY_INFO);
    RARCH_LOG("[Replay] %s\n", _msg);
@@ -582,6 +596,9 @@ bool movie_start_record_notify(input_driver_state_t *input_st, char *path,
       task->type                 = TASK_TYPE_NONE;
       task->state                = state;
       task->handler              = task_moviectl_record_handler;
+      /* It waits for a state load to retire, which happens on the main
+       * thread, so it looks from there, once per check. */
+      task->flags               |= RETRO_TASK_FLG_MAIN_THREAD;
       task->callback             = moviectl_start_record_cb;
       task->user_data            = user_data;
 

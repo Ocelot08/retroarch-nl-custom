@@ -36,6 +36,7 @@ int detect_psp_game(intfstream_t *fd, char *s, size_t len,
       const char *filename);
 int detect_pbp_game(intfstream_t *fd, char *s, size_t len,
       const char *filename);
+int detect_3ds_game(intfstream_t *fd, char *s, size_t len);
 size_t detect_gc_game(intfstream_t *fd, char *s, size_t len,
       const char *filename);
 int detect_scd_game(intfstream_t *fd, char *s, size_t len,
@@ -67,17 +68,42 @@ int task_database_gdi_get_serial(const char *name, char *s, size_t len,
       uint64_t *filesize);
 int task_database_pbp_get_serial(const char *name, char *s, size_t len,
       uint64_t *filesize);
-bool is_chd_file_cdi(const char *path);
-int task_database_chd_get_serial(const char *name, char *serial, size_t len,
+int task_database_3ds_get_serial(const char *name, char *s, size_t len,
       uint64_t *filesize);
-bool intfstream_file_get_crc_and_size(const char *name,
-      uint64_t offset, int64_t len, uint32_t *crc, uint64_t *size);
-int task_database_cue_get_crc_and_size(const char *name, uint32_t *crc,
-      uint64_t *size);
-int task_database_gdi_get_crc_and_size(const char *name, uint32_t *crc,
-      uint64_t *size);
-bool task_database_chd_get_crc_and_size(const char *name, uint32_t *crc,
-      uint64_t *size);
+int task_database_ciso_get_serial(const char *name, char *s, size_t len,
+      uint64_t *filesize);
+/* An Xbox or Xbox 360 serial for @name: with @disc that of the disc
+ * image's game, otherwise that of the executable or package it is.
+ * @regions gets the XDVDFS_REGION_* the title says it is for, or 0. */
+int task_database_xbox_get_serial(const char *name, bool disc, char *s,
+      size_t len, uint64_t *filesize, uint8_t *regions);
+/* The Xbox 360 serial of the game a ZArchive holds, @regions as above */
+int task_database_zar_get_serial(const char *name, char *s, size_t len,
+      uint64_t *filesize, uint8_t *regions);
+/* The product code of a Wii U disc, a WUD or a WUX (or a disc image
+ * by another name), four characters: a release's serial may add the
+ * maker's two */
+int task_database_wiiu_get_serial(const char *name, char *s, size_t len,
+      uint64_t *filesize);
+/* The same for the game a Wii U archive (.wua) holds, @maker getting
+ * the maker's two characters from its company code, or "" */
+int task_database_wua_get_serial(const char *name, char *s, size_t len,
+      uint64_t *filesize, char *maker);
+bool is_chd_file_cdi(const char *path);
+/* @regions as for task_database_xbox_get_serial(), for an Xbox disc */
+int task_database_chd_get_serial(const char *name, char *serial, size_t len,
+      uint64_t *filesize, uint8_t *regions);
+
+enum task_database_crc_kind
+{
+   TASK_DATABASE_CRC_FILE = 0,
+   TASK_DATABASE_CRC_CUE,
+   TASK_DATABASE_CRC_GDI,
+   TASK_DATABASE_CRC_CHD
+};
+
+intfstream_t *task_database_crc_open(const char *name,
+      enum task_database_crc_kind kind, int64_t *span, uint64_t *size);
 
 RETRO_END_DECLS
 

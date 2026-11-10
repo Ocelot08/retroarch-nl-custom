@@ -137,21 +137,38 @@ static unsigned vulkan_openxr_host_state(void *user)
    return bits;
 }
 
-static bool vulkan_openxr_host_sample(void *user, uint32_t *frame_flags)
+static bool vulkan_openxr_host_sample(void *user, unsigned ahead,
+      uint32_t *frame_flags)
 {
-   return openxr_host_sample(&((vulkan_openxr_t*)user)->host, frame_flags);
+   return openxr_host_sample(&((vulkan_openxr_t*)user)->host, ahead, frame_flags);
 }
 
 static bool vulkan_openxr_host_eye_state(void *user,
-      struct retro_vr_eye_state out[2])
+      struct retro_vr_eye_state out[2], unsigned *token)
 {
-   return openxr_host_eye_state(&((vulkan_openxr_t*)user)->host, out);
+   return openxr_host_eye_state(&((vulkan_openxr_t*)user)->host, out, token);
+}
+
+static void vulkan_openxr_host_give(void *user, unsigned token)
+{
+   openxr_host_give(&((vulkan_openxr_t*)user)->host, token);
 }
 
 static bool vulkan_openxr_host_head_pose(void *user,
       struct retro_vr_head_pose *out)
 {
    return openxr_host_head_pose(&((vulkan_openxr_t*)user)->host, out);
+}
+
+static bool vulkan_openxr_host_locate_hands(void *user)
+{
+   return openxr_host_locate_hands(&((vulkan_openxr_t*)user)->host);
+}
+
+static bool vulkan_openxr_host_controller_poses(void *user,
+      struct retro_vr_controller_poses *out)
+{
+   return openxr_host_controller_poses(&((vulkan_openxr_t*)user)->host, out);
 }
 
 static bool vulkan_openxr_host_eye_size(void *user, unsigned *w,
@@ -292,8 +309,8 @@ vulkan_openxr_t *vulkan_openxr_new(bool enable1, uint32_t api_version)
       goto end;
 
    /* The runtime must be asked before any Vulkan object is made. */
-   memset(&reqs, 0, sizeof(reqs));
    reqs.type = XR_TYPE_GRAPHICS_REQUIREMENTS_VULKAN_KHR;
+   reqs.next = NULL;
    res       = enable1
       ? xr->GetVulkanGraphicsRequirementsKHR(xr->rt.instance, xr->rt.system, &reqs)
       : xr->GetVulkanGraphicsRequirements2KHR(xr->rt.instance, xr->rt.system, &reqs);
@@ -414,8 +431,10 @@ VkResult vulkan_openxr_create_instance(vulkan_openxr_t *xr,
    XrVulkanInstanceCreateInfoKHR ci;
    VkResult vk_res = VK_ERROR_INITIALIZATION_FAILED;
 
-   memset(&ci, 0, sizeof(ci));
    ci.type                   = XR_TYPE_VULKAN_INSTANCE_CREATE_INFO_KHR;
+   ci.next                   = NULL;
+   ci.createFlags            = 0;
+   ci.vulkanAllocator        = NULL;
    ci.systemId               = xr->rt.system;
    ci.pfnGetInstanceProcAddr = gipa;
    ci.vulkanCreateInfo       = info;
@@ -438,8 +457,10 @@ VkResult vulkan_openxr_create_device(vulkan_openxr_t *xr,
    XrVulkanDeviceCreateInfoKHR ci;
    VkResult vk_res = VK_ERROR_INITIALIZATION_FAILED;
 
-   memset(&ci, 0, sizeof(ci));
    ci.type                   = XR_TYPE_VULKAN_DEVICE_CREATE_INFO_KHR;
+   ci.next                   = NULL;
+   ci.createFlags            = 0;
+   ci.vulkanAllocator        = NULL;
    ci.systemId               = xr->rt.system;
    ci.pfnGetInstanceProcAddr = gipa;
    ci.vulkanPhysicalDevice   = gpu;
@@ -463,8 +484,8 @@ VkPhysicalDevice vulkan_openxr_gpu(vulkan_openxr_t *xr, VkInstance instance)
    if (xr->enable2)
    {
       XrVulkanGraphicsDeviceGetInfoKHR gi;
-      memset(&gi, 0, sizeof(gi));
       gi.type           = XR_TYPE_VULKAN_GRAPHICS_DEVICE_GET_INFO_KHR;
+      gi.next           = NULL;
       gi.systemId       = xr->rt.system;
       gi.vulkanInstance = instance;
       res = xr->GetVulkanGraphicsDevice2KHR(xr->rt.instance, &gi, &gpu);
@@ -494,8 +515,8 @@ static bool vulkan_openxr_create_session(vulkan_openxr_t *xr,
       return false;
    }
 
-   memset(&binding, 0, sizeof(binding));
    binding.type             = XR_TYPE_GRAPHICS_BINDING_VULKAN_KHR;
+   binding.next             = NULL;
    binding.instance         = instance;
    binding.physicalDevice   = gpu;
    binding.device           = device;
@@ -526,9 +547,11 @@ static XrResult vulkan_openxr_list_images(void *user, XrSwapchain swapchain,
    XrResult res;
    XrSwapchainImageVulkanKHR imgs[OPENXR_MAX_IMAGES];
    struct vulkan_openxr_images *li = (struct vulkan_openxr_images*)user;
-   memset(imgs, 0, sizeof(imgs));
    for (i = 0; i < OPENXR_MAX_IMAGES; i++)
+   {
       imgs[i].type = XR_TYPE_SWAPCHAIN_IMAGE_VULKAN_KHR;
+      imgs[i].next = NULL;
+   }
    res = li->xr->sc.EnumerateSwapchainImages(swapchain, *count, count,
          (XrSwapchainImageBaseHeader*)imgs);
    for (i = 0; XR_SUCCEEDED(res) && i < *count; i++)
@@ -561,8 +584,8 @@ static bool vulkan_openxr_cursor_fill(void *user, uint32_t index,
    VkCommandBuffer cmd        = VK_NULL_HANDLE;
    VkFence fence              = VK_NULL_HANDLE;
    void *map                  = NULL;
-   VkDeviceSize size          = VIDEO_XR_CURSOR_DIM
-      * VIDEO_XR_CURSOR_DIM * 4;
+   VkDeviceSize size          = (VkDeviceSize)VIDEO_XR_CURSOR_W
+      * VIDEO_XR_CURSOR_H * 4;
    VkMemoryPropertyFlags host = VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT
       | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT;
    VkBufferCreateInfo bi;
@@ -578,11 +601,14 @@ static bool vulkan_openxr_cursor_fill(void *user, uint32_t index,
    VkSubmitInfo si;
 
    vkGetDeviceQueue(device, dot->queue_family, 0, &queue);
-   memset(&bi, 0, sizeof(bi));
-   bi.sType       = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
-   bi.size        = size;
-   bi.usage       = VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
-   bi.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+   bi.sType                 = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+   bi.pNext                 = NULL;
+   bi.flags                 = 0;
+   bi.queueFamilyIndexCount = 0;
+   bi.pQueueFamilyIndices   = NULL;
+   bi.size                  = size;
+   bi.usage                 = VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
+   bi.sharingMode           = VK_SHARING_MODE_EXCLUSIVE;
    if (vkCreateBuffer(device, &bi, NULL, &buffer) != VK_SUCCESS)
    {
       failed = "vkCreateBuffer";
@@ -594,8 +620,8 @@ static bool vulkan_openxr_cursor_fill(void *user, uint32_t index,
       if (     (req.memoryTypeBits & (1u << i))
             && (props.memoryTypes[i].propertyFlags & host) == host)
          break;
-   memset(&mi, 0, sizeof(mi));
    mi.sType           = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+   mi.pNext           = NULL;
    mi.allocationSize  = req.size;
    mi.memoryTypeIndex = i;
    if (     i == props.memoryTypeCount
@@ -606,18 +632,21 @@ static bool vulkan_openxr_cursor_fill(void *user, uint32_t index,
       failed = "staging memory";
       goto end;
    }
-   video_xr_cursor_pixels((uint8_t*)map);
+   openxr_frame_cursor_pixels((uint8_t*)map,
+         openxr_frame_cursor_w(&dot->xr->frame), false);
    vkUnmapMemory(device, memory);
 
-   memset(&pi, 0, sizeof(pi));
-   pi.sType              = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
-   pi.queueFamilyIndex   = dot->queue_family;
-   memset(&cai, 0, sizeof(cai));
-   cai.sType             = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
-   cai.level             = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+   pi.sType            = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
+   pi.pNext            = NULL;
+   pi.flags            = 0;
+   pi.queueFamilyIndex = dot->queue_family;
+   cai.sType              = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+   cai.pNext              = NULL;
+   cai.level              = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
    cai.commandBufferCount = 1;
-   memset(&fi, 0, sizeof(fi));
-   fi.sType              = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
+   fi.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
+   fi.pNext = NULL;
+   fi.flags = 0;
    if (vkCreateCommandPool(device, &pi, NULL, &pool) != VK_SUCCESS)
    {
       failed = "command pool";
@@ -631,30 +660,41 @@ static bool vulkan_openxr_cursor_fill(void *user, uint32_t index,
       goto end;
    }
 
-   memset(&cbi, 0, sizeof(cbi));
-   cbi.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
-   cbi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+   cbi.sType            = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+   cbi.pNext            = NULL;
+   cbi.pInheritanceInfo = NULL;
+   cbi.flags            = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
    vkBeginCommandBuffer(cmd, &cbi);
-   memset(&b, 0, sizeof(b));
-   b.sType                       = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-   b.srcAccessMask               = 0;
-   b.dstAccessMask               = VK_ACCESS_TRANSFER_WRITE_BIT;
-   b.oldLayout                   = VK_IMAGE_LAYOUT_UNDEFINED;
-   b.newLayout                   = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
-   b.srcQueueFamilyIndex         = VK_QUEUE_FAMILY_IGNORED;
-   b.dstQueueFamilyIndex         = VK_QUEUE_FAMILY_IGNORED;
-   b.image                       = dot->images[index][0];
-   b.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-   b.subresourceRange.levelCount = 1;
-   b.subresourceRange.layerCount = 1;
+   b.sType                           = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+   b.pNext                           = NULL;
+   b.subresourceRange.baseMipLevel   = 0;
+   b.subresourceRange.baseArrayLayer = 0;
+   b.srcAccessMask                   = 0;
+   b.dstAccessMask                   = VK_ACCESS_TRANSFER_WRITE_BIT;
+   b.oldLayout                       = VK_IMAGE_LAYOUT_UNDEFINED;
+   b.newLayout                       = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+   b.srcQueueFamilyIndex             = VK_QUEUE_FAMILY_IGNORED;
+   b.dstQueueFamilyIndex             = VK_QUEUE_FAMILY_IGNORED;
+   b.image                           = dot->images[index][0];
+   b.subresourceRange.aspectMask     = VK_IMAGE_ASPECT_COLOR_BIT;
+   b.subresourceRange.levelCount     = 1;
+   b.subresourceRange.layerCount     = 1;
    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
          VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, NULL, 0, NULL, 1, &b);
-   memset(&region, 0, sizeof(region));
-   region.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-   region.imageSubresource.layerCount = 1;
-   region.imageExtent.width           = VIDEO_XR_CURSOR_DIM;
-   region.imageExtent.height          = VIDEO_XR_CURSOR_DIM;
-   region.imageExtent.depth           = 1;
+   region.bufferOffset                    = 0;
+   region.bufferRowLength                 = 0;
+   region.bufferImageHeight               = 0;
+   region.imageSubresource.mipLevel       = 0;
+   region.imageSubresource.baseArrayLayer = 0;
+   region.imageOffset.x                   = 0;
+   region.imageOffset.y                   = 0;
+   region.imageOffset.z                   = 0;
+   region.imageSubresource.aspectMask     = VK_IMAGE_ASPECT_COLOR_BIT;
+   region.imageSubresource.layerCount     = 1;
+   region.imageExtent.width               =
+      openxr_frame_cursor_w(&dot->xr->frame);
+   region.imageExtent.height              = VIDEO_XR_CURSOR_H;
+   region.imageExtent.depth               = 1;
    vkCmdCopyBufferToImage(cmd, buffer, dot->images[index][0],
          VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
    /* The layout the runtime takes it back in. */
@@ -667,10 +707,15 @@ static bool vulkan_openxr_cursor_fill(void *user, uint32_t index,
          1, &b);
    vkEndCommandBuffer(cmd);
 
-   memset(&si, 0, sizeof(si));
-   si.sType              = VK_STRUCTURE_TYPE_SUBMIT_INFO;
-   si.commandBufferCount = 1;
-   si.pCommandBuffers    = &cmd;
+   si.sType                = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+   si.pNext                = NULL;
+   si.waitSemaphoreCount   = 0;
+   si.pWaitSemaphores      = NULL;
+   si.pWaitDstStageMask    = NULL;
+   si.signalSemaphoreCount = 0;
+   si.pSignalSemaphores    = NULL;
+   si.commandBufferCount   = 1;
+   si.pCommandBuffers      = &cmd;
    slock_lock(dot->xr->queue_lock);
    vk_res = vkQueueSubmit(queue, 1, &si, fence);
    slock_unlock(dot->xr->queue_lock);
@@ -717,11 +762,20 @@ static void vulkan_openxr_cursor_create(vulkan_openxr_t *xr,
    li.xr            = xr;
    li.images        = dot.images;
    xr->frame.cursor = openxr_swapchains_create_filled(&xr->sc, formats, 4,
-         VIDEO_SCALE_PACK(VIDEO_XR_CURSOR_DIM, VIDEO_XR_CURSOR_DIM),
+         VIDEO_SCALE_PACK(openxr_frame_cursor_w(&xr->frame),
+            VIDEO_XR_CURSOR_H),
          vulkan_openxr_list_images, &li, vulkan_openxr_cursor_fill, &dot,
          &step, &code);
-   if (xr->frame.cursor)
-      RARCH_LOG("[OpenXR] Laser cursor ready.\n");
+   if (xr->frame.cursor && xr->frame.rt->max_width)
+      RARCH_LOG("[OpenXR] Laser cursor ready: %u wide, with %s (the "
+            "headset's widest %u).\n", openxr_frame_cursor_w(&xr->frame),
+            openxr_frame_cursor_parts(&xr->frame),
+            xr->frame.rt->max_width);
+   else if (xr->frame.cursor)
+      RARCH_LOG("[OpenXR] Laser cursor ready: %u wide, with %s (the "
+            "headset does not say its widest).\n",
+            openxr_frame_cursor_w(&xr->frame),
+            openxr_frame_cursor_parts(&xr->frame));
    else
       RARCH_WARN("[OpenXR] No laser cursor (%s, %d).\n", step, code);
 }
@@ -763,8 +817,11 @@ void vulkan_openxr_host_register(vulkan_openxr_t *xr)
    host.state     = vulkan_openxr_host_state;
    host.sample    = vulkan_openxr_host_sample;
    host.eye_state = vulkan_openxr_host_eye_state;
+   host.give      = vulkan_openxr_host_give;
    host.set_space = vulkan_openxr_host_set_space;
    host.head_pose = vulkan_openxr_host_head_pose;
+   host.locate_hands = vulkan_openxr_host_locate_hands;
+   host.controller_poses = vulkan_openxr_host_controller_poses;
    host.eye_size  = vulkan_openxr_host_eye_size;
    host.resume    = vulkan_openxr_host_resume;
    host.user      = xr;
@@ -859,6 +916,11 @@ void vulkan_openxr_pace_skip(vulkan_openxr_t *xr)
 void vulkan_openxr_pace_wait(vulkan_openxr_t *xr)
 {
    openxr_frame_pace_wait(&xr->frame);
+}
+
+void vulkan_openxr_host_poll(vulkan_openxr_t *xr)
+{
+   openxr_frame_host_poll(&xr->frame);
 }
 
 unsigned vulkan_openxr_refresh_rates(const vulkan_openxr_t *xr,

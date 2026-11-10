@@ -284,13 +284,21 @@ static bool gdi_ensure_menu_surface(gdi_t *gdi,
     * deselect first if it's currently the selected object. */
    gdi_release_menu_surface(gdi);
 
-   memset(&bmi, 0, sizeof(bmi));
-   bmi.bmiHeader.biSize        = sizeof(BITMAPINFOHEADER);
-   bmi.bmiHeader.biWidth       = (LONG)width;
-   bmi.bmiHeader.biHeight      = -(LONG)height; /* top-down */
-   bmi.bmiHeader.biPlanes      = 1;
-   bmi.bmiHeader.biBitCount    = 32;
-   bmi.bmiHeader.biCompression = BI_RGB;
+   bmi.bmiHeader.biSize          = sizeof(BITMAPINFOHEADER);
+   bmi.bmiHeader.biWidth         = (LONG)width;
+   bmi.bmiHeader.biHeight        = -(LONG)height; /* top-down */
+   bmi.bmiHeader.biPlanes        = 1;
+   bmi.bmiHeader.biBitCount      = 32;
+   bmi.bmiHeader.biCompression   = BI_RGB;
+   bmi.bmiHeader.biSizeImage     = 0;
+   bmi.bmiHeader.biXPelsPerMeter = 0;
+   bmi.bmiHeader.biYPelsPerMeter = 0;
+   bmi.bmiHeader.biClrUsed       = 0;
+   bmi.bmiHeader.biClrImportant  = 0;
+   bmi.bmiColors[0].rgbBlue      = 0;
+   bmi.bmiColors[0].rgbGreen     = 0;
+   bmi.bmiColors[0].rgbRed       = 0;
+   bmi.bmiColors[0].rgbReserved  = 0;
 
    gdi->bmp_menu = CreateDIBSection(gdi->memDC, &bmi, DIB_RGB_COLORS,
          &pixels, NULL, 0);
@@ -366,13 +374,21 @@ static bool gdi_ensure_scratch_quad(gdi_t *gdi, unsigned w, unsigned h)
    gdi->scratch_quad_pixels = NULL;
    gdi->scratch_quad_dims = 0;
 
-   memset(&bmi, 0, sizeof(bmi));
-   bmi.bmiHeader.biSize        = sizeof(BITMAPINFOHEADER);
-   bmi.bmiHeader.biWidth       = (LONG)w;
-   bmi.bmiHeader.biHeight      = -(LONG)h;
-   bmi.bmiHeader.biPlanes      = 1;
-   bmi.bmiHeader.biBitCount    = 32;
-   bmi.bmiHeader.biCompression = BI_RGB;
+   bmi.bmiHeader.biSize          = sizeof(BITMAPINFOHEADER);
+   bmi.bmiHeader.biWidth         = (LONG)w;
+   bmi.bmiHeader.biHeight        = -(LONG)h;
+   bmi.bmiHeader.biPlanes        = 1;
+   bmi.bmiHeader.biBitCount      = 32;
+   bmi.bmiHeader.biCompression   = BI_RGB;
+   bmi.bmiHeader.biSizeImage     = 0;
+   bmi.bmiHeader.biXPelsPerMeter = 0;
+   bmi.bmiHeader.biYPelsPerMeter = 0;
+   bmi.bmiHeader.biClrUsed       = 0;
+   bmi.bmiHeader.biClrImportant  = 0;
+   bmi.bmiColors[0].rgbBlue      = 0;
+   bmi.bmiColors[0].rgbGreen     = 0;
+   bmi.bmiColors[0].rgbRed       = 0;
+   bmi.bmiColors[0].rgbReserved  = 0;
 
    gdi->scratch_quad_bmp = CreateDIBSection(gdi->memDC, &bmi,
          DIB_RGB_COLORS, &pixels, NULL, 0);
@@ -419,13 +435,21 @@ static bool gdi_ensure_scratch_rgui(gdi_t *gdi, unsigned w, unsigned h)
    gdi->scratch_rgui_pixels = NULL;
    gdi->scratch_rgui_dims = 0;
 
-   memset(&bmi, 0, sizeof(bmi));
-   bmi.bmiHeader.biSize        = sizeof(BITMAPINFOHEADER);
-   bmi.bmiHeader.biWidth       = (LONG)w;
-   bmi.bmiHeader.biHeight      = -(LONG)h;
-   bmi.bmiHeader.biPlanes      = 1;
-   bmi.bmiHeader.biBitCount    = 32;
-   bmi.bmiHeader.biCompression = BI_RGB;
+   bmi.bmiHeader.biSize          = sizeof(BITMAPINFOHEADER);
+   bmi.bmiHeader.biWidth         = (LONG)w;
+   bmi.bmiHeader.biHeight        = -(LONG)h;
+   bmi.bmiHeader.biPlanes        = 1;
+   bmi.bmiHeader.biBitCount      = 32;
+   bmi.bmiHeader.biCompression   = BI_RGB;
+   bmi.bmiHeader.biSizeImage     = 0;
+   bmi.bmiHeader.biXPelsPerMeter = 0;
+   bmi.bmiHeader.biYPelsPerMeter = 0;
+   bmi.bmiHeader.biClrUsed       = 0;
+   bmi.bmiHeader.biClrImportant  = 0;
+   bmi.bmiColors[0].rgbBlue      = 0;
+   bmi.bmiColors[0].rgbGreen     = 0;
+   bmi.bmiColors[0].rgbRed       = 0;
+   bmi.bmiColors[0].rgbReserved  = 0;
 
    gdi->scratch_rgui_bmp = CreateDIBSection(gdi->memDC, &bmi,
          DIB_RGB_COLORS, &pixels, NULL, 0);
@@ -461,13 +485,21 @@ static bool gdi_ensure_scratch_1x1(gdi_t *gdi)
    if (gdi->scratch_1x1_bmp && gdi->scratch_1x1_pixels)
       return true;
 
-   memset(&bmi, 0, sizeof(bmi));
-   bmi.bmiHeader.biSize        = sizeof(BITMAPINFOHEADER);
-   bmi.bmiHeader.biWidth       = 1;
-   bmi.bmiHeader.biHeight      = -1;
-   bmi.bmiHeader.biPlanes      = 1;
-   bmi.bmiHeader.biBitCount    = 32;
-   bmi.bmiHeader.biCompression = BI_RGB;
+   bmi.bmiHeader.biSize          = sizeof(BITMAPINFOHEADER);
+   bmi.bmiHeader.biWidth         = 1;
+   bmi.bmiHeader.biHeight        = -1;
+   bmi.bmiHeader.biPlanes        = 1;
+   bmi.bmiHeader.biBitCount      = 32;
+   bmi.bmiHeader.biCompression   = BI_RGB;
+   bmi.bmiHeader.biSizeImage     = 0;
+   bmi.bmiHeader.biXPelsPerMeter = 0;
+   bmi.bmiHeader.biYPelsPerMeter = 0;
+   bmi.bmiHeader.biClrUsed       = 0;
+   bmi.bmiHeader.biClrImportant  = 0;
+   bmi.bmiColors[0].rgbBlue      = 0;
+   bmi.bmiColors[0].rgbGreen     = 0;
+   bmi.bmiColors[0].rgbRed       = 0;
+   bmi.bmiColors[0].rgbReserved  = 0;
 
    gdi->scratch_1x1_bmp = CreateDIBSection(gdi->memDC, &bmi,
          DIB_RGB_COLORS, &pixels, NULL, 0);
@@ -982,13 +1014,21 @@ static bool gdi_texture_realize(gdi_t *gdi, gdi_texture_t *texture)
    if (!gdi || !gdi->memDC)
       return false;
 
-   memset(&bmi, 0, sizeof(bmi));
-   bmi.bmiHeader.biSize        = sizeof(BITMAPINFOHEADER);
-   bmi.bmiHeader.biWidth       =  (LONG)VIDEO_SCALE_W(texture->dims);
-   bmi.bmiHeader.biHeight      = -(LONG)VIDEO_SCALE_H(texture->dims);
-   bmi.bmiHeader.biPlanes      = 1;
-   bmi.bmiHeader.biBitCount    = 32;
-   bmi.bmiHeader.biCompression = BI_RGB;
+   bmi.bmiHeader.biSize          = sizeof(BITMAPINFOHEADER);
+   bmi.bmiHeader.biWidth         = (LONG)VIDEO_SCALE_W(texture->dims);
+   bmi.bmiHeader.biHeight        = -(LONG)VIDEO_SCALE_H(texture->dims);
+   bmi.bmiHeader.biPlanes        = 1;
+   bmi.bmiHeader.biBitCount      = 32;
+   bmi.bmiHeader.biCompression   = BI_RGB;
+   bmi.bmiHeader.biSizeImage     = 0;
+   bmi.bmiHeader.biXPelsPerMeter = 0;
+   bmi.bmiHeader.biYPelsPerMeter = 0;
+   bmi.bmiHeader.biClrUsed       = 0;
+   bmi.bmiHeader.biClrImportant  = 0;
+   bmi.bmiColors[0].rgbBlue      = 0;
+   bmi.bmiColors[0].rgbGreen     = 0;
+   bmi.bmiColors[0].rgbRed       = 0;
+   bmi.bmiColors[0].rgbReserved  = 0;
 
    bmp = CreateDIBSection(gdi->memDC, &bmi, DIB_RGB_COLORS,
          &pixels, NULL, 0);
@@ -1668,13 +1708,21 @@ static bool gdi_font_upload_atlas(gdi_raster_t *font)
          font->atlas_pixels = NULL;
       }
 
-      memset(&bmi, 0, sizeof(bmi));
-      bmi.bmiHeader.biSize        = sizeof(BITMAPINFOHEADER);
-      bmi.bmiHeader.biWidth       = (LONG)font->atlas->width;
-      bmi.bmiHeader.biHeight      = -(LONG)font->atlas->height;
-      bmi.bmiHeader.biPlanes      = 1;
-      bmi.bmiHeader.biBitCount    = 32;
-      bmi.bmiHeader.biCompression = BI_RGB;
+      bmi.bmiHeader.biSize          = sizeof(BITMAPINFOHEADER);
+      bmi.bmiHeader.biWidth         = (LONG)font->atlas->width;
+      bmi.bmiHeader.biHeight        = -(LONG)font->atlas->height;
+      bmi.bmiHeader.biPlanes        = 1;
+      bmi.bmiHeader.biBitCount      = 32;
+      bmi.bmiHeader.biCompression   = BI_RGB;
+      bmi.bmiHeader.biSizeImage     = 0;
+      bmi.bmiHeader.biXPelsPerMeter = 0;
+      bmi.bmiHeader.biYPelsPerMeter = 0;
+      bmi.bmiHeader.biClrUsed       = 0;
+      bmi.bmiHeader.biClrImportant  = 0;
+      bmi.bmiColors[0].rgbBlue      = 0;
+      bmi.bmiColors[0].rgbGreen     = 0;
+      bmi.bmiColors[0].rgbRed       = 0;
+      bmi.bmiColors[0].rgbReserved  = 0;
 
       font->atlas_bmp = CreateDIBSection(font->gdi->memDC, &bmi,
             DIB_RGB_COLORS, &pixels, NULL, 0);
@@ -1777,13 +1825,21 @@ static bool gdi_font_ensure_scratch(gdi_raster_t *font,
     * clamp still leaves it at or above the size asked for. */
    font->scratch_dims = VIDEO_SCALE_PACK(sw, sh);
 
-   memset(&bmi, 0, sizeof(bmi));
-   bmi.bmiHeader.biSize        = sizeof(BITMAPINFOHEADER);
-   bmi.bmiHeader.biWidth       =  (LONG)VIDEO_SCALE_W(font->scratch_dims);
-   bmi.bmiHeader.biHeight      = -(LONG)VIDEO_SCALE_H(font->scratch_dims);
-   bmi.bmiHeader.biPlanes      = 1;
-   bmi.bmiHeader.biBitCount    = 32;
-   bmi.bmiHeader.biCompression = BI_RGB;
+   bmi.bmiHeader.biSize          = sizeof(BITMAPINFOHEADER);
+   bmi.bmiHeader.biWidth         = (LONG)VIDEO_SCALE_W(font->scratch_dims);
+   bmi.bmiHeader.biHeight        = -(LONG)VIDEO_SCALE_H(font->scratch_dims);
+   bmi.bmiHeader.biPlanes        = 1;
+   bmi.bmiHeader.biBitCount      = 32;
+   bmi.bmiHeader.biCompression   = BI_RGB;
+   bmi.bmiHeader.biSizeImage     = 0;
+   bmi.bmiHeader.biXPelsPerMeter = 0;
+   bmi.bmiHeader.biYPelsPerMeter = 0;
+   bmi.bmiHeader.biClrUsed       = 0;
+   bmi.bmiHeader.biClrImportant  = 0;
+   bmi.bmiColors[0].rgbBlue      = 0;
+   bmi.bmiColors[0].rgbGreen     = 0;
+   bmi.bmiColors[0].rgbRed       = 0;
+   bmi.bmiColors[0].rgbReserved  = 0;
 
    font->scratch_bmp = CreateDIBSection(font->gdi->memDC, &bmi,
          DIB_RGB_COLORS, &pixels, NULL, 0);
@@ -1890,7 +1946,7 @@ static bool gdi_font_get_line_metrics(void *data,
 static void gdi_font_render_line(
       gdi_raster_t *font, HDC dst_dc,
       const char *msg, size_t msg_len,
-      int line_x, int line_y, float scale,
+      int line_x, int line_y, float scale, float scale_x,
       enum text_alignment text_align,
       uint8_t r, uint8_t g, uint8_t b, uint8_t a,
       int viewport_width, int viewport_height)
@@ -1964,13 +2020,31 @@ static void gdi_font_render_line(
 
 #define FONT_LAYOUT_ALIGNED (!plain_white \
       || text_align == TEXT_ALIGN_RIGHT || text_align == TEXT_ALIGN_CENTER)
+/* A glyph cached mid-line lands in the atlas after the line's upload:
+ * it goes into the mirror before it is drawn, the mirror deselected
+ * while it may be made again. Without one, untinted text stops. */
+#define FONT_LAYOUT_DIRTY(gl) \
+   do \
+   { \
+      (void)(gl); \
+      if (font->atlas->dirty) \
+      { \
+         SelectObject(atlas_dc, atlas_old); \
+         gdi_font_upload_atlas(font); \
+         font->atlas->dirty = false; \
+         if (font->atlas_bmp && font->atlas_pixels) \
+            SelectObject(atlas_dc, font->atlas_bmp); \
+         else if (plain_white) \
+            line_ok = false; \
+      } \
+   } while (0)
 #define FONT_LAYOUT_LINE(line, line_width, count, bytes) \
    do \
    { \
       (void)(line); \
       (void)(count); \
       (void)(bytes); \
-      line_w = (int)((line_width) * scale); \
+      line_w = (int)((line_width) * scale_x); \
       if (text_align == TEXT_ALIGN_RIGHT) \
          line_x -= line_w; \
       else if (text_align == TEXT_ALIGN_CENTER) \
@@ -2008,11 +2082,11 @@ static void gdi_font_render_line(
       if (plain_white) \
       { \
          int gx, gy, gw, gh; \
-         gw = (int)((float)VIDEO_SCALE_W((gl)->dims) * scale); \
+         gw = (int)((float)VIDEO_SCALE_W((gl)->dims) * scale_x); \
          gh = (int)((float)VIDEO_SCALE_H((gl)->dims) * scale); \
          if (gw > 0 && gh > 0) \
          { \
-            gx = line_x + x_offset + (int)((float)(gl)->draw_offset_x * scale); \
+            gx = line_x + x_offset + (int)((float)(gl)->draw_offset_x * scale_x); \
             gy = line_y           + (int)((float)(gl)->draw_offset_y * scale); \
             AlphaBlend(dst_dc, gx, gy, gw, gh, \
                   atlas_dc, \
@@ -2025,9 +2099,9 @@ static void gdi_font_render_line(
       { \
          int gx_dst, gy_dst, gw, gh; \
          int gx_src, gy_src; \
-         gw     = (int)((float)VIDEO_SCALE_W((gl)->dims) * scale); \
+         gw     = (int)((float)VIDEO_SCALE_W((gl)->dims) * scale_x); \
          gh     = (int)((float)VIDEO_SCALE_H((gl)->dims) * scale); \
-         gx_dst = x_offset + (int)((float)(gl)->draw_offset_x * scale); \
+         gx_dst = x_offset + (int)((float)(gl)->draw_offset_x * scale_x); \
          gy_dst = (metrics ? (int)(metrics->ascender * scale + 0.5f) : 0) \
                 + (int)((float)(gl)->draw_offset_y * scale); \
          gx_src = (int)VIDEO_SCALE_W((gl)->atlas_pos); \
@@ -2085,7 +2159,7 @@ static void gdi_font_render_line(
             } \
          } \
       } \
-      x_offset += (int)((float)(gl)->advance_x * scale); \
+      x_offset += (int)((float)(gl)->advance_x * scale_x); \
    } while (0)
 #define FONT_LAYOUT_LINE_END() \
    do \
@@ -2128,7 +2202,7 @@ static void gdi_font_render_line(
  * text run, with its top-left at (pixel_x, pixel_y). */
 static void gdi_font_render_runs(gdi_raster_t *font, HDC dst_dc,
       const char *line, size_t line_len, int pixel_x, int pixel_y,
-      float scale, enum text_alignment text_align,
+      float scale, float x_scale, enum text_alignment text_align,
       int drop_x, int drop_y, float drop_mod, float drop_alpha,
       unsigned r, unsigned g, unsigned b, unsigned a,
       unsigned width, unsigned height)
@@ -2149,13 +2223,14 @@ static void gdi_font_render_runs(gdi_raster_t *font, HDC dst_dc,
       /* params->drop_y in the GL/D3D drivers is "up", we want
        * "down" on a top-down surface, so subtract. */
       gdi_font_render_line(font, dst_dc, line, line_len,
-            pixel_x + drop_x, pixel_y - drop_y, scale, text_align,
+            pixel_x + (int)(drop_x * x_scale), pixel_y - drop_y,
+            scale, scale * x_scale, text_align,
             (uint8_t)dr, (uint8_t)dg, (uint8_t)db, (uint8_t)da,
             (int)width, (int)height);
    }
 
    gdi_font_render_line(font, dst_dc, line, line_len,
-         pixel_x, pixel_y, scale, text_align,
+         pixel_x, pixel_y, scale, scale * x_scale, text_align,
          (uint8_t)r, (uint8_t)g, (uint8_t)b, (uint8_t)a,
          (int)width, (int)height);
 }
@@ -2265,7 +2340,8 @@ static void gdi_font_render_msg(
 #define FONT_LAYOUT_ALIGNED 0
 #define FONT_LAYOUT_SKIP(line, bytes) \
       (gdi_font_render_runs(font, dst_dc, fl_m, (bytes), pixel_x, \
-            pixel_y + (line) * line_h, scale, text_align, drop_x, drop_y, \
+            pixel_y + (line) * line_h, scale, rp.x_scale, text_align, \
+            drop_x, drop_y, \
             drop_mod, drop_alpha, r, g, b, a, width, height), 1)
 #define FONT_LAYOUT_LINE(line, line_width, count, bytes) \
       do \
@@ -2539,13 +2615,21 @@ static bool gdi_views_target_make(gdi_t *gdi, struct gdi_views_dib *t,
 {
    BITMAPINFO bmi;
    void *pixels = NULL;
-   memset(&bmi, 0, sizeof(bmi));
-   bmi.bmiHeader.biSize        = sizeof(BITMAPINFOHEADER);
-   bmi.bmiHeader.biWidth       =  (LONG)VIDEO_SCALE_W(dims);
-   bmi.bmiHeader.biHeight      = -(LONG)VIDEO_SCALE_H(dims);
-   bmi.bmiHeader.biPlanes      = 1;
-   bmi.bmiHeader.biBitCount    = 32;
-   bmi.bmiHeader.biCompression = BI_RGB;
+   bmi.bmiHeader.biSize          = sizeof(BITMAPINFOHEADER);
+   bmi.bmiHeader.biWidth         = (LONG)VIDEO_SCALE_W(dims);
+   bmi.bmiHeader.biHeight        = -(LONG)VIDEO_SCALE_H(dims);
+   bmi.bmiHeader.biPlanes        = 1;
+   bmi.bmiHeader.biBitCount      = 32;
+   bmi.bmiHeader.biCompression   = BI_RGB;
+   bmi.bmiHeader.biSizeImage     = 0;
+   bmi.bmiHeader.biXPelsPerMeter = 0;
+   bmi.bmiHeader.biYPelsPerMeter = 0;
+   bmi.bmiHeader.biClrUsed       = 0;
+   bmi.bmiHeader.biClrImportant  = 0;
+   bmi.bmiColors[0].rgbBlue      = 0;
+   bmi.bmiColors[0].rgbGreen     = 0;
+   bmi.bmiColors[0].rgbRed       = 0;
+   bmi.bmiColors[0].rgbReserved  = 0;
    if (     gdi->memDC
          && (t->bmp = CreateDIBSection(gdi->memDC, &bmi, DIB_RGB_COLORS,
                &pixels, NULL, 0))
@@ -2617,16 +2701,9 @@ static bool gdi_views_ui_wanted(gdi_t *gdi, video_frame_info_t *video_info,
    bool ui;
    bool per_eye = video_views_ui_per_eye(&video_info->views,
          &video_info->views_layout, true);
-   /* No directive inside the macro's arguments: MSVC's preprocessor
-    * takes it as tokens. */
-#ifdef HAVE_GFX_WIDGETS
    ui = VIDEO_VIEWS_UI_WANTED(per_eye, gdi->menu_enable, msg,
          video_info->statistics_show,
-         video_info->widgets_active && gfx_widgets_visible(video_info));
-#else
-   ui = VIDEO_VIEWS_UI_WANTED(per_eye, gdi->menu_enable, msg,
-         video_info->statistics_show, false);
-#endif
+         video_info->widgets_visible);
 #ifdef HAVE_MENU
    ui = ui || (per_eye
          && (video_info->menu_st_flags & MENU_ST_FLAG_ALIVE));
@@ -3443,13 +3520,21 @@ static bool gdi_frame(void *data, const void *frame,
           * actually committed to the underlying pixel buffer.
           * Without this, sporadic missing-draw artifacts. */
          BITMAPINFO bmi;
-         memset(&bmi, 0, sizeof(bmi));
-         bmi.bmiHeader.biSize        = sizeof(BITMAPINFOHEADER);
-         bmi.bmiHeader.biWidth       = (LONG)surface_width;
-         bmi.bmiHeader.biHeight      = -(LONG)surface_height;
-         bmi.bmiHeader.biPlanes      = 1;
-         bmi.bmiHeader.biBitCount    = 32;
-         bmi.bmiHeader.biCompression = BI_RGB;
+         bmi.bmiHeader.biSize          = sizeof(BITMAPINFOHEADER);
+         bmi.bmiHeader.biWidth         = (LONG)surface_width;
+         bmi.bmiHeader.biHeight        = -(LONG)surface_height;
+         bmi.bmiHeader.biPlanes        = 1;
+         bmi.bmiHeader.biBitCount      = 32;
+         bmi.bmiHeader.biCompression   = BI_RGB;
+         bmi.bmiHeader.biSizeImage     = 0;
+         bmi.bmiHeader.biXPelsPerMeter = 0;
+         bmi.bmiHeader.biYPelsPerMeter = 0;
+         bmi.bmiHeader.biClrUsed       = 0;
+         bmi.bmiHeader.biClrImportant  = 0;
+         bmi.bmiColors[0].rgbBlue      = 0;
+         bmi.bmiColors[0].rgbGreen     = 0;
+         bmi.bmiColors[0].rgbRed       = 0;
+         bmi.bmiColors[0].rgbReserved  = 0;
 
          GdiFlush();
          SetDIBitsToDevice(gdi->winDC,
@@ -4082,13 +4167,21 @@ static bool gdi_overlay_load(void *data,
       if (w == 0 || h == 0 || !imgs[i].pixels)
          continue;
 
-      memset(&bmi, 0, sizeof(bmi));
-      bmi.bmiHeader.biSize        = sizeof(BITMAPINFOHEADER);
-      bmi.bmiHeader.biWidth       = (LONG)w;
-      bmi.bmiHeader.biHeight      = -(LONG)h; /* top-down */
-      bmi.bmiHeader.biPlanes      = 1;
-      bmi.bmiHeader.biBitCount    = 32;
-      bmi.bmiHeader.biCompression = BI_RGB;
+      bmi.bmiHeader.biSize          = sizeof(BITMAPINFOHEADER);
+      bmi.bmiHeader.biWidth         = (LONG)w;
+      bmi.bmiHeader.biHeight        = -(LONG)h; /* top-down */
+      bmi.bmiHeader.biPlanes        = 1;
+      bmi.bmiHeader.biBitCount      = 32;
+      bmi.bmiHeader.biCompression   = BI_RGB;
+      bmi.bmiHeader.biSizeImage     = 0;
+      bmi.bmiHeader.biXPelsPerMeter = 0;
+      bmi.bmiHeader.biYPelsPerMeter = 0;
+      bmi.bmiHeader.biClrUsed       = 0;
+      bmi.bmiHeader.biClrImportant  = 0;
+      bmi.bmiColors[0].rgbBlue      = 0;
+      bmi.bmiColors[0].rgbGreen     = 0;
+      bmi.bmiColors[0].rgbRed       = 0;
+      bmi.bmiColors[0].rgbReserved  = 0;
 
       bmp = CreateDIBSection(gdi->memDC ? gdi->memDC : NULL,
             &bmi, DIB_RGB_COLORS, &bits, NULL, 0);

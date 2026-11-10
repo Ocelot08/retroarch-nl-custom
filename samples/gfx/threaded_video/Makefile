@@ -55,19 +55,25 @@ check: all
 # is no X and the desktop is always there.
 # Under a sanitizer (SAN=thread or SAN=address, matching the tree's
 # build) the uninstrumented layer and ICD are suppressed through
-# tsan-vulkan.supp / ubsan-vulkan.supp; frontend reports still fail.
+# tsan-vulkan.supp; frontend reports still fail.
+# EXPECT_LOG names a string the log must contain, FORBID_LOG one it
+# must not, or the run fails.
 check-vulkan: all
 	@if [ -z "$$DISPLAY" ] && [ "$${OS:-}" != Windows_NT ]; then echo "check-vulkan: no DISPLAY, skipping"; exit 77; fi; \
-	 HARNESS_VIDEO_DRIVER=vulkan HARNESS_VERBOSE=1 \
+	 HARNESS_VIDEO_DRIVER=vulkan HARNESS_VERBOSE=1 HARNESS_MENU_UPSCALE=2 \
 	 ASAN_OPTIONS=detect_leaks=0:abort_on_error=1 \
-	 UBSAN_OPTIONS=print_stacktrace=1:halt_on_error=1:suppressions=ubsan-vulkan.supp \
+	 UBSAN_OPTIONS=print_stacktrace=1:halt_on_error=1 \
 	 TSAN_OPTIONS=halt_on_error=1:second_deadlock_stack=1:suppressions=tsan-vulkan.supp \
 	 ./$(TARGET) $(CYCLES) > check.log 2>&1; rc=$$?; \
 	 grep -E '\[pass\]|\[baseline\]|\[info\]|\[skip\]|FAIL|all lanes|Validation Error' check.log | grep -v 'XFree86-VidMode'; \
 	 if [ $$rc -ne 0 ]; then grep -vE '^\[(INFO|DEBUG|WARN)\]|XFree86-VidMode' check.log; fi; \
 	 errs=$$(grep -c 'Validation Error' check.log); \
+	 seen=1; if [ -n "$(EXPECT_LOG)" ]; then grep -F "$(EXPECT_LOG)" check.log || seen=0; fi; \
+	 forbid=0; if [ -n "$(FORBID_LOG)" ]; then grep -F "$(FORBID_LOG)" check.log && forbid=1; fi; \
 	 rm -f check.log; \
 	 if [ "$$errs" != "0" ]; then echo "check-vulkan: $$errs validation error(s)"; exit 1; fi; \
+	 if [ "$$seen" = 0 ]; then echo "check-vulkan: the log never said \"$(EXPECT_LOG)\""; exit 1; fi; \
+	 if [ "$$forbid" = 1 ]; then echo "check-vulkan: the log said \"$(FORBID_LOG)\""; exit 1; fi; \
 	 exit $$rc
 
 # check-vulkan with a layer between the driver and the ICD that
@@ -134,6 +140,38 @@ check-vulkan-mapfail: all $(FR_LIB) fake_rebar_layer.json
 	 if [ "$$refused" = 0 ]; then echo "check-vulkan-mapfail: no map was refused"; exit 1; fi; \
 	 echo "check-vulkan-mapfail: $$refused buffer maps refused, every lane passed"
 
+# check-vulkan through the same layer reporting a unified-memory device
+# whose cached host-visible memory is not coherent
+# (FAKE_REBAR_NONCOHERENT=1), with every linear image bound 4 KiB into
+# its memory (FAKE_REBAR_IMAGE_PAD) and every allocation a whole number
+# of pages: the driver's flushes and invalidates of its staging,
+# streamed, font and readback memory run, and the validation layer
+# fails a range outside the mapping or a whole-size range that cannot
+# end where it does. With either core
+# format every lane must pass and CPU-written textures must land in
+# the non-coherent type; with XRGB8888 frame textures must be linear
+# images there, bound past offset 0.
+check-vulkan-noncoherent: all $(FR_LIB) fake_rebar_layer.json
+	@for run in 565 xrgb; do \
+	    case $$run in xrgb) xrgb=1;; *) xrgb=;; esac; \
+	    echo "--- fake non-coherent memory, $$run"; \
+	    VK_ADD_LAYER_PATH=. VK_INSTANCE_LAYERS=VK_LAYER_RA_fake_rebar \
+	    FAKE_REBAR_NONCOHERENT=1 FAKE_REBAR_IMAGE_PAD=4096 \
+	    HARNESS_CORE_XRGB8888=$$xrgb \
+	    $(MAKE) -s --no-print-directory check-vulkan > noncoherent.log 2>&1; rc=$$?; \
+	    grep -E 'all lanes|FAIL|Validation|check-vulkan' noncoherent.log; \
+	    if [ $$rc -ne 0 ]; then cat noncoherent.log; rm -f noncoherent.log; exit $$rc; fi; \
+	    sums=$$(awk '/fake-rebar:/ { n++; nc += $$13; images += $$NF } \
+	                 /fake-rebar-pad:/ { pad += $$NF } \
+	                 END { print n + 0, nc + 0, images + 0, pad + 0 }' noncoherent.log); \
+	    rm -f noncoherent.log; \
+	    set -- $$sums; devices=$$1; nc=$$2; images=$$3; pad=$$4; \
+	    echo "check-vulkan-noncoherent: $$devices devices, $$nc allocations in non-coherent memory ($$images images), $$pad linear images bound past offset 0"; \
+	    if [ "$$devices" = 0 ]; then echo "check-vulkan-noncoherent: the layer did not load"; exit 1; fi; \
+	    if [ "$$nc" = 0 ]; then echo "check-vulkan-noncoherent: nothing in non-coherent memory"; exit 1; fi; \
+	    if [ -n "$$xrgb" ] && { [ "$$images" = 0 ] || [ "$$pad" = 0 ]; }; then echo "check-vulkan-noncoherent: no padded frame texture in non-coherent memory"; exit 1; fi; \
+	 done; echo "check-vulkan-noncoherent: passed"
+
 # The same lanes on any real driver named in DRIVER (gl, glcore, ...),
 # through whatever context the display offers - in CI, llvmpipe under
 # Xvfb with LIBGL_ALWAYS_SOFTWARE=1. No validation layer here: a
@@ -145,27 +183,63 @@ check-vulkan-mapfail: all $(FR_LIB) fake_rebar_layer.json
 # backtraces: a stack says which function stopped, not which access
 # did, and a release build on a runner is the only place some of these
 # crashes happen.
-RUNNER := $(if $(filter 1,$(GDB)),gdb -q -batch -return-child-result -ex run -ex 'printf "--- fault site ---\n"' -ex 'x/i $$pc' -ex 'info symbol $$pc' -ex 'info registers rax rbx rcx rdx rsi rdi' -ex 'x/4i $$pc-12' -ex 'thread apply all bt 25' --args,)
+DEBUGGER := gdb -q -batch -return-child-result -ex run -ex 'printf "--- fault site ---\n"' -ex 'x/i $$pc' -ex 'info symbol $$pc' -ex 'info registers rax rbx rcx rdx rsi rdi' -ex 'x/4i $$pc-12' -ex 'thread apply all bt 25' --args
+RUNNER := $(if $(filter 1,$(GDB)),$(DEBUGGER),)
+# GDB=on-failure preserves the native result and replays only for stacks.
 
 check-driver: all
 	@if [ -z "$$DISPLAY" ] && [ "$${OS:-}" != Windows_NT ] && [ "$$(uname -s)" != Darwin ]; then echo "check-driver: no DISPLAY, skipping"; exit 77; fi; \
 	 if [ -z "$(DRIVER)" ]; then echo "check-driver: DRIVER=<video driver> required"; exit 2; fi; \
 	 HARNESS_VIDEO_DRIVER=$(DRIVER) HARNESS_VERBOSE=1 \
 	 ASAN_OPTIONS=detect_leaks=0:abort_on_error=1 \
-	 UBSAN_OPTIONS=print_stacktrace=1:halt_on_error=1:suppressions=ubsan-vulkan.supp \
+	 UBSAN_OPTIONS=print_stacktrace=1:halt_on_error=1 \
 	 TSAN_OPTIONS=halt_on_error=1:second_deadlock_stack=1:suppressions=tsan-gl.supp \
 	 $(RUNNER) ./$(TARGET) $(CYCLES) > check.log 2>&1; rc=$$?; \
 	 grep -E '\[pass\]|FAIL|all lanes' check.log | grep -v 'XFree86-VidMode'; \
 	 if [ $$rc -ne 0 ]; then \
 	    grep -vE '^\[(INFO|DEBUG|WARN)\]|XFree86-VidMode' check.log; \
 	    echo "--- last 60 lines of the run log ---"; tail -60 check.log; \
+	    if [ "$(GDB)" = on-failure ]; then \
+	       HARNESS_VIDEO_DRIVER=$(DRIVER) HARNESS_VERBOSE=1 \
+	       ASAN_OPTIONS=detect_leaks=0:abort_on_error=1 \
+	       UBSAN_OPTIONS=print_stacktrace=1:halt_on_error=1 \
+	       TSAN_OPTIONS=halt_on_error=1:second_deadlock_stack=1:suppressions=tsan-gl.supp \
+	       $(DEBUGGER) ./$(TARGET) $(CYCLES) > debugger.log 2>&1; \
+	       cat debugger.log; \
+	    fi; \
+	 else \
+	    rm -f check.log; \
 	 fi; \
-	 rm -f check.log; \
 	 exit $$rc
+
+# Focused presentation checks with the shipping Vulkan renderer and wrapper.
+check-movie-gpu:
+	HARNESS_MOVIE_GPU_ONLY=1 $(MAKE) check-vulkan
+
+check-still:
+	HARNESS_STILL_ONLY=1 $(MAKE) check-driver
+
+# Native D3D11/D3D12 with an active HDR display; HDR10 and scRGB.
+check-hdr:
+	@set -eu; for mode in 1 2; do \
+	   HARNESS_HDR_MODE=$$mode $(MAKE) check-driver; \
+	done
 
 clean:
 	rm -f $(TARGET) check.log harness_core.so retroarch_nomain.o retroarch_nomain.d \
 	      harness_main.o harness_main.d harness_cocoa.o harness_cocoa.d default.metallib \
 	      rebar.log mapfail.log libfake_rebar_layer.so fake_rebar_layer.dll fake_rebar_layer.json
 
-.PHONY: all check check-vulkan check-vulkan-rebar check-vulkan-mapfail check-driver clean
+.PHONY: all check check-vulkan check-vulkan-rebar check-vulkan-mapfail check-vulkan-noncoherent check-driver check-movie-gpu check-still check-hdr clean
+
+# A multi-second movie fixture on a driver that can decode it.
+check-preview:
+	@test -n "$(PREVIEW_FILE)" || { echo "Set PREVIEW_FILE to a movie fixture"; exit 1; }
+	@HARNESS_PREVIEW_FILE="$(PREVIEW_FILE)" $(MAKE) check-driver
+
+.PHONY: check-preview
+
+check-pitch:
+	HARNESS_SURFACE_PITCH_ONLY=1 $(MAKE) check-driver
+
+.PHONY: check-pitch

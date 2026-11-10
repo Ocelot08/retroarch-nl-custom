@@ -610,7 +610,6 @@ void win32_get_video_size(void *data,
 static void win32_resize_after_display_change(HWND hwnd, HMONITOR monitor)
 {
    MONITORINFO info;
-   memset(&info, 0, sizeof(info));
    info.cbSize = sizeof(info);
    if (GetMonitorInfo(monitor, &info))
       SetWindowPos(hwnd, 0, 0, 0,
@@ -807,110 +806,106 @@ uint16_t win32_get_keyboard_mods(void)
 #define WM_EXITMENULOOP  0x0212
 #endif
 
-/* Title-bar drags, border resizes and menu bars run a modal loop inside
- * DefWindowProc that does not return until the user lets go. With
- * non-threaded video the run loop is on this thread, so content pauses
- * for the duration - that is the norm for a windowed game and is not
- * changed here. What is done: the audio driver is stopped so the sink
- * does not underrun and pop, and a plain timer keeps the last frame on
- * screen at the current window size. Nothing in here runs the run
- * loop, the menu, input or the task queue; running those nested inside
- * a captured-mouse modal loop is what 91920289 did and why it was
- * reverted.
- *
- * Size/move and menu loops can nest (system menu opened while sizing):
- * arm on the first entry, disarm on the last exit. One timer for the
- * process; the window that armed it owns it, so the companion and the
- * main window never kill each other's. */
-#define WIN32_SIZEMOVE_TIMER_ID 0x5241
+#include "win32_pump.h"
 
+static retro_atomic_int_t win32_modal_count = RETRO_ATOMIC_INT_INITIALIZER(0);
+
+#ifndef HAVE_THREADS
+static unsigned win32_modal_depth;
+static win32_pump_t win32_messages;
 static uint8_t win32_sizemove_depth;
-static bool    win32_sizemove_stopped_audio;
-/* The routed window changed size since the last present. A move never
- * invalidates the client area - the compositor keeps the last buffer -
- * so a plain drag presents nothing at all. */
-static bool    win32_sizemove_dirty;
-static HWND    win32_sizemove_timer_hwnd;
+static bool win32_sizemove_stopped_audio;
+#elif defined(_MSC_VER)
+static __declspec(thread) unsigned win32_modal_depth;
+static __declspec(thread) win32_pump_t win32_messages;
+static __declspec(thread) uint8_t win32_sizemove_depth;
+static __declspec(thread) bool win32_sizemove_stopped_audio;
+#else
+static __thread unsigned win32_modal_depth;
+static __thread win32_pump_t win32_messages;
+static __thread uint8_t win32_sizemove_depth;
+static __thread bool win32_sizemove_stopped_audio;
+#endif
+
+void win32_message_pump_free(void)
+{
+   if (win32_pump_free(&win32_messages) && win32_modal_depth)
+   {
+      retro_atomic_fetch_sub_int(&win32_modal_count, (int)win32_modal_depth);
+      win32_modal_depth = 0;
+   }
+}
+
+bool win32_message_pump(bool (*next)(void))
+{
+#ifdef HAVE_THREADS
+   if (!win32_messages.messages && !task_is_on_main_thread()
+         && !video_thread_host_set_cleanup(win32_message_pump_free))
+      return false;
+#endif
+   return win32_pump_run(&win32_messages, next);
+}
+
+bool win32_message_modal_active(void)
+{
+   return retro_atomic_load_acquire_int(&win32_modal_count) > 0;
+}
+
+bool win32_message_dispatching(void)
+{
+   return win32_pump_dispatching(&win32_messages);
+}
+
+bool win32_message_paint(HWND hwnd)
+{
+   return win32_pump_paint(&win32_messages, hwnd);
+}
 
 void win32_sizemove_enter(HWND hwnd)
 {
-   if (win32_sizemove_depth++)
+   win32_modal_depth++;
+   retro_atomic_fetch_add_int(&win32_modal_count, 1);
+   if (win32_pump_enter(&win32_messages, hwnd))
       return;
-   /* The window lives on the video thread; the run loop is elsewhere
-    * and keeps going on its own. */
-   if (video_driver_is_threaded())
+   if (win32_sizemove_depth++ || video_driver_is_threaded())
       return;
-
-   /* A user who pressed P already stopped the driver and must not get
-    * it restarted on release. audio_driver_stop() returns false when
-    * the driver is not alive, so the latch is a real transition. */
    win32_sizemove_stopped_audio = false;
    if (!(runloop_state_get_ptr()->flags & RUNLOOP_FLAG_PAUSED))
       win32_sizemove_stopped_audio = audio_driver_stop();
-
-   win32_sizemove_dirty = false;
-   if (SetTimer(hwnd, WIN32_SIZEMOVE_TIMER_ID, 16, NULL))
-      win32_sizemove_timer_hwnd = hwnd;
 }
 
 void win32_sizemove_exit(HWND hwnd)
 {
    (void)hwnd;
-   if (!win32_sizemove_depth || --win32_sizemove_depth)
-      return;
-   if (video_driver_is_threaded())
-      return;
-
-   if (win32_sizemove_timer_hwnd)
+   if (win32_modal_depth)
    {
-      KillTimer(win32_sizemove_timer_hwnd, WIN32_SIZEMOVE_TIMER_ID);
-      win32_sizemove_timer_hwnd = NULL;
+      win32_modal_depth--;
+      retro_atomic_fetch_sub_int(&win32_modal_count, 1);
    }
-   /* A failed start clears AUDIO_FLAG_ACTIVE for the session; say so. */
+   if (win32_messages.depth)
+   {
+      win32_pump_leave(&win32_messages);
+      return;
+   }
+   if (!win32_sizemove_depth || --win32_sizemove_depth
+         || video_driver_is_threaded())
+      return;
    if (win32_sizemove_stopped_audio && !audio_driver_start(false))
       RARCH_WARN("[Win32] Audio did not restart after a window size/move.\n");
    win32_sizemove_stopped_audio = false;
 }
 
-/* A routed window is going away mid-drag. No audio restart: the driver
- * may already be gone, and audio_driver_start() failing mutes the
- * session. */
-void win32_sizemove_abort(void)
+void win32_sizemove_abort(HWND hwnd)
 {
-   if (win32_sizemove_timer_hwnd)
-      KillTimer(win32_sizemove_timer_hwnd, WIN32_SIZEMOVE_TIMER_ID);
-   win32_sizemove_timer_hwnd    = NULL;
+   if ((win32_messages.modal_window == hwnd || win32_sizemove_depth)
+         && win32_modal_depth)
+   {
+      retro_atomic_fetch_sub_int(&win32_modal_count, (int)win32_modal_depth);
+      win32_modal_depth = 0;
+   }
+   win32_pump_abort(&win32_messages, hwnd);
    win32_sizemove_depth         = 0;
    win32_sizemove_stopped_audio = false;
-   win32_sizemove_dirty         = false;
-}
-
-/* WM_TIMER with WIN32_SIZEMOVE_TIMER_ID, delivered on the thread that
- * owns the window, which is the thread that created the driver: the
- * video thread when video is threaded, the run loop's otherwise.
- * Either way the two calls below land on the thread that may touch
- * the driver, and video_thread_frame() takes its direct path when it
- * finds itself already on the video thread. Presents only after a resize: with vsync on, a
- * present blocks for a refresh, and one per tick starved the modal
- * loop on D3D12 and Vulkan (drag lagged the mouse, picture refreshed
- * late). Then the same two calls the run loop makes per frame and
- * nothing else: the driver's alive() is where win32_check_window()
- * consumes WIN32_CMN_FLAG_RESIZED and arms the swapchain resize, and
- * video_driver_cached_frame() then presents the last frame into the
- * resized chain - the pause picture. current_video and data have
- * independent lifetimes during teardown, hence both checks. */
-void win32_sizemove_tick(void)
-{
-   video_driver_state_t *video_st = video_state_get_ptr();
-
-   if (!win32_sizemove_depth)
-      return;
-   if (!win32_sizemove_dirty)
-      return;
-   win32_sizemove_dirty = false;
-   if (video_st->current_video && video_st->data)
-      video_st->current_video->alive(video_st->data);
-   video_driver_cached_frame();
 }
 
 /* Older SDK headers stop short of the resume notification. */
@@ -997,18 +992,14 @@ static LRESULT CALLBACK wnd_proc_common(
              * WM_CHAR and WM_KEYDOWN properly.
              */
             input_keyboard_event(true, RETROK_UNKNOWN,
-                  wparam, mod, RETRO_DEVICE_KEYBOARD);
+                  (uint32_t)wparam, mod, RETRO_DEVICE_KEYBOARD);
          }
          return TRUE;
       case WM_CLOSE:
       case WM_DESTROY:
       case WM_QUIT:
-         /* a window that was left up for a driver that did not take
-          * it, being taken down */
-         if (hwnd && hwnd == win32_retiring_hwnd)
-            break;
 #if !defined(_XBOX)
-         win32_sizemove_abort();
+         win32_sizemove_abort(hwnd);
 #endif
          g_win32_flags |= WIN32_CMN_FLAG_QUIT;
          *quit          = true;
@@ -1051,12 +1042,7 @@ static LRESULT CALLBACK wnd_proc_common(
             *quit = true;
             return 0;
          }
-         /* Someone else's timer falls through to DefWindowProc. */
-         if (wparam != WIN32_SIZEMOVE_TIMER_ID)
-            break;
-         win32_sizemove_tick();
-         *quit = true;
-         return 0;
+         break;
 #endif
       case WM_SIZE:
          /* Do not send resize message if we minimize. */
@@ -1069,9 +1055,6 @@ static LRESULT CALLBACK wnd_proc_common(
                g_win32_resize_width  = LOWORD(lparam);
                g_win32_resize_height = HIWORD(lparam);
                g_win32_flags        |= WIN32_CMN_FLAG_RESIZED;
-#if !defined(_XBOX)
-               win32_sizemove_dirty  = true;
-#endif
             }
          }
          *quit = true;
@@ -1430,24 +1413,17 @@ static LRESULT win32_wnd_proc_route(HWND hwnd,
    /* The focus lost by a window that is no longer the main window.
     *
     * The input driver keeps one focus for the process, and the mouse
-    * is clipped for the process: both go by the main window. A window
-    * that has been replaced still loses the focus, and can lose it
-    * after its replacement has gained it - the loss would then clear
-    * the driver's focus and the keyboard would be dead until the next
-    * Alt-Tab. Two ways that happens:
-    *
-    * - A window left up for a driver that did not take it loses the
-    *   focus as it is destroyed (win32_retiring_hwnd).
-    * - Threaded video turned on or off moves the window to another
-    *   thread: the new window is another thread's, and the old one is
-    *   told it lost the focus through its own thread's queue, which
-    *   that thread gets to after the new window is up.
-    *
-    * Neither is the process losing the focus, and neither is passed
-    * on. If the focus does leave, the main window is told so itself. */
+    * is clipped for the process: both go by the main window. Threaded
+    * video turned on or off moves the window to another thread: the
+    * new window is another thread's, and the old one is told it lost
+    * the focus through its own thread's queue, which that thread gets
+    * to after the new window is up - the loss would then clear the
+    * driver's focus and the keyboard would be dead until the next
+    * Alt-Tab. That is not the process losing the focus, and it is not
+    * passed on. If the focus does leave, the main window is told so
+    * itself. */
    if (     message == WM_KILLFOCUS
-         && (   hwnd == win32_retiring_hwnd
-             || (main_window.hwnd && hwnd != main_window.hwnd)))
+         && main_window.hwnd && hwnd != main_window.hwnd)
       route &= ~(WIN32_ROUTE_INPUT | WIN32_ROUTE_CLIP_ON | WIN32_ROUTE_CLIP_OFF);
 
 #ifdef HAVE_CLIP_WINDOW
@@ -1456,9 +1432,7 @@ static LRESULT win32_wnd_proc_route(HWND hwnd,
       win32_clip_window((route & WIN32_ROUTE_CLIP_ON) != 0);
 #endif
 
-   /* Nothing from a window on its way out reaches the input driver. */
    if (     (route & WIN32_ROUTE_INPUT)
-         && hwnd != win32_retiring_hwnd
          && win32_wnd_input_message(message, wparam, lparam))
       return 0;
 
@@ -1648,6 +1622,14 @@ void win32_text_entry(bool active)
 LRESULT CALLBACK win32_window_proc(HWND hwnd, UINT message,
       WPARAM wparam, LPARAM lparam)
 {
+   /* A window left up for a driver that did not take it, being taken
+    * down: the main window's state, the input driver and the video
+    * driver are the next driver's, and what the desktop sends a
+    * window on its way out (its size, position, activation and focus)
+    * is none of theirs. */
+   if (hwnd == win32_retiring_hwnd)
+      return DefWindowProc(hwnd, message, wparam, lparam);
+
    if (message == WIN32_WM_TEXT_ENTRY)
    {
       win32_ime_sync(hwnd);
@@ -1683,6 +1665,9 @@ LRESULT CALLBACK win32_window_proc(HWND hwnd, UINT message,
       g_win32_flags |= WIN32_CMN_FLAG_INITED;
       return 0;
    }
+
+   if (message == WM_PAINT && win32_pump_paint(&win32_messages, hwnd))
+      return 0;
 
 #ifdef HAVE_GDI
    if (message == WM_PAINT && win32_wnd_family == WIN32_WINDOW_GDI)
@@ -1756,6 +1741,10 @@ void win32_window_proc_setup(enum win32_window_family family)
  * it now (win32_window_pixel_format_fits()); otherwise it goes and a
  * new one is made.
  *
+ * An OpenGL or Vulkan window also carries the way it is presented on,
+ * native or through DXGI, as its tag (win32_window_tag_presentation()):
+ * a window is not taken by a driver presenting the other way.
+ *
  * And for a Direct3D driver that has given its window a tag
  * (win32_window_tag()), which says two things: that it frees
  * everything it had on the window before it leaves it, and that it
@@ -1776,6 +1765,19 @@ static bool win32_window_pixel_format_fits(HWND hwnd);
 void win32_window_tag(const char *tag)
 {
    win32_wnd_tag = tag;
+}
+
+/* An OpenGL or Vulkan window that has carried a DXGI flip-model swap
+ * chain does not go back to the driver's own presentation, and one
+ * presented natively does not take a swap chain reliably either: the
+ * presentation path is part of what the window is. A driver of either
+ * family says which one it will use, and a kept window is taken only
+ * by a driver using the same one; changing the setting, or an
+ * override that changes it for one core, gets a new window. */
+void win32_window_tag_presentation(bool dxgi)
+{
+   static const char tag_dxgi[] = "dxgi";
+   win32_wnd_tag = dxgi ? tag_dxgi : NULL;
 }
 
 bool win32_window_was_taken(void)
@@ -1840,7 +1842,16 @@ bool win32_window_keep(void)
          return false;
    }
 
+   if (!win32_pump_cancel(&win32_messages))
+      return false;
    win32_monitor_last = MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST);
+#ifndef _XBOX
+   /* The next driver may not take it - another family, another
+    * thread - and the window that replaces it then has to be given
+    * the foreground it had: with the content chosen on a controller,
+    * Windows refuses it otherwise and the keyboard goes elsewhere. */
+   win32_foreground_note(hwnd);
+#endif
    win32_kept_hwnd    = hwnd;
    win32_kept_tid     = GetCurrentThreadId();
    win32_kept_family  = (int)win32_wnd_family;
@@ -2009,6 +2020,15 @@ static bool win32_window_create(void *data, unsigned style,
       win32_wnd_taken = true;
       free(title_local);
 
+      /* A window minimised has no client area, and the driver makes
+       * its surface for the one it finds below (a Vulkan swapchain is
+       * refused at 0x0): it is put back up first, as a new window
+       * would be shown, and before it is restyled - a style without
+       * WS_MINIMIZE on a window still minimised leaves the two out of
+       * step. */
+      if (IsIconic(hwnd))
+         ShowWindow(hwnd, SW_RESTORE);
+
       /* win32_set_window() gives a windowed window its menu again:
        * the same one, which is kept in the meantime */
       if (menu)
@@ -2067,10 +2087,11 @@ static bool win32_window_create(void *data, unsigned style,
    g_win32->taskbar_message            =
       RegisterWindowMessage("TaskbarButtonCreated");
 
-   memset(&notification_filter, 0, sizeof(notification_filter));
    notification_filter.dbcc_size       = sizeof(DEV_BROADCAST_DEVICEINTERFACE);
    notification_filter.dbcc_devicetype = DBT_DEVTYP_DEVICEINTERFACE;
    notification_filter.dbcc_classguid  = GUID_DEVINTERFACE_HID;
+   notification_filter.dbcc_reserved   = 0;
+   notification_filter.dbcc_name[0]    = 0;
    /* a window taken back is still registered */
    if (!reused)
       notification_handler             = RegisterDeviceNotification(
@@ -2192,7 +2213,6 @@ retro_time_t win32_dwm_last_vblank_time(void)
    if (!get_timing)
       return 0;
 
-   memset(&info, 0, sizeof(info));
    info.cbSize = sizeof(info);
    if (FAILED(get_timing(NULL, &info)))
       return 0;
@@ -2220,16 +2240,12 @@ bool win32_has_focus(void *data)
          && !settings->bools.video_fullscreen
          && !settings->bools.video_window_save_positions)
    {
-      unsigned video_scale        = settings->uints.video_scale;
       unsigned extra_width        = 0;
       unsigned extra_height       = 0;
       unsigned min_width          = 0;
       unsigned min_height         = 0;
 
       win32_get_av_info_geometry(&min_width, &min_height);
-
-      min_width                  *= video_scale;
-      min_height                 *= video_scale;
 
       if (settings->bools.video_window_show_decorations)
       {
@@ -2729,6 +2745,15 @@ static bool win32_window_change_fullscreen(unsigned dims, bool fullscreen,
       windowed_rect_of = hwnd;
    }
 
+   /* A fullscreen size of 0x0 means the monitor's own: the display
+    * mode asked for and the window put over it are the monitor's
+    * current size, as a driver starting up resolves it. */
+   if (fullscreen && (!width || !height))
+   {
+      width  = mon_rect.right  - mon_rect.left;
+      height = mon_rect.bottom - mon_rect.top;
+   }
+
    if (!win32_set_style(&current_mon, &hm_to_use, &width, &height,
             fullscreen, windowed_full, &rect, &mon_rect, &style))
       return false;
@@ -2939,12 +2964,18 @@ static int win32_try_scrgb_pixel_format(HDC target_hdc)
    int          result    = 0;
    static const char *probe_class = "RetroArch-WGL-Probe";
 
-   memset(&wc, 0, sizeof(wc));
    wc.cbSize        = sizeof(wc);
    wc.style         = CS_OWNDC;
    wc.lpfnWndProc   = DefWindowProcA;
    wc.hInstance     = GetModuleHandle(NULL);
    wc.lpszClassName = probe_class;
+   wc.cbClsExtra    = 0;
+   wc.cbWndExtra    = 0;
+   wc.hIcon         = NULL;
+   wc.hCursor       = NULL;
+   wc.hbrBackground = NULL;
+   wc.lpszMenuName  = NULL;
+   wc.hIconSm       = NULL;
 
    if (!RegisterClassExA(&wc))
       return 0;

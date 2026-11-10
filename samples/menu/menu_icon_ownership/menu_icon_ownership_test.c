@@ -29,7 +29,12 @@
  *               fallback icon and the core's own; both are freed at
  *               deinit.
  *
- * Usage: menu_icon_ownership_test ozone|xmb|materialui|contentless
+ *   rgui        The framebuffer RGUI uploads is held by the video
+ *               driver. A video reinit with the menu up starts a
+ *               driver without it, and nothing in the menu changes to
+ *               redraw it: the next upload must still reach the new one.
+ *
+ * Usage: menu_icon_ownership_test ozone|xmb|materialui|contentless|rgui
  *
  * Requires a completed non-Qt build, same as the other menu harnesses:
  *
@@ -55,6 +60,7 @@
 #include "../../../retroarch_types.h"
 #include "../../../menu/menu_driver.h"
 #include "../../../menu/menu_displaylist.h"
+#include "../../../gfx/gfx_display.h"
 #include "../../../gfx/video_driver.h"
 #include "../../../frontend/frontend_driver.h"
 
@@ -81,20 +87,22 @@ static unsigned  loads;
 static unsigned  unloads;
 static unsigned  unknown_unloads;
 
+/* Handles are never reused, so a texture drawn after it went cannot
+ * pass for one loaded since */
+static uintptr_t next_handle = 0x1000;
+
 static uintptr_t harness_load_texture(void *video_data, void *data,
       bool threaded, enum texture_filter_type filter_type)
 {
-   void *tex = malloc(16);
    (void)video_data;
    (void)data;
    (void)threaded;
    (void)filter_type;
-   if (!tex)
-      return 0;
+   next_handle += 0x10;
    if (live_count < LIVE_MAX)
-      live[live_count++] = (uintptr_t)tex;
+      live[live_count++] = next_handle;
    loads++;
-   return (uintptr_t)tex;
+   return next_handle;
 }
 
 static void harness_unload_texture(void *data, bool threaded, uintptr_t id)
@@ -110,12 +118,24 @@ static void harness_unload_texture(void *data, bool threaded, uintptr_t id)
       if (live[i] == id)
       {
          live[i] = live[--live_count];
-         free((void*)id);
          return;
       }
    }
    unknown_unloads++;
    fprintf(stderr, "unload of a handle not live: %p\n", (void*)id);
+}
+
+static unsigned frame_uploads;
+
+static void harness_set_texture_frame(void *data, const void *frame,
+      bool rgb32, unsigned dims, float alpha)
+{
+   (void)data;
+   (void)frame;
+   (void)rgb32;
+   (void)dims;
+   (void)alpha;
+   frame_uploads++;
 }
 
 static const video_poke_interface_t harness_poke = {
@@ -132,7 +152,7 @@ static const video_poke_interface_t harness_poke = {
    NULL, /* get_proc_address */
    NULL, /* set_aspect_ratio */
    NULL, /* apply_state_changes */
-   NULL, /* set_texture_frame */
+   harness_set_texture_frame,
    NULL, /* set_texture_enable */
    NULL, /* set_osd_msg */
    NULL, /* show_mouse */
@@ -157,6 +177,56 @@ static void harness_get_poke_interface(void *data,
    (void)data;
    *iface = &harness_poke;
 }
+
+/* --- the accounting display driver --------------------------------- */
+
+static unsigned live_draws;
+static unsigned dead_draws;
+
+static bool is_live(uintptr_t id)
+{
+   unsigned i;
+   for (i = 0; i < live_count; i++)
+      if (live[i] == id)
+         return true;
+   return false;
+}
+
+/* A draw names a texture the driver still has, or none */
+static void harness_draw(gfx_display_ctx_draw_t *draw,
+      void *data, unsigned video_dims)
+{
+   (void)data;
+   (void)video_dims;
+   if (!draw || !draw->texture)
+      return;
+   if (is_live(draw->texture))
+      live_draws++;
+   else
+   {
+      dead_draws++;
+      fprintf(stderr, "draw of a texture not live: %p\n",
+            (void*)draw->texture);
+   }
+}
+
+static gfx_display_ctx_driver_t harness_dispctx = {
+   harness_draw,
+   NULL, /* draw_pipeline */
+   NULL, /* blend_begin */
+   NULL, /* blend_end */
+   NULL, /* get_default_mvp */
+   NULL, /* get_default_vertices */
+   NULL, /* get_default_tex_coords */
+   NULL, /* font_backend */
+   GFX_VIDEO_DRIVER_GENERIC,
+   "harness",
+   false, /* handles_transform */
+   true,  /* handles_vertex_strip */
+   NULL, /* scissor_begin */
+   NULL, /* scissor_end */
+   NULL  /* mesh_draw */
+};
 
 /* --- the fixture --------------------------------------------------- */
 
@@ -206,6 +276,7 @@ static bool fixture_make(const char *menu_driver)
     * contentless lane runs on ozone */
    const char *ident = string_is_equal(menu_driver, "materialui") ? "glui"
          : string_is_equal(menu_driver, "contentless") ? "ozone"
+         : string_is_equal(menu_driver, "rgui") ? "rgui"
          : "xmb";
    if (string_is_equal(menu_driver, "ozone"))
       ident = "ozone";
@@ -248,6 +319,13 @@ static bool fixture_make(const char *menu_driver)
       unsigned i, j;
       fill_pathname_join_special(path, assets_dir, "ozone", sizeof(path));
       fill_pathname_join_special(png_dir, path, "png", sizeof(png_dir));
+      /* The logo the header falls back to */
+      if (!path_mkdir(png_dir))
+         return false;
+      fill_pathname_join_special(path, png_dir, "retroarch.png",
+            sizeof(path));
+      if (!write_file(path, png_1x1, sizeof(png_1x1)))
+         return false;
       for (i = 0; i < sizeof(themes) / sizeof(themes[0]); i++)
       {
          fill_pathname_join_special(theme_dir, png_dir, themes[i],
@@ -373,6 +451,7 @@ static void one_frame(void)
    video_driver_set_output_dims(VIDEO_SCALE_PACK(1280, 720));
    video_driver_build_info(&vinfo);
    vinfo.dims = VIDEO_SCALE_PACK(1280, 720);
+   disp_get_ptr()->dispctx = &harness_dispctx;
    menu_driver_frame(true, &vinfo);
    if (menu_st->driver_ctx && menu_st->driver_ctx->render)
       menu_st->driver_ctx->render(menu_st->userdata, vinfo.dims, false);
@@ -383,6 +462,21 @@ static void run_tasks(void)
    unsigned i;
    for (i = 0; i < 2000; i++)
       task_queue_check();
+}
+
+/* A context reset with no destroy before it loads the icon sets again
+ * into the surfaces they are in, which retire the textures they had:
+ * the header must not go on drawing the logo it was given before. */
+static void ozone_header_reset_test(struct menu_state *menu_st)
+{
+   unsigned had_live = live_draws;
+   one_frame();
+   CHECK(live_draws > had_live, "fixture: the menu drew no texture");
+   menu_st->driver_ctx->context_reset(menu_st->userdata, false);
+   run_tasks();
+   one_frame();
+   one_frame();
+   CHECK(dead_draws == 0, "%u draw(s) of a retired texture", dead_draws);
 }
 
 static void ozone_theme_cache_test(struct menu_state *menu_st)
@@ -449,9 +543,10 @@ int main(int argc, char *argv[])
    if (     !string_is_equal(menu_driver, "ozone")
          && !string_is_equal(menu_driver, "xmb")
          && !string_is_equal(menu_driver, "materialui")
-         && !string_is_equal(menu_driver, "contentless"))
+         && !string_is_equal(menu_driver, "contentless")
+         && !string_is_equal(menu_driver, "rgui"))
    {
-      fprintf(stderr, "usage: %s ozone|xmb|materialui|contentless\n",
+      fprintf(stderr, "usage: %s ozone|xmb|materialui|contentless|rgui\n",
             argv[0]);
       return 2;
    }
@@ -525,6 +620,19 @@ int main(int argc, char *argv[])
       run_tasks();
       one_frame();
    }
+   else if (string_is_equal(menu_driver, "rgui"))
+   {
+      unsigned had;
+      one_frame();
+      menu_st->driver_ctx->set_texture(menu_st->userdata);
+      driver_uninit(DRIVER_VIDEO_MASK, DRIVER_LIFETIME_RESET);
+      drivers_init(config_get_ptr(), DRIVER_VIDEO_MASK,
+            DRIVER_LIFETIME_RESET, false);
+      had = frame_uploads;
+      menu_st->driver_ctx->set_texture(menu_st->userdata);
+      CHECK(frame_uploads > had,
+            "the video driver made by the reinit never got the menu framebuffer");
+   }
    else
    {
       /* The first frame draws the sidebar with the playlist's icon
@@ -535,7 +643,12 @@ int main(int argc, char *argv[])
    }
 
    if (string_is_equal(menu_driver, "ozone"))
+   {
+      ozone_header_reset_test(menu_st);
       ozone_theme_cache_test(menu_st);
+   }
+
+   CHECK(dead_draws == 0, "%u draw(s) of a texture not live", dead_draws);
 
    CHECK(unknown_unloads == 0,
          "%u unload(s) of a handle that was not live before deinit",
@@ -549,7 +662,9 @@ int main(int argc, char *argv[])
    CHECK(live_count == 0,
          "%u texture(s) still live after deinit (%u loaded, %u unloaded)",
          live_count, loads, unloads);
-   CHECK(loads > 0, "fixture: the menu loaded no texture at all");
+   /* RGUI draws into its own framebuffer and loads none */
+   CHECK(loads > 0 || string_is_equal(menu_driver, "rgui"),
+         "fixture: the menu loaded no texture at all");
 
    fixture_remove();
 

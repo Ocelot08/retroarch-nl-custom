@@ -150,14 +150,15 @@ void win32_clip_window(bool grab);
 #endif
 
 #if !defined(_XBOX)
-/* Size/move and menu-loop handling for any window whose wndproc runs on
- * the run loop's thread: content pauses, audio is stopped cleanly and a
- * timer re-presents the last frame. See win32_common.c. */
-#define WIN32_SIZEMOVE_TIMER_ID 0x5241
+/* Yield native size/move and menu loops to their normal frame caller. */
 void win32_sizemove_enter(HWND hwnd);
 void win32_sizemove_exit(HWND hwnd);
-void win32_sizemove_tick(void);
-void win32_sizemove_abort(void);
+bool win32_message_pump(bool (*next)(void));
+bool win32_message_dispatching(void);
+bool win32_message_modal_active(void);
+bool win32_message_paint(HWND hwnd);
+void win32_message_pump_free(void);
+void win32_sizemove_abort(HWND hwnd);
 
 /* HID hotplug settle timer. WM_DEVICECHANGE arrives once per HID
  * interface, so one composite device (a headset with volume keys, a
@@ -207,6 +208,11 @@ void win32_window_release_kept(void);
  * by it: see win32_window_keep() in win32_common.c for what the driver
  * undertakes by it. */
 void win32_window_tag(const char *tag);
+
+/* Called after win32_window_proc_setup() by an OpenGL or Vulkan
+ * context: whether it presents through DXGI. A kept window is taken
+ * only by a driver presenting the same way. */
+void win32_window_tag_presentation(bool dxgi);
 
 /* True if the window win32_set_video_mode() gave this driver is one
  * the last driver left up. */

@@ -22,6 +22,8 @@
 
 harness_probe_t hp;
 
+int menu_driver_media_startup_token(void) { return 0; }
+
 /* ---- video driver ---- */
 bool video_driver_texture_load(void *data, unsigned filter_type,
       uintptr_t *id)
@@ -52,9 +54,9 @@ bool video_driver_texture_can_update(void) { return false; }
 int video_driver_texture_update(uintptr_t id, void *data)
 { (void)id; (void)data; return 0; }
 unsigned video_driver_get_disp_flags(void) { return 0; }
-void video_driver_get_video_output_size(unsigned *dims, char *d, size_t l)
-{ *dims = VIDEO_SCALE_PACK(1920, 1080); (void)d; (void)l; }
-void video_driver_get_viewport_info(void *vp) { (void)vp; }
+bool video_driver_get_video_output_size(unsigned *dims, char *d, size_t l)
+{ *dims = VIDEO_SCALE_PACK(1920, 1080); (void)d; (void)l; return true; }
+bool video_driver_get_viewport_info(void *vp) { (void)vp; return false; }
 void *video_state_get_ptr(void) { static char b[4096]; return b; }
 unsigned gfx_display_texture_filter(void) { return 0; }
 /* gfx_thumbnail_draw() reaches the display driver through this rather
@@ -188,6 +190,9 @@ static char g_menu_blob[65536];
 static char g_runloop_blob[1 << 18];
 void *menu_state_get_ptr(void) { return g_menu_blob; }
 void *runloop_state_get_ptr(void) { return g_runloop_blob; }
+/* No content switch, no content: what a menu without a core sees */
+bool runloop_is_content_switching(void) { return false; }
+bool runloop_content_loaded(void)       { return false; }
 
 /* A one-entry playlist, cached while a test holds it: the entry is laid
  * out by settings_layout_uut.c, which sees the UUT's struct layouts. */
@@ -208,6 +213,11 @@ int stub_playlist_entry_set(const char *savestate_dir, const char *entry_path)
          savestate_dir, entry_path);
    return g_playlist_entry != NULL;
 }
+/* The configured savestate folder (RARCH_DIR_SAVESTATE) */
+static char g_dir_savestate[256];
+void stub_dir_savestate_set(const char *d)
+{ snprintf(g_dir_savestate, sizeof(g_dir_savestate), "%s", d ? d : ""); }
+char *dir_get_ptr(unsigned t) { (void)t; return g_dir_savestate; }
 void runloop_path_set_redirect(void *a, char *b, char *c)
 { (void)a; (void)b; (void)c; }
 void dir_set(unsigned t, const char *p) { (void)t; (void)p; }
@@ -293,6 +303,8 @@ static size_t hp_alen, hp_aavail, hp_atell;
 static void *hp_aowner;
 static void (*hp_aownerfree)(void*);
 static int hp_alive;
+static audio_mixer_sound_t *hp_pcm_sound;
+static audio_mixer_voice_t *hp_pcm_voice;
 
 bool audio_driver_mixer_add_stream(audio_mixer_stream_params_t *params)
 {
@@ -349,17 +361,91 @@ int64_t audio_driver_mixer_stream_byte_tell(unsigned i)
 void audio_driver_mixer_stream_set_avail(unsigned i, size_t avail)
 {
    (void)i;
+   if (getenv("FRONTEND_TIMELINE") && hp_pcm_voice)
+   {
+      audio_mixer_voice_set_avail(hp_pcm_voice, avail);
+      hp.audio_avail_raises++;
+      return;
+   }
    if (avail > hp_alen)
       avail = hp_alen;
    if (avail > hp_aavail)
       hp_aavail = avail;
    hp.audio_avail_raises++;
 }
+void audio_driver_mixer_stream_set_repeat(unsigned i, bool repeat)
+{
+   (void)i;
+   (void)repeat;
+}
+
+void audio_driver_mixer_stream_set_paused(unsigned i, bool paused)
+{ (void)i; audio_mixer_voice_set_paused(hp_pcm_voice, paused); }
+/* This edge simulates byte residency, not PCM playback. It has no
+ * clock binding; the real clock oracle lives in preview_audio_feed. */
+bool audio_driver_mixer_prepare_format(unsigned *rate, bool *s16)
+{ *rate = 48000; *s16 = false; return true; }
+bool audio_driver_mixer_add_stream_clocked(audio_mixer_stream_params_t *params,
+      audio_mixer_voice_t **voice, size_t *serial)
+{
+   *voice = NULL; *serial = 0;
+   if (getenv("FRONTEND_TIMELINE"))
+   {
+      hp.audio_streams++; hp.last_audio_bytes = params->bufsize;
+      hp_pcm_sound = params->type == AUDIO_MIXER_TYPE_WEBA
+         ? audio_mixer_load_weba_avail(params->buf, params->bufsize, params->avail)
+         : audio_mixer_load_m4a(params->buf, params->bufsize);
+      audio_mixer_sound_set_data_owner(hp_pcm_sound, params->buf_owner, params->buf_owner_free);
+      if (!hp_pcm_sound) return false;
+      audio_mixer_sound_set_avail(hp_pcm_sound, params->avail);
+      hp_pcm_voice = audio_mixer_play(hp_pcm_sound, true, params->volume,
+            "sinc", RESAMPLER_QUALITY_NORMAL, NULL);
+      if (hp_pcm_voice && audio_mixer_voice_clock(hp_pcm_voice, NULL, NULL, serial))
+      {
+         *voice = hp_pcm_voice;
+         if (params->out_slot) *params->out_slot = 7;
+         return true;
+      }
+      if (hp_pcm_voice) audio_mixer_stop(hp_pcm_voice);
+      audio_mixer_destroy(hp_pcm_sound); hp_pcm_sound = NULL; hp_pcm_voice = NULL;
+      return false;
+   }
+   return audio_driver_mixer_add_stream(params);
+}
+/* Seek transport uses actual PCM; the initial byte-feeder model above
+ * stays independent so it can still deliberately touch promised bytes. */
+bool audio_driver_mixer_add_prepared_stream(audio_mixer_stream_params_t *params,
+      audio_mixer_sound_t *sound, audio_mixer_voice_t **voice, size_t *serial)
+{
+   *voice = NULL; *serial = 0;
+   hp_pcm_voice = audio_mixer_play(sound, true, 1.0f, "sinc",
+         RESAMPLER_QUALITY_NORMAL, NULL);
+   if (hp_pcm_voice && audio_mixer_voice_clock(hp_pcm_voice, NULL, NULL, serial))
+   {
+      hp_pcm_sound = sound;
+      *voice = hp_pcm_voice;
+      if (params->out_slot) *params->out_slot = 7;
+      return true;
+   }
+   audio_mixer_destroy(sound);
+   return false;
+}
+void audio_driver_mixer_remove_stream_clocked(unsigned i,
+      audio_mixer_voice_t *voice, size_t serial)
+{
+   size_t current;
+   if (voice == hp_pcm_voice && audio_mixer_voice_clock(voice, NULL, NULL, &current)
+         && current == serial)
+      audio_driver_mixer_remove_stream(i);
+}
 void audio_driver_mixer_stop_stream(unsigned i) { (void)i; hp.audio_stops++; }
 void audio_driver_mixer_remove_stream(unsigned i)
 {
    (void)i;
    hp_alive = 0;
+   if (hp_pcm_voice) audio_mixer_stop(hp_pcm_voice);
+   if (hp_pcm_sound) audio_mixer_destroy(hp_pcm_sound);
+   hp_pcm_voice = NULL; hp_pcm_sound = NULL;
    if (hp_aowner && hp_aownerfree)
       hp_aownerfree(hp_aowner);
    hp_aowner = NULL; hp_abuf = NULL;
@@ -411,8 +497,10 @@ bool video_driver_texture_fit(struct texture_image *ti)
 }
 
 /* No driver lends upload memory here: every slot stays the surface's. */
-void *video_driver_texture_lend(uintptr_t id, unsigned slot, size_t pitch)
+void *video_driver_texture_lend(uintptr_t id, unsigned slot, size_t pitch, size_t *out_pitch)
 {
+   if (out_pitch)
+      *out_pitch = pitch;
    (void)id; (void)slot; (void)pitch;
    return NULL;
 }
@@ -429,4 +517,13 @@ bool video_driver_texture_lend_ready(uintptr_t id, unsigned slot)
 {
    (void)id; (void)slot;
    return true;
+}
+
+bool video_driver_texture_lend_needs_refresh(void) { return false; }
+bool video_thread_lend_get(int idx, void **mem, size_t *pitch)
+{
+   (void)idx;
+   (void)mem;
+   (void)pitch;
+   return false;
 }

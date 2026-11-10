@@ -19,7 +19,6 @@
 #include <boolean.h>
 #include <retro_atomic.h>
 #include <retro_miscellaneous.h>
-#include <rthreads/rthreads.h>
 #include <string/stdstring.h>
 
 #ifdef HAVE_CONFIG_H
@@ -126,8 +125,6 @@ struct gl_openxr
    openxr_host_t host;
    /* The driver shows the headset nothing (HDR output). */
    retro_atomic_int_t hidden;
-   /* The graphics lock: the session's calls and the frame's span. */
-   slock_t *lock;
    const gfx_ctx_driver_t *ctx_driver;
    void *ctx_data;
    gfx_ctx_shared_context_t shared;
@@ -145,16 +142,6 @@ struct gl_openxr
    GLuint fbo[2];          /* the blit's read and draw */
    gl_openxr_slot_t slots[OPENXR_MAX_SLOTS];
 };
-
-static void gl_openxr_lock(void *user)
-{
-   slock_lock(((gl_openxr_t*)user)->lock);
-}
-
-static void gl_openxr_unlock(void *user)
-{
-   slock_unlock(((gl_openxr_t*)user)->lock);
-}
 
 static void gl_openxr_state_hook(void *user, XrSessionState state)
 {
@@ -200,21 +187,38 @@ static unsigned gl_openxr_host_state(void *user)
    return bits;
 }
 
-static bool gl_openxr_host_sample(void *user, uint32_t *frame_flags)
+static bool gl_openxr_host_sample(void *user, unsigned ahead,
+      uint32_t *frame_flags)
 {
-   return openxr_host_sample(&((gl_openxr_t*)user)->host, frame_flags);
+   return openxr_host_sample(&((gl_openxr_t*)user)->host, ahead, frame_flags);
 }
 
 static bool gl_openxr_host_eye_state(void *user,
-      struct retro_vr_eye_state out[2])
+      struct retro_vr_eye_state out[2], unsigned *token)
 {
-   return openxr_host_eye_state(&((gl_openxr_t*)user)->host, out);
+   return openxr_host_eye_state(&((gl_openxr_t*)user)->host, out, token);
+}
+
+static void gl_openxr_host_give(void *user, unsigned token)
+{
+   openxr_host_give(&((gl_openxr_t*)user)->host, token);
 }
 
 static bool gl_openxr_host_head_pose(void *user,
       struct retro_vr_head_pose *out)
 {
    return openxr_host_head_pose(&((gl_openxr_t*)user)->host, out);
+}
+
+static bool gl_openxr_host_locate_hands(void *user)
+{
+   return openxr_host_locate_hands(&((gl_openxr_t*)user)->host);
+}
+
+static bool gl_openxr_host_controller_poses(void *user,
+      struct retro_vr_controller_poses *out)
+{
+   return openxr_host_controller_poses(&((gl_openxr_t*)user)->host, out);
 }
 
 static bool gl_openxr_host_eye_size(void *user, unsigned *w, unsigned *h)
@@ -334,14 +338,12 @@ gl_openxr_t *gl_openxr_new(const gfx_ctx_driver_t *ctx_driver,
    xr->session.hooks.exiting       = gl_openxr_exiting_hook;
    xr->session.hooks.local_changed = gl_openxr_local_hook;
    xr->session.hooks.stage_changed = gl_openxr_stage_hook;
-   xr->session.hooks.lock          = gl_openxr_lock;
-   xr->session.hooks.unlock        = gl_openxr_unlock;
+   /* No lock: every runtime call is on the XR thread, which alone
+    * makes current the context the runtime submits with. */
    xr->session.hooks.user          = xr;
    for (s = 0; s < OPENXR_MAX_SLOTS; s++)
       openxr_ring_init(&xr->slots[s].ring);
    openxr_host_init(&xr->host, &xr->rt, &xr->session, &xr->frame);
-   if (!(xr->lock = slock_new()))
-      goto end;
 
    if (!ctx_driver->shared_context_new(ctx_data, &xr->shared))
    {
@@ -400,17 +402,26 @@ struct gl_openxr_dot
 static bool gl_openxr_cursor_fill(void *user, uint32_t index,
       const char **step, int *code)
 {
-   uint8_t px[VIDEO_XR_CURSOR_DIM * VIDEO_XR_CURSOR_DIM * 4];
    GLenum err;
    struct gl_openxr_dot *dot = (struct gl_openxr_dot*)user;
    gl_openxr_t *xr           = dot->xr;
-   video_xr_cursor_pixels(px);
+   unsigned w                = openxr_frame_cursor_w(&xr->frame);
+   uint8_t *px               = (uint8_t*)malloc(
+         (size_t)VIDEO_XR_CURSOR_W * VIDEO_XR_CURSOR_H * 4);
+   if (!px)
+   {
+      *step = "malloc";
+      *code = 0;
+      return false;
+   }
+   openxr_frame_cursor_pixels(px, w, true);
    while (xr->gl.GetError() != GL_NO_ERROR) { }
    xr->gl.BindTexture(GL_TEXTURE_2D, dot->images[index][0]);
    xr->gl.PixelStorei(GL_UNPACK_ALIGNMENT, 4);
-   xr->gl.TexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, VIDEO_XR_CURSOR_DIM,
-         VIDEO_XR_CURSOR_DIM, GL_RGBA, GL_UNSIGNED_BYTE, px);
+   xr->gl.TexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, w, VIDEO_XR_CURSOR_H,
+         GL_RGBA, GL_UNSIGNED_BYTE, px);
    xr->gl.BindTexture(GL_TEXTURE_2D, 0);
+   free(px);
    if ((err = xr->gl.GetError()) == GL_NO_ERROR)
       return true;
    *step = "glTexSubImage2D";
@@ -430,11 +441,20 @@ static void gl_openxr_cursor_create(gl_openxr_t *xr)
    li.sc            = &xr->sc;
    li.tex           = dot.images;
    xr->frame.cursor = openxr_swapchains_create_filled(&xr->sc, formats, 2,
-         VIDEO_SCALE_PACK(VIDEO_XR_CURSOR_DIM, VIDEO_XR_CURSOR_DIM),
+         VIDEO_SCALE_PACK(openxr_frame_cursor_w(&xr->frame),
+            VIDEO_XR_CURSOR_H),
          openxr_binding_gl_images, &li, gl_openxr_cursor_fill, &dot,
          &step, &code);
-   if (xr->frame.cursor)
-      RARCH_LOG("[OpenXR] Laser cursor ready.\n");
+   if (xr->frame.cursor && xr->frame.rt->max_width)
+      RARCH_LOG("[OpenXR] Laser cursor ready: %u wide, with %s (the "
+            "headset's widest %u).\n", openxr_frame_cursor_w(&xr->frame),
+            openxr_frame_cursor_parts(&xr->frame),
+            xr->frame.rt->max_width);
+   else if (xr->frame.cursor)
+      RARCH_LOG("[OpenXR] Laser cursor ready: %u wide, with %s (the "
+            "headset does not say its widest).\n",
+            openxr_frame_cursor_w(&xr->frame),
+            openxr_frame_cursor_parts(&xr->frame));
    else
       RARCH_WARN("[OpenXR] No laser cursor (%s, %d).\n", step, code);
 }
@@ -504,9 +524,7 @@ static void gl_openxr_thread_stop(void *user)
    }
    if (xr->frame.cursor)
    {
-      openxr_session_lock(&xr->session);
       xr->sc.DestroySwapchain(xr->frame.cursor);
-      openxr_session_unlock(&xr->session);
       xr->frame.cursor = XR_NULL_HANDLE;
    }
    if (xr->session.session)
@@ -525,15 +543,13 @@ static void gl_openxr_hide(gl_openxr_t *xr, unsigned slot)
    openxr_slot_forget(&xr->sc, slot);
    if (slot == OPENXR_PROJECTION_SLOT)
    {
-      openxr_session_lock(&xr->session);
       openxr_frame_clear_projection(&xr->frame);
-      openxr_session_unlock(&xr->session);
       xr->proj_shown = false;
    }
 }
 
-/* The slot's swapchains at a record's size, on the XR thread; they take
- * the graphics lock themselves. A size refused is not asked again. */
+/* The slot's swapchains at a record's size, on the XR thread. A size
+ * refused is not asked again. */
 static bool gl_openxr_make_slot(gl_openxr_t *xr, unsigned slot,
       unsigned dims, unsigned layers)
 {
@@ -663,31 +679,22 @@ static bool gl_openxr_fill_slot(gl_openxr_t *xr, unsigned slot)
 
    /* The draw finishes before the copy reads it. */
    xr->gl.WaitSync(r->drawn, 0, GL_TIMEOUT_IGNORED);
-   openxr_session_lock(&xr->session);
    if (!openxr_slot_acquire(&xr->sc, slot, index))
-   {
-      openxr_session_unlock(&xr->session);
       return false;
-   }
    ok        = gl_openxr_copy(xr, s, r, index);
    r->copied = xr->gl.FenceSync(GL_SYNC_GPU_COMMANDS_COMPLETE, 0);
    xr->gl.Flush();
    openxr_slot_release(&xr->sc, slot);
-   /* The eyes go out with the poses that drew them, in the track space
-    * the recenters since have carried them to. */
+   /* The eyes go out with the poses that drew them; the frame carries
+    * them to a recenter's new track space. */
    if (slot == OPENXR_PROJECTION_SLOT)
    {
       if (ok && r->projection.active)
-      {
-         openxr_projection_t p = r->projection;
-         p.track_seq = openxr_frame_carried_seq(&xr->frame, p.track_seq);
-         openxr_frame_publish_projection(&xr->frame, &p);
-      }
+         openxr_frame_publish_projection(&xr->frame, &r->projection);
       else
          openxr_frame_clear_projection(&xr->frame);
       xr->proj_shown = ok && r->projection.active;
    }
-   openxr_session_unlock(&xr->session);
    s->pending = false;
 
    if (!ok)
@@ -758,8 +765,11 @@ static void gl_openxr_host_register(gl_openxr_t *xr)
    host.state     = gl_openxr_host_state;
    host.sample    = gl_openxr_host_sample;
    host.eye_state = gl_openxr_host_eye_state;
+   host.give      = gl_openxr_host_give;
    host.set_space = gl_openxr_host_set_space;
    host.head_pose = gl_openxr_host_head_pose;
+   host.locate_hands = gl_openxr_host_locate_hands;
+   host.controller_poses = gl_openxr_host_controller_poses;
    host.eye_size  = gl_openxr_host_eye_size;
    host.resume    = gl_openxr_host_resume;
    host.user      = xr;
@@ -794,9 +804,7 @@ void gl_openxr_stop_thread(gl_openxr_t *xr)
    openxr_frame_stop(&xr->frame);
    video_driver_set_xr_host(NULL);
    openxr_frame_clear_quads(&xr->frame);
-   slock_lock(xr->lock);
    openxr_frame_clear_projection(&xr->frame);
-   slock_unlock(xr->lock);
    xr->started = false;
 }
 
@@ -821,8 +829,6 @@ void gl_openxr_free(gl_openxr_t *xr)
       xr->ctx_driver->shared_context_free(&xr->shared);
    openxr_runtime_deinit(&xr->rt);
    openxr_frame_deinit(&xr->frame);
-   if (xr->lock)
-      slock_free(xr->lock);
    free(xr);
 }
 
@@ -987,6 +993,11 @@ void gl_openxr_set_pacing(gl_openxr_t *xr, unsigned interval)
 void gl_openxr_pace_wait(gl_openxr_t *xr)
 {
    openxr_frame_pace_wait(&xr->frame);
+}
+
+void gl_openxr_host_poll(gl_openxr_t *xr)
+{
+   openxr_frame_host_poll(&xr->frame);
 }
 
 void gl_openxr_pace_skip(gl_openxr_t *xr)

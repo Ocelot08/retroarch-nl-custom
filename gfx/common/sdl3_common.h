@@ -34,7 +34,10 @@ enum sdl3_flags
    SDL3_FLAG_ADAPTIVE_VSYNC   = (1 << 2),
    /* The overlay textures are the overlay pack's (load_textures),
     * not this driver's to destroy. */
-   SDL3_FLAG_OVERLAY_BORROWED = (1 << 3)
+   SDL3_FLAG_OVERLAY_BORROWED = (1 << 3),
+   /* The renderer takes these 16-bit formats as they are */
+   SDL3_FLAG_NATIVE_RGB565    = (1 << 4),
+   SDL3_FLAG_NATIVE_RGBA4444  = (1 << 5)
 };
 
 typedef struct sdl3_tex
@@ -43,8 +46,12 @@ typedef struct sdl3_tex
 
    unsigned w;
    unsigned h;
+   /* The 16-bit source a 32-bit texture is widened from on upload,
+    * SDL_PIXELFORMAT_UNKNOWN when uploads are copied as they are */
+   SDL_PixelFormat widen;
    bool active;
    bool rgb32;
+   bool failed; /* creating it at w x h failed */
 } sdl3_tex_t;
 
 #ifdef HAVE_OVERLAY
@@ -68,10 +75,36 @@ typedef struct _sdl3_video
    struct video_viewport vp;
    video_info_t video;
 
+   /* The frame texture while it is locked and lent to the core.
+    * scratch holds a window of it pushed at another size or pitch. */
+   struct
+   {
+      void    *pixels;
+      uint8_t *scratch;
+      size_t   scratch_size;
+      size_t   pitch;
+      unsigned dims;
+      unsigned declined_dims;
+   } sw_lend;
+
    sdl3_tex_t frame; /* ptr alignment */
    sdl3_tex_t menu;  /* ptr alignment */
 
    SDL_Renderer *renderer;
+
+   /* The largest swap interval the renderer took at init */
+   unsigned swap_interval_cap;
+
+   /* Resolution steps asked for on the main thread, taken on the
+    * video thread */
+   retro_atomic_int_t mode_step;
+
+   /* What SDL_RenderGeometry is handed, grown to the largest batch:
+    * the display draws, and the interlaced placement's rows */
+   SDL_Vertex *display_verts;
+   int *display_indices;
+   size_t display_verts_cap;
+   size_t display_indices_cap;
 
 #ifdef HAVE_OVERLAY
    struct sdl3_overlay *overlays;
@@ -107,6 +140,8 @@ typedef struct _sdl3_video
       retro_atomic_int_t    allowed;
       retro_atomic_int_t    fallback;
       bool                  tried;
+      /* A view could not be written at frame_dims: draw whole */
+      bool                  write_failed;
       /* The premultiplied blend the UI layer is placed with */
       bool                  layer;
       bool                  active;
@@ -131,8 +166,10 @@ void sdl3_set_handles(SDL_Window *window);
 void sdl3_pump_window_events(bool *quit, bool *resize);
 
 /* Pumps the SDL event queue for the input drivers, unless the video
- * thread owns the window and pumps it already. */
-void sdl3_pump_input_events(void);
+ * thread owns the window and pumps it already. A pump also updates
+ * joysticks and sensors; false when it was left to the video thread,
+ * and the caller updates them itself. */
+bool sdl3_pump_input_events(void);
 
 /* Creates or resizes the window, or toggles fullscreen. */
 bool sdl3_window_set_video_mode(SDL_Window **win,
@@ -169,6 +206,10 @@ void sdl3_ctx_input_driver(void *data, const char *name);
  * as the context driver. */
 bool sdl3_ctx_enabled(const char *ctx_ident);
 
+/* Whether the settings make the next video driver's window an SDL3
+ * one, as sdl3_ctx_enabled() decides it. */
+bool sdl3_next_window_is_sdl3(void);
+
 void sdl3_ctx_get_video_size(void *data, unsigned *dims);
 float sdl3_ctx_get_refresh_rate(void *data);
 void sdl3_ctx_update_title(void *data);
@@ -186,7 +227,8 @@ void sdl3_show_mouse(void *data, bool state);
 
 /* Returns the active SDL_Window, whether it belongs to the sdl3
  * video driver or one of the gl/vk sdl3 context drivers. NULL when
- * SDL3 isn't driving the window. */
+ * SDL3 isn't driving the window. Under threaded video it is made on
+ * the video thread; only sdl3_pump_input_events pumps its queue. */
 SDL_Window *sdl3_get_window(void);
 
 /* True when SDL_StartTextInput() on this device pops up a system

@@ -313,7 +313,7 @@ if [ "$OS" = 'Darwin' ]; then
    #   * HAVE_VULKAN is forced on alongside it. Link-time libvulkan is
    #     not required on Darwin; MoltenVK is loaded dynamically at
    #     runtime by gfx/common/vulkan_common.c.
-   # Skip the force-on on pre-10.7 targets — Metal is 10.11+ and
+   # Skip the force-on on pre-10.7 targets â€” Metal is 10.11+ and
    # MoltenVK is 10.11+, so neither is buildable on Tiger/Leopard.
    if [ "$macos_target_pre_10_7" = 'no' ]; then
       [ "${USER_METAL:-}"  != 'no' ] && HAVE_METAL=yes
@@ -647,6 +647,17 @@ check_enabled THREADS WINUSB WinUSB 'Threads are' false
 check_platform Win32 WINUSB 'WinUSB is' true
 if [ "$HAVE_WINUSB" = 'yes' ]; then
    add_opt HID yes
+   # Xbox pads' triggers and rumble, where the header is
+   check_header '' WGI windows.gaming.input.h
+else
+   HAVE_WGI=no
+fi
+
+# Windows' own Bluetooth stack, loaded when used: the menu's pairing,
+# Wii controllers' too, which Windows' settings often cannot pair
+if [ "$OS" = 'Win32' ] && [ "$HAVE_BLUETOOTH" = 'no' ] \
+      && [ "${USER_BLUETOOTH:-auto}" = 'auto' ] && [ "$HAVE_THREADS" != 'no' ]; then
+   HAVE_BLUETOOTH=yes
 fi
 
 check_lib '' DINPUT -ldinput8
@@ -819,12 +830,13 @@ if [ "$HAVE_X11" != 'no' ]; then
 
    check_val '' XEXT -lXext '' xext '' '' false
    check_val '' XF86VM -lXxf86vm '' xxf86vm '' '' false
-   check_val '' XSCRNSAVER -lXss '' xscrnsaver '' '' false
    check_val '' XI2 -lXi '' xi '' '' false
 else
    die : 'Notice: X11 not present. Skipping X11 code paths.'
 fi
 
+check_enabled X11 XSCRNSAVER XScrnSaver 'X11 is' true
+check_enabled DYLIB XSCRNSAVER XScrnSaver 'Dynamic loading is' true
 check_enabled X11 XINERAMA Xinerama 'Xinerama is' false
 check_enabled X11 XSHM XShm 'XShm is' false
 check_enabled X11 XRANDR Xrandr 'Xrandr is' false
@@ -911,6 +923,14 @@ else
    check_lib '' VULKAN -lvulkan vkCreateInstance
 fi
 
+check_platform Linux VAAPI 'VA-API' true
+check_enabled VULKAN VAAPI 'VA-API' 'Vulkan is' false
+check_enabled RMP4 VAAPI 'VA-API' 'RMP4 is' false
+check_enabled THREADS VAAPI 'VA-API' 'Threads are' false
+check_enabled 'DYLIB DYNAMIC' VAAPI 'VA-API' 'Dynamic loading is' false
+check_header '' VAAPI va/va.h va/va_dec_hevc.h va/va_drmcommon.h
+check_macro VAAPI VA_SURFACE_ATTRIB_MEM_TYPE_DRM_PRIME_2 va/va_drmcommon.h
+
 check_platform Linux OPENXR 'OpenXR is' true
 check_enabled 'VULKAN OPENGL OPENGL_CORE' OPENXR OpenXR 'Vulkan and OpenGL are' false
 check_enabled THREADS OPENXR OpenXR 'Threads are' false
@@ -969,29 +989,28 @@ if [ "$HAVE_MIST" = 'yes' ]; then
    add_define MAKEFILE MIST_PATH "$MIST_PATH"
 fi
 
-check_enabled CXX SLANG slang 'The C++ compiler is' false
+check_enabled 'CXX RSLC' SLANG slang 'The C++ compiler is' false
 check_enabled CXX GLSLANG glslang 'The C++ compiler is' false
 check_enabled CXX SPIRV_CROSS SPIRV-Cross 'The C++ compiler is' false
 
-check_enabled GLSLANG BUILTINGLSLANG 'builtin glslang' 'glslang is' true
-
-check_enabled SPIRV_CROSS BUILTINSPIRV_CROSS 'builtin spirv-cross' 'spirv-cross is' true
-
-if [ "$HAVE_SPIRV_CROSS" != no ] && [ "$HAVE_BUILTINSPIRV_CROSS" = no ]; then
+# glslang and SPIRV-Cross are the system's, and only when asked for
+# (--enable-glslang --enable-spirv_cross): what is found is built in
+# next to rslc, what is not is left out with a notice.
+if [ "$HAVE_SPIRV_CROSS" != no ]; then
    # The slang stack uses the SPIRV-Cross C API, so only the
-   # spirv-cross-c-shared package can satisfy an external build; the
-   # C++ libraries carry no spvc_* symbols.  When it is absent we fall
-   # through to the builtin sources below.
+   # spirv-cross-c-shared package can satisfy it; the C++ libraries
+   # carry no spvc_* symbols.
+   HAVE_SPIRV_CROSS=auto
+   USER_SPIRV_CROSS=
    check_pkgconf SPIRV_CROSS spirv-cross-c-shared
-
    if [ "$HAVE_SPIRV_CROSS" = no ]; then
-      die : 'Notice: System SPIRV-Cross not found, enabling builtin SPIRV-Cross.'
-      HAVE_BUILTINSPIRV_CROSS=yes
-      HAVE_SPIRV_CROSS=yes
+      die : 'Notice: System SPIRV-Cross (spirv-cross-c-shared) not found, disabling SPIRV-Cross support.'
    fi
 fi
 
 if [ "$HAVE_GLSLANG" != no ]; then
+   HAVE_GLSLANG=auto
+   USER_GLSLANG=
    check_header cxx GLSLANG \
       glslang/Public/ShaderLang.h \
       glslang/SPIRV/GlslangToSpv.h
@@ -1006,20 +1025,27 @@ if [ "$HAVE_GLSLANG" != no ]; then
    check_lib cxx GLSLANG_SPIRV_TOOLS_OPT -lSPIRV-Tools-opt
    check_lib cxx GLSLANG_SPIRV_TOOLS -lSPIRV-Tools
 
+   # newer glslang carries HLSL, OSDependent, OGLCompiler and
+   # MachineIndependent in libglslang itself: those link when present
    if [ "$HAVE_GLSLANG" = no ] ||
-      [ "$HAVE_GLSLANG_HLSL" = no ] ||
       [ "$HAVE_GLSLANG_SPIRV" = no ] ||
       [ "$HAVE_GLSLANG_SPIRV_TOOLS_OPT" = no ] ||
       [ "$HAVE_GLSLANG_SPIRV_TOOLS" = no ]; then
-      if [ "$HAVE_BUILTINGLSLANG" != yes ]; then
-         die : 'Notice: System glslang libraries not found, disabling glslang support.'
-         HAVE_GLSLANG=no
-      else
-         HAVE_GLSLANG=yes
-      fi
+      die : 'Notice: System glslang libraries not found, disabling glslang support.'
+      HAVE_GLSLANG=no
    else
       HAVE_GLSLANG=yes
    fi
+fi
+
+# glslang compiles and SPIRV-Cross reflects and prints, so one is no
+# use without the other
+if [ "$HAVE_GLSLANG" != "$HAVE_SPIRV_CROSS" ]; then
+   die : 'Notice: glslang and SPIRV-Cross are built in together, leaving both out; rslc compiles slang.'
+   HAVE_GLSLANG=no
+   HAVE_SPIRV_CROSS=no
+   USER_GLSLANG=
+   USER_SPIRV_CROSS=
 fi
 
 # The modeline engine is C89 with no libraries of its own, so it is on
@@ -1036,17 +1062,17 @@ check_enabled SLANG OPENGL_CORE 'OpenGL core' 'slang is' false
 check_enabled SLANG VULKAN vulkan 'slang is' false
 check_enabled SLANG METAL metal 'slang is' false
 
-check_enabled GLSLANG SLANG slang 'glslang is' false
+check_enabled 'GLSLANG RSLC' SLANG slang 'glslang is' false
 check_enabled GLSLANG SPIRV_CROSS SPIRV-Cross 'glslang is' false
-check_enabled GLSLANG OPENGL_CORE 'OpenGL core' 'glslang is' false
-check_enabled GLSLANG VULKAN vulkan 'glslang is' false
-check_enabled GLSLANG METAL metal 'glslang is' false
+check_enabled 'GLSLANG RSLC' OPENGL_CORE 'OpenGL core' 'glslang is' false
+check_enabled 'GLSLANG RSLC' VULKAN vulkan 'glslang is' false
+check_enabled 'GLSLANG RSLC' METAL metal 'glslang is' false
 
-check_enabled SPIRV_CROSS SLANG slang 'SPIRV-Cross is' false
+check_enabled 'SPIRV_CROSS RSLC' SLANG slang 'SPIRV-Cross is' false
 check_enabled SPIRV_CROSS GLSLANG glslang 'SPIRV-Cross is' false
-check_enabled SPIRV_CROSS OPENGL_CORE 'OpenGL core' 'SPIRV-Cross is' false
-check_enabled SPIRV_CROSS VULKAN vulkan 'SPIRV-Cross is' false
-check_enabled SPIRV_CROSS METAL metal 'SPIRV-Cross is' false
+check_enabled 'SPIRV_CROSS RSLC' OPENGL_CORE 'OpenGL core' 'SPIRV-Cross is' false
+check_enabled 'SPIRV_CROSS RSLC' VULKAN vulkan 'SPIRV-Cross is' false
+check_enabled 'SPIRV_CROSS RSLC' METAL metal 'SPIRV-Cross is' false
 
 check_enabled 'OPENGL_CORE METAL VULKAN' SLANG slang '' user
 check_enabled 'OPENGL_CORE METAL VULKAN' GLSLANG glslang '' user
@@ -1091,6 +1117,10 @@ if [ "$HAVE_RETRONFS" = 'auto' ]; then HAVE_RETRONFS=yes; fi
 # so libsmb2 asked for and not found is an error.
 check_enabled NETWORKING RETROSMB 'built-in SMB client' 'Networking is' false
 check_enabled CRYPTO RETROSMB 'built-in SMB client' 'crypto is' false
+
+# RVZ hashing reads the groups with Zstandard
+check_enabled CHEEVOS CHEEVOS_RVZ 'RVZ hashing for RetroAchievements' 'cheevos is' false
+check_enabled RZSTD CHEEVOS_RVZ 'RVZ hashing for RetroAchievements' 'RZSTD is' false
 if [ "$HAVE_RETROSMB" = 'auto' ]; then
    if [ "$HAVE_SMBCLIENT" = 'yes' ] || [ "$HAVE_LIBSMB" = 'yes' ]; then
       HAVE_RETROSMB=no

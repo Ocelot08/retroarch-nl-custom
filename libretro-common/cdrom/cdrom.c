@@ -320,7 +320,7 @@ static int cdrom_send_command_win32(const libretro_vfs_implementation_file *stre
 
    sptd.s.TimeOutValue       = 5;
    sptd.s.DataBuffer         = buf;
-   sptd.s.DataTransferLength = len;
+   sptd.s.DataTransferLength = (ULONG)len;
    sptd.s.SenseInfoLength    = sizeof(sptd.sense);
    sptd.s.SenseInfoOffset    = offsetof(struct sptd_with_sense, sense);
 
@@ -386,7 +386,7 @@ static int cdrom_send_command_linux(const libretro_vfs_implementation_file *stre
    sgio.cmd_len      = cmd_len;
    sgio.cmdp         = cmd;
    sgio.dxferp       = buf;
-   sgio.dxfer_len    = len;
+   sgio.dxfer_len    = (unsigned)len;
    sgio.sbp          = sense;
    sgio.mx_sb_len    = sense_len;
    sgio.timeout      = 5000;
@@ -2087,16 +2087,21 @@ struct string_list* cdrom_get_available_drives(void)
    for (i = 0; i < (int)(sizeof(DWORD) * 8); i++)
    {
       char path[]       = {"a:\\"};
-      char cdrom_path[] = {"cdrom://a:/drive-track01.bin"};
+      char cdrom_path[32];
 
       path[0]          += i;
-      cdrom_path[8]    += i;
 
       /* this drive letter doesn't exist */
       if (!(drive_mask & (1 << i)))
          continue;
 
       if (GetDriveType(path) != DRIVE_CDROM)
+         continue;
+
+      /* INQUIRY needs only the device handle; a track or cue path
+       * would read the TOC and spin up the drive. */
+      if (!cdrom_device_filldevicepath(cdrom_path, sizeof(cdrom_path),
+               (char)('A' + i)))
          continue;
 
       {
@@ -2398,52 +2403,34 @@ size_t cdrom_device_fillimagepath(char *s, size_t len, char drive)
    return 0;
 }
 
-size_t cdrom_device_fillpath(char *s, size_t len, char drive, unsigned char track, bool is_cue)
+size_t cdrom_device_fillpath(char *s, size_t len, char drive,
+      unsigned char track, bool is_cue)
 {
-   if (s && len > 0)
+   int _len = -1;
+   if (!s || !len)
+      return 0;
+   s[0] = '\0';
+#if defined(_WIN32)
+   if (is_cue)
+      _len = snprintf(s, len, "cdrom://%c:/drive.cue", drive);
+   else
+      _len = snprintf(s, len, "cdrom://%c:/drive-track%02d.bin",
+            drive, track);
+#elif defined(__linux__) || defined(__APPLE__)
+   if (is_cue)
+      _len = snprintf(s, len, "cdrom://drive%c.cue", drive);
+   else
+      _len = snprintf(s, len, "cdrom://drive%c-track%02d.bin",
+            drive, track);
+#else
+   (void)drive;
+   (void)track;
+   (void)is_cue;
+#endif
+   if (_len < 0)
    {
-      if (is_cue)
-      {
-#ifdef _WIN32
-         size_t _len = strlcpy_lit(s, "cdrom://", len);
-         if (len > _len)
-            s[_len++] = drive;
-         _len += strlcpy_lit(s + _len, ":/drive.cue", len - _len);
-         return _len;
-#else
-#if defined(__linux__) || defined(__APPLE__)
-         size_t _len = strlcpy_lit(s, "cdrom://drive", len);
-         if (len > _len + 1)
-         {
-            s[_len++] = drive;
-            s[_len]   = '\0';
-         }
-         _len += strlcpy_lit(s + _len, ".cue", len - _len);
-         return _len;
-#endif
-#endif
-      }
-      else
-      {
-#ifdef _WIN32
-         size_t _len = strlcpy_lit(s, "cdrom://", len);
-         if (len > _len + 1)
-         {
-            s[_len++] = drive;
-            s[_len]   = '\0';
-         }
-         _len += snprintf(s + _len, len - _len, ":/drive-track%02d.bin", track);
-         return _len;
-#else
-#if defined(__linux__) || defined(__APPLE__)
-         size_t _len = strlcpy_lit(s, "cdrom://drive", len);
-         if (len > _len)
-            s[_len++] = drive;
-         _len += snprintf(s + _len, len - _len, "-track%02d.bin", track);
-         return _len;
-#endif
-#endif
-      }
+      s[0] = '\0';
+      return 0;
    }
-   return 0;
+   return (size_t)_len;
 }

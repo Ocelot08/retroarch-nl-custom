@@ -136,56 +136,42 @@ static void ui_application_win32_dispatch(MSG *msg)
  * names it below is compiled only where the driver is. */
 #if defined(HAVE_WINRAWINPUT) && !defined(_XBOX) && _WIN32_WINNT >= 0x0501 && !defined(__WINRT__)
 extern bool winraw_poll_owns_thread(void);
-extern void winraw_pump_done(void);
 #define WIN32_RAW_INPUT_PUMP
-#define WIN32_RAW_INPUT_PUMP_DONE() winraw_pump_done()
-#else
-#define WIN32_RAW_INPUT_PUMP_DONE() ((void)0)
 #endif
 
-static void ui_application_win32_process_events(void)
+static bool ui_application_win32_next_message(void)
 {
    MSG msg;
-
 #ifdef WIN32_RAW_INPUT_PUMP
    if (winraw_poll_owns_thread())
    {
-      /* The raw input driver reads this thread's reports in bulk when
-       * it polls (winraw_input.c, "Read by the poll"). Taking them out
-       * here, one WM_INPUT at a time, is the work that read exists to
-       * save, so this asks for everything below WM_INPUT and
-       * everything above it and leaves the reports in the queue. The
-       * two ranges take turns, so that neither waits for the other to
-       * run dry. */
-      for (;;)
+      bool any = false;
+      if (PeekMessage(&msg, 0, 0, WM_INPUT - 1, PM_REMOVE))
       {
-         bool any = false;
-         if (PeekMessage(&msg, 0, 0, WM_INPUT - 1, PM_REMOVE))
-         {
-            ui_application_win32_dispatch(&msg);
-            any = true;
-         }
-         if (PeekMessage(&msg, 0, WM_INPUT + 1, 0xFFFFFFFF, PM_REMOVE))
-         {
-            ui_application_win32_dispatch(&msg);
-            any = true;
-         }
-         if (!any)
-            break;
-      }
-   }
-   else
-#endif
-   {
-      while (PeekMessage(&msg, 0, 0, 0, PM_REMOVE))
          ui_application_win32_dispatch(&msg);
-      /* The raw input driver, where this thread takes its reports:
-       * they are in its state as of now. */
-      WIN32_RAW_INPUT_PUMP_DONE();
+         any = true;
+      }
+      if (PeekMessage(&msg, 0, WM_INPUT + 1, 0xFFFFFFFF, PM_REMOVE))
+      {
+         ui_application_win32_dispatch(&msg);
+         any = true;
+      }
+      return any;
    }
+#endif
+   if (!PeekMessage(&msg, 0, 0, 0, PM_REMOVE))
+      return false;
+   ui_application_win32_dispatch(&msg);
+   return true;
+}
 
-   /* The video thread pumps through here too (win32_check_window);
-    * only the main thread may run the parked commands. */
+static void ui_application_win32_process_events(void)
+{
+#if !defined(_XBOX) && !defined(__WINRT__)
+   if (!win32_message_pump(ui_application_win32_next_message))
+#endif
+      while (ui_application_win32_next_message()) { }
+
    if (task_is_on_main_thread())
       win32_menu_run_deferred();
 }
@@ -977,7 +963,11 @@ LRESULT win32_menu_loop(HWND owner, WPARAM wparam)
 {
    WPARAM mode            = wparam & 0xffff;
 
-   if (!task_is_on_main_thread())
+   if (!task_is_on_main_thread()
+#if !defined(_XBOX) && !defined(__WINRT__)
+         || win32_message_dispatching()
+#endif
+      )
    {
       if (mode && !win32_menu_defer(mode))
          RARCH_WARN("[Win32] Menu command %u dropped: too many pending.\n",
@@ -1203,7 +1193,7 @@ LRESULT win32_menu_loop(HWND owner, WPARAM wparam)
       default:
          if (mode >= ID_M_WINDOW_SCALE_1X && mode <= ID_M_WINDOW_SCALE_10X)
          {
-            unsigned idx = (mode - (ID_M_WINDOW_SCALE_1X-1));
+            unsigned idx = (unsigned)(mode - (ID_M_WINDOW_SCALE_1X-1));
             retroarch_ctl(RARCH_CTL_SET_WINDOWED_SCALE, &idx);
             command_event(CMD_EVENT_RESIZE_WINDOWED_SCALE, NULL);
          }
@@ -1217,7 +1207,7 @@ LRESULT win32_menu_loop(HWND owner, WPARAM wparam)
          else if (mode >= (ID_M_STATE_INDEX_AUTO+1)
                && mode <= (ID_M_STATE_INDEX_AUTO+10))
          {
-            signed           idx = (mode - (ID_M_STATE_INDEX_AUTO+1));
+            signed           idx = (signed)(mode - (ID_M_STATE_INDEX_AUTO+1));
             settings_t *settings = config_get_ptr();
             configuration_set_int(
                   settings, settings->ints.state_slot, idx);
@@ -1462,7 +1452,7 @@ void win32_localize_menu(HMENU menu)
          /* Convert string from UTF-8, then assign menu text */
          new_label_unicode         = utf8_to_utf16_string_alloc(new_label2);
          final_len                 = wcslen(new_label_unicode);
-         menu_item_info.cch        = final_len;
+         menu_item_info.cch        = (UINT)final_len;
          menu_item_info.dwTypeData = new_label_unicode;
          SetMenuItemInfoW(menu, index, true, &menu_item_info);
          free(new_label_unicode);
@@ -1757,7 +1747,13 @@ int win32_resources_pick_core_dialog(HWND parent, DLGPROC dlg_proc)
 }
 #endif /* !__WINRT__ */
 
-static void ui_companion_win32_deinit(void *data) { }
+static void ui_companion_win32_deinit(void *data)
+{
+   (void)data;
+#if !defined(_XBOX) && !defined(__WINRT__)
+   win32_message_pump_free();
+#endif
+}
 static void *ui_companion_win32_init(void) { return (void*)-1; }
 static void ui_companion_win32_toggle(void *data, bool force) { }
 static void ui_companion_win32_event_command(

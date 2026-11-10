@@ -127,6 +127,8 @@
 #include <streams/interface_stream.h>
 #include <file/file_path.h>
 #include <queues/task_queue.h>
+#include <rthreads/rthreads.h>
+#include <retro_timers.h>
 #include <encodings/rzstd.h>
 
 #include "../../../configuration.h"
@@ -192,7 +194,21 @@ bool runloop_key_event_is_frontend(void)
 input_driver_state_t *input_state_get_ptr(void) { return &input_st; }
 /* the replay is over: the frontend's call for it, on the state above */
 void bsv_movie_set_end(void) { input_st.bsv_movie_state.flags |= BSV_FLAG_MOVIE_END; }
-bool content_load_state_in_progress(void *data) { (void)data; return false; }
+/* A state load in flight, and who asks about it: the record task waits
+ * for the load to retire, which happens on the main thread. */
+static int       load_pending        = 0;
+static uintptr_t main_tid            = 0;
+static unsigned  load_asks           = 0;
+static unsigned  load_asks_off_main  = 0;
+bool content_load_state_in_progress(void *data)
+{
+   (void)data;
+   if (main_tid && sthread_get_current_thread_id() != main_tid)
+      __atomic_fetch_add(&load_asks_off_main, 1, __ATOMIC_RELAXED);
+   else
+      load_asks++;
+   return __atomic_load_n(&load_pending, __ATOMIC_RELAXED) != 0;
+}
 void input_keyboard_event(bool down, unsigned code, uint32_t character,
       uint16_t mod, unsigned device) { (void)down; (void)code; (void)character; (void)mod; (void)device; }
 
@@ -223,8 +239,11 @@ size_t core_serialize_size(void)
 {
    return serialize_size_override ? serialize_size_override : STATE_SIZE;
 }
+static unsigned n_serialize;
+
 bool core_serialize(retro_ctx_serialize_info_t *info)
 {
+   n_serialize++;
    memcpy(info->data, core_state, STATE_SIZE);
    return true;
 }
@@ -345,6 +364,54 @@ static void truncate_file(const char *path, int64_t len)
 }
 
 /* ---- lanes ----------------------------------------------------------- */
+
+/* On the threaded queue, a recording started while a state load is in
+ * flight waits for it from the main thread, once per check, and starts
+ * once the load is through. */
+static void lane_record_waits_for_load(const char *path)
+{
+   unsigned i;
+
+   reset_counters();
+   settings.bools.savestate_file_compression = false;
+   fill_state(1);
+   task_queue_deinit();
+   task_queue_init(true, NULL);
+   main_tid           = sthread_get_current_thread_id();
+   load_asks          = 0;
+   __atomic_store_n(&load_asks_off_main, 0, __ATOMIC_RELAXED);
+   __atomic_store_n(&load_pending, 1, __ATOMIC_RELAXED);
+
+   CHECK(movie_start_record(&input_st, (char*)path), "start_record");
+   for (i = 0; i < 20; i++)
+   {
+      task_queue_check();
+      retro_sleep(1);
+   }
+   CHECK(__atomic_load_n(&load_asks_off_main, __ATOMIC_RELAXED) == 0,
+         "the record task asked about the load off the main thread %u times",
+         __atomic_load_n(&load_asks_off_main, __ATOMIC_RELAXED));
+   CHECK(load_asks <= 21, "asked about the load %u times in 20 checks",
+         load_asks);
+   CHECK(!(input_st.bsv_movie_state.flags & BSV_FLAG_MOVIE_RECORDING),
+         "recording before the load went through");
+
+   __atomic_store_n(&load_pending, 0, __ATOMIC_RELAXED);
+   for (i = 0; i < 20
+         && !(input_st.bsv_movie_state.flags & BSV_FLAG_MOVIE_RECORDING); i++)
+   {
+      task_queue_check();
+      retro_sleep(1);
+   }
+   CHECK(input_st.bsv_movie_state.flags & BSV_FLAG_MOVIE_RECORDING,
+         "recording did not start once the load went through");
+   CHECK(movie_stop(&input_st), "halt");
+
+   task_queue_deinit();
+   task_queue_init(false, NULL);
+   main_tid = 0;
+   lane_done("record_waits_for_load", NULL);
+}
 
 static void lane_roundtrip(const char *path, bool compress)
 {
@@ -492,6 +559,8 @@ static void lane_stray(void)
 }
 
 void bsv_movie_free(bsv_movie_t *handle);   /* tasks/task_movie.c */
+bool bsv_movie_handle_read_input_event(bsv_movie_t *movie,
+      uint8_t port, uint8_t dev, uint8_t idx, uint16_t id, int16_t *val);
 
 /* One checkpoint body: the three size words, then @payload_len bytes. */
 static bsv_movie_t *checkpoint_handle(uint8_t *buf, uint32_t size,
@@ -1197,6 +1266,33 @@ static void lane_event_capacity(void)
    lane_done("event_capacity", NULL);
 }
 
+static void lane_input_events(void)
+{
+   bsv_movie_t *h = (bsv_movie_t*)calloc(1, sizeof(*h));
+   int16_t value = 0;
+
+   reset_counters();
+   h->version = 2;
+   bsv_movie_push_input_event(h, 0, RETRO_DEVICE_JOYPAD, 0,
+         RETRO_DEVICE_ID_JOYPAD_MASK, 8);
+   bsv_movie_push_input_event(h, 1, RETRO_DEVICE_JOYPAD, 0,
+         RETRO_DEVICE_ID_JOYPAD_MASK, 32);
+   bsv_movie_push_input_event(h, 0, RETRO_DEVICE_ANALOG, 1, 0, -1234);
+   CHECK(bsv_movie_handle_read_input_event(h, 0, RETRO_DEVICE_JOYPAD, 0,
+            RETRO_DEVICE_ID_JOYPAD_MASK, &value) && value == 8,
+         "first port joypad mask was not replayed");
+   CHECK(bsv_movie_handle_read_input_event(h, 1, RETRO_DEVICE_JOYPAD, 0,
+            RETRO_DEVICE_ID_JOYPAD_MASK, &value) && value == 32,
+         "second port joypad mask was not replayed");
+   CHECK(bsv_movie_handle_read_input_event(h, 0, RETRO_DEVICE_ANALOG, 1, 0,
+            &value) && value == -1234,
+         "signed analog input was not replayed");
+   CHECK(!bsv_movie_handle_read_input_event(h, 0, RETRO_DEVICE_ANALOG, 0, 0,
+            &value), "input from a different index was replayed");
+   free(h);
+   lane_done("input_events", NULL);
+}
+
 /* Seeking to a frame in a replay with no checkpoint before it has
  * nowhere to go, and says so. */
 static void lane_seek_no_checkpoint(void)
@@ -1356,6 +1452,10 @@ static void lane_write_oom(void)
    lane_done("write_oom", NULL);
 }
 
+#ifdef BSV_TEST_NETPLAY
+#include "bsv_netplay_test.inc"
+#endif
+
 int main(int argc, char **argv)
 {
    const char *path = "bsv_replay_init_test.replay";
@@ -1389,6 +1489,7 @@ int main(int argc, char **argv)
    lane_state_replay_len();
    lane_serialize_short(path);
    lane_event_capacity();
+   lane_input_events();
    lane_seek_no_checkpoint();
    lane_checkpoint_seek();
    lane_skips();
@@ -1396,6 +1497,10 @@ int main(int argc, char **argv)
    lane_v1_short_state();
    lane_short_block();
    lane_write_oom();
+   lane_record_waits_for_load(path);
+#ifdef BSV_TEST_NETPLAY
+   lane_netplay();
+#endif
 
    filestream_delete(path);
    task_queue_deinit();

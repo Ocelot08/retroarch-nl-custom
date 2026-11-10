@@ -46,7 +46,7 @@
 /* Required for OpenDingux IPU filter + refresh
  * rate settings */
 #if defined(DINGUX)
-#include "dingux/dingux_utils.h"
+#include "os/dingux/dingux_utils.h"
 #endif
 
 /* Required for 'show inputs on overlay' setting */
@@ -418,7 +418,12 @@
 #define MAXIMUM_SCANLINE_SYNC_OFFSET 3000
 
 /* Vulkan specific */
+#if defined(__PSL1GHT__) || defined(__PS3__)
+/* RSX keeps the core behind each flip with two: lowest input latency */
+#define DEFAULT_MAX_SWAPCHAIN_IMAGES 2
+#else
 #define DEFAULT_MAX_SWAPCHAIN_IMAGES 3
+#endif
 #define MINIMUM_MAX_SWAPCHAIN_IMAGES 2
 #define MAXIMUM_MAX_SWAPCHAIN_IMAGES 4
 
@@ -566,6 +571,18 @@
  * times. Off: the fixed-timer pacing threaded video always had. */
 #define DEFAULT_VIDEO_THREADED_DISPLAY_PACING false
 
+/* The Direct3D 9 drivers on a Direct3D9Ex device: a window presented
+ * through the flip model, and the frame latency settings honoured.
+ * Off: the discard swap effect and the runtime's own queue, as before. */
+#define DEFAULT_VIDEO_D3D9EX_PRESENT false
+
+/* Screens a core sends as views may go to a window or display of their
+ * own. Android puts them on a second display when there is one. */
+#if defined(ANDROID)
+#define DEFAULT_VIDEO_WINDOWS_ENABLE true
+#else
+#define DEFAULT_VIDEO_WINDOWS_ENABLE false
+#endif
 
 
 #if defined(HAVE_THREADS)
@@ -626,6 +643,10 @@
 /* Enable use of shaders */
 #define DEFAULT_SHADER_ENABLE true
 
+/* Which compiler builds slang passes in a build that carries both
+ * rslc and the system's glslang + SPIRV-Cross: 0 rslc, 1 glslang. */
+#define DEFAULT_VIDEO_SHADER_COMPILER 0
+
 /* When enabled, shaders compile one pass per frame instead of
  * stalling for the entire preset.  Disable to force the legacy
  * synchronous (blocking) shader load path. */
@@ -672,6 +693,17 @@
 #define DEFAULT_VIDEO_SHADER_PRESET_SAVE_REFERENCE_ENABLE true
 
 #define DEFAULT_SHADER_DELAY 0
+
+/* Slang passes see this size as the first pass's SourceSize instead of
+ * the frame's, so resolution-sensitive shaders treat a large frame like
+ * a small one. */
+#define DEFAULT_VIDEO_SHADER_SIMULATED_INPUT_RESOLUTION false
+#define DEFAULT_VIDEO_SHADER_SIMULATED_INPUT_RESOLUTION_WIDTH 320
+#define DEFAULT_VIDEO_SHADER_SIMULATED_INPUT_RESOLUTION_HEIGHT 240
+#define MIN_VIDEO_SHADER_SIMULATED_INPUT_RESOLUTION_WIDTH 150
+#define MAX_VIDEO_SHADER_SIMULATED_INPUT_RESOLUTION_WIDTH 1920
+#define MIN_VIDEO_SHADER_SIMULATED_INPUT_RESOLUTION_HEIGHT 100
+#define MAX_VIDEO_SHADER_SIMULATED_INPUT_RESOLUTION_HEIGHT 1440
 
 /* Only scale in integer steps.
  * The base size depends on system-reported geometry and aspect ratio.
@@ -984,7 +1016,7 @@
 #define DEFAULT_CONTENT_SHOW_HISTORY true
 #define DEFAULT_CONTENT_SHOW_FAVORITES true
 #define DEFAULT_CONTENT_SHOW_FAVORITES_FIRST false
-#ifdef HAVE_IMAGEVIEWER
+#if defined(HAVE_IMAGEVIEWER) || defined(HAVE_MENU)
 #define DEFAULT_CONTENT_SHOW_IMAGES true
 #endif
 #define DEFAULT_CONTENT_SHOW_MUSIC false
@@ -1157,6 +1189,11 @@
 
 #define DEFAULT_OVERLAY_DPAD_DIAGONAL_SENSITIVITY 80
 #define DEFAULT_OVERLAY_ABXY_DIAGONAL_SENSITIVITY 50
+/* How the overlay's D-pad and face buttons read a touch: the way its
+ * centre lies (OVERLAY_CONTACT_METHOD_VECTOR), as they always have */
+#define DEFAULT_OVERLAY_DPAD_METHOD 0
+#define DEFAULT_OVERLAY_ABXY_METHOD 0
+#define DEFAULT_OVERLAY_CONTACT_SCALE 100
 
 #define DEFAULT_MENU_SWAP_OK_CANCEL_BUTTONS true
 #define DEFAULT_MENU_SWAP_SCROLL_BUTTONS false
@@ -1630,6 +1667,15 @@
 /* Allow players to pause */
 #define DEFAULT_NETPLAY_ALLOW_PAUSING false
 
+/* Sync both analog sticks of joypad ports. Clients older than
+ * netplay protocol 8 cannot join a host with this on. */
+#define DEFAULT_NETPLAY_ANALOG_JOYPADS true
+
+/* Wait for every player's input instead of guessing and rewinding.
+ * Cores whose states are too large or not deterministic enough to
+ * rewind on play lockstep whatever this says. */
+#define DEFAULT_NETPLAY_LOCKSTEP false
+
 /* Allow connections in slave mode */
 #define DEFAULT_NETPLAY_ALLOW_SLAVES true
 
@@ -1756,6 +1802,27 @@
 
 /* Enable runloop for variable refresh rate screens. Force x1 speed while handling fast forward too. */
 #define DEFAULT_VRR_RUNLOOP_ENABLE false
+
+/* Driver Pacing (NVIDIA Reflex through VK_NV_low_latency2): off, so pacing is
+ * what it was; VIDEO_DRIVER_PACING_ON or VIDEO_DRIVER_PACING_BOOST to use it. */
+#define DEFAULT_VIDEO_DRIVER_PACING 0
+
+/* Temporal Upscaler: off; VIDEO_TEMPORAL_UPSCALER_DLSS, _FSR or _XESS
+ * runs that upscaler where its library is found. */
+#define DEFAULT_VIDEO_TEMPORAL_UPSCALER 0
+#define DEFAULT_VIDEO_TEMPORAL_UPSCALER_QUALITY 0
+#define DEFAULT_VIDEO_TEMPORAL_UPSCALER_PRESET 0
+#define DEFAULT_VIDEO_TEMPORAL_UPSCALER_SHARPNESS 0
+/* DLSS Neural Rendering: off; the model's own defaults (skin structure
+ * -5 follows local structure) */
+#define DEFAULT_VIDEO_DLSS_NR_ENABLE false
+#define DEFAULT_VIDEO_DLSS_NR_PRESET 0
+#define DEFAULT_VIDEO_DLSS_NR_STYLE 0
+#define DEFAULT_VIDEO_DLSS_NR_INTENSITY 100
+#define DEFAULT_VIDEO_DLSS_NR_LOCAL_STRUCTURE 100
+#define DEFAULT_VIDEO_DLSS_NR_LOCAL_TONE 100
+#define DEFAULT_VIDEO_DLSS_NR_SKIN_STRUCTURE -5
+#define DEFAULT_VIDEO_DLSS_NR_AUTO_MASK true
 
 /* The menu runs at the display's refresh rate while content is loaded */
 #define DEFAULT_MENU_FRAME_RATE MENU_FRAME_RATE_DISPLAY
@@ -2004,6 +2071,8 @@
 #endif
 #define DEFAULT_INPUT_POLL_TYPE_BEHAVIOR 2
 #define DEFAULT_INPUT_HOTKEY_BLOCK_DELAY 5
+/* Off: the hotkey enabler reaches the game as it is pressed */
+#define DEFAULT_INPUT_HOTKEY_TAP_DELAY 0
 #define DEFAULT_INPUT_HOTKEY_DEVICE_MERGE false
 #define DEFAULT_INPUT_HOTKEY_FOLLOWS_PLAYER1 false
 
@@ -2124,7 +2193,7 @@
 
 /* Defines the strength of rumble effects
  * on OpenDingux devices */
-#if defined(DINGUX) && defined(HAVE_LIBSHAKE)
+#if defined(DINGUX) && defined(__linux__)
 #define DEFAULT_RUMBLE_GAIN 50
 #else
 #define DEFAULT_RUMBLE_GAIN 100
@@ -2284,13 +2353,14 @@
 
 #define DEFAULT_AI_SERVICE_URL "http://localhost:4404/"
 
-#if defined(HAVE_FFMPEG) || defined(HAVE_MPV) || defined(HAVE_WEBMPLAYER)
+#if defined(HAVE_FFMPEG) || defined(HAVE_MPV) || defined(HAVE_WEBMPLAYER) \
+      || (defined(HAVE_MENU) && (defined(HAVE_RMP4) || defined(HAVE_RWEBM)))
 #define DEFAULT_BUILTIN_MEDIAPLAYER_ENABLE true
 #else
 #define DEFAULT_BUILTIN_MEDIAPLAYER_ENABLE false
 #endif
 
-#if defined(HAVE_IMAGEVIEWER)
+#if defined(HAVE_IMAGEVIEWER) || defined(HAVE_MENU)
 #define DEFAULT_BUILTIN_IMAGEVIEWER_ENABLE true
 #else
 #define DEFAULT_BUILTIN_IMAGEVIEWER_ENABLE false

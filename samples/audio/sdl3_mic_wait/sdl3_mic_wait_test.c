@@ -154,10 +154,15 @@ int main(void)
    CHECK(got == 0);
    CHECK(elapsed < 150);
 
-   /* And a device already gone is answered without waiting at all. */
-   t0 = SDL_GetTicks();
-   CHECK(sdl3_microphone_wait_readable(NULL, &slow, WORKER_SLICE) == 0);
-   CHECK(SDL_GetTicks() - t0 < 50);
+   /* A device already gone is answered after one bounded wait, so
+    * the capture worker retrying it doesn't spin. */
+   SDL_SetAtomicInt(&mic.device_removed, 1);
+   t0      = SDL_GetTicks();
+   got     = sdl3_microphone_wait_readable(NULL, &mic, WORKER_SLICE);
+   elapsed = SDL_GetTicks() - t0;
+   CHECK(got == 0);
+   CHECK(elapsed >= 15 && elapsed < 100);
+   SDL_SetAtomicInt(&mic.device_removed, 0);
 
    /* A stream that fails: every read comes back -1, and a second of
     * frames asking says nothing. */
@@ -172,6 +177,35 @@ int main(void)
          rc |= sdl3_microphone_read(&dummy_driver, &broken, frame, sizeof(frame)) != -1;
       CHECK(rc == 0);
       CHECK(log_lines == 0);
+   }
+
+   /* Past its cap the backlog loses its oldest frames, down to half
+    * the cap: what is kept is the newest audio, and a stall does not
+    * leave the capture running a whole cap behind. Under the cap
+    * nothing goes. */
+   {
+      sdl3_audio_t trim;
+      static int16_t ramp[PERIOD_SHORT * 5];
+      int16_t      first, last;
+      int          i;
+      for (i = 0; i < PERIOD_SHORT * 5; i++)
+         ramp[i] = (int16_t)i;
+      mic_open(&trim, PERIOD_SHORT);
+      trim.buffer_size = BYTES_SHORT * 4;
+
+      CHECK(SDL_PutAudioStreamData(trim.stream, ramp, BYTES_SHORT * 3));
+      CHECK(SDL_GetAudioStreamAvailable(trim.stream) == BYTES_SHORT * 3);
+
+      SDL_ClearAudioStream(trim.stream);
+      CHECK(SDL_PutAudioStreamData(trim.stream, ramp, BYTES_SHORT * 5));
+      CHECK(SDL_GetAudioStreamAvailable(trim.stream) == BYTES_SHORT * 2);
+      CHECK(SDL_GetAudioStreamData(trim.stream, &first, 2) == 2);
+      CHECK(first == PERIOD_SHORT * 3);
+      CHECK(SDL_GetAudioStreamAvailable(trim.stream) == BYTES_SHORT * 2 - 2);
+      SDL_GetAudioStreamData(trim.stream, ramp, BYTES_SHORT * 2 - 4);
+      CHECK(SDL_GetAudioStreamData(trim.stream, &last, 2) == 2);
+      CHECK(last == PERIOD_SHORT * 5 - 1);
+      mic_close(&trim);
    }
 
    mic_close(&slow);

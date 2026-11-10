@@ -503,7 +503,6 @@ static void *pulse_init(const char *device, unsigned rate,
    retro_atomic_size_init(&pa->underruns, 0);
    retro_atomic_int_init(&pa->clk_ppm, AUDIO_CLOCK_PPM_NONE);
 
-   memset(&spec, 0, sizeof(spec));
 
    pa->devicelist = string_list_new();
 
@@ -569,7 +568,7 @@ static void *pulse_init(const char *device, unsigned rate,
    pa_stream_set_buffer_attr_callback(pa->stream, pulse_buffer_attr_cb, pa);
 
    buffer_attr.maxlength = -1;
-   buffer_attr.tlength   = pa_usec_to_bytes(latency * PA_USEC_PER_MSEC, &spec);
+   buffer_attr.tlength   = (uint32_t)pa_usec_to_bytes(latency * PA_USEC_PER_MSEC, &spec);
    buffer_attr.prebuf    = -1;
    buffer_attr.minreq    = -1;
    buffer_attr.fragsize  = -1;

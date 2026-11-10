@@ -109,6 +109,7 @@ GENERIC_DEFERRED_PUSH(deferred_push_content_collection_list,        DISPLAYLIST_
 GENERIC_DEFERRED_PUSH(deferred_push_configurations_list,            DISPLAYLIST_CONFIGURATIONS_LIST)
 GENERIC_DEFERRED_PUSH(deferred_push_load_content_special,           DISPLAYLIST_LOAD_CONTENT_LIST)
 GENERIC_DEFERRED_PUSH(deferred_push_load_content_list,              DISPLAYLIST_LOAD_CONTENT_LIST)
+GENERIC_DEFERRED_PUSH(deferred_push_manual_content_scan_dir_list,   DISPLAYLIST_MANUAL_CONTENT_SCAN_DIR_LIST)
 GENERIC_DEFERRED_PUSH(deferred_push_dump_disk_list,                 DISPLAYLIST_DUMP_DISC)
 #ifdef HAVE_LAKKA
 GENERIC_DEFERRED_PUSH(deferred_push_eject_disc,                     DISPLAYLIST_EJECT_DISC)
@@ -175,6 +176,7 @@ GENERIC_DEFERRED_PUSH(deferred_push_video_output_settings_list,    DISPLAYLIST_V
 GENERIC_DEFERRED_PUSH(deferred_push_video_scaling_settings_list,    DISPLAYLIST_VIDEO_SCALING_SETTINGS_LIST)
 GENERIC_DEFERRED_PUSH(deferred_push_video_hdr_settings_list,        DISPLAYLIST_VIDEO_HDR_SETTINGS_LIST)
 GENERIC_DEFERRED_PUSH(deferred_push_video_stereo_settings_list,     DISPLAYLIST_VIDEO_STEREO_SETTINGS_LIST)
+GENERIC_DEFERRED_PUSH(deferred_push_video_dlss_nr_settings_list,    DISPLAYLIST_VIDEO_DLSS_NR_SETTINGS_LIST)
 GENERIC_DEFERRED_PUSH(deferred_push_crt_switchres_settings_list,    DISPLAYLIST_CRT_SWITCHRES_SETTINGS_LIST)
 GENERIC_DEFERRED_PUSH(deferred_push_configuration_settings_list,    DISPLAYLIST_CONFIGURATION_SETTINGS_LIST)
 GENERIC_DEFERRED_PUSH(deferred_push_saving_settings_list,           DISPLAYLIST_SAVING_SETTINGS_LIST)
@@ -204,6 +206,7 @@ GENERIC_DEFERRED_PUSH(deferred_push_overlay_custom_button_list,     DISPLAYLIST_
 GENERIC_DEFERRED_PUSH(deferred_push_overlay_custom_input_list,      DISPLAYLIST_OVERLAY_CUSTOM_INPUT_LIST)
 #endif
 GENERIC_DEFERRED_PUSH(deferred_push_menu_file_browser_settings_list,DISPLAYLIST_MENU_FILE_BROWSER_SETTINGS_LIST)
+GENERIC_DEFERRED_PUSH(deferred_push_media_player_settings_list,DISPLAYLIST_MEDIA_PLAYER_SETTINGS_LIST)
 GENERIC_DEFERRED_PUSH(deferred_push_menu_views_settings_list,       DISPLAYLIST_MENU_VIEWS_SETTINGS_LIST)
 GENERIC_DEFERRED_PUSH(deferred_push_quick_menu_views_settings_list, DISPLAYLIST_QUICK_MENU_VIEWS_SETTINGS_LIST)
 GENERIC_DEFERRED_PUSH(deferred_push_settings_views_settings_list, DISPLAYLIST_SETTINGS_VIEWS_SETTINGS_LIST)
@@ -258,6 +261,7 @@ GENERIC_DEFERRED_PUSH(deferred_push_playlist_settings_list,         DISPLAYLIST_
 GENERIC_DEFERRED_PUSH(deferred_push_playlist_manager_list,          DISPLAYLIST_PLAYLIST_MANAGER_LIST)
 GENERIC_DEFERRED_PUSH(deferred_push_playlist_manager_settings,      DISPLAYLIST_PLAYLIST_MANAGER_SETTINGS)
 GENERIC_DEFERRED_PUSH(deferred_push_input_retropad_binds_list,        DISPLAYLIST_INPUT_RETROPAD_BINDS_LIST)
+GENERIC_DEFERRED_PUSH(deferred_push_input_controllers_list,           DISPLAYLIST_INPUT_CONTROLLERS_LIST)
 GENERIC_DEFERRED_PUSH(deferred_push_input_hotkey_binds_list,        DISPLAYLIST_INPUT_HOTKEY_BINDS_LIST)
 GENERIC_DEFERRED_PUSH(deferred_push_accounts_cheevos_list,          DISPLAYLIST_ACCOUNTS_CHEEVOS_LIST)
 GENERIC_DEFERRED_PUSH(deferred_push_accounts_twitch_list,           DISPLAYLIST_ACCOUNTS_TWITCH_LIST)
@@ -270,6 +274,9 @@ GENERIC_DEFERRED_PUSH(deferred_push_core_list_deferred,             DISPLAYLIST_
 GENERIC_DEFERRED_PUSH(deferred_push_core_collection_list_deferred,  DISPLAYLIST_CORES_COLLECTION_SUPPORTED)
 GENERIC_DEFERRED_PUSH(deferred_push_menu_sounds_list,               DISPLAYLIST_MENU_SOUNDS_LIST)
 GENERIC_DEFERRED_PUSH(deferred_push_rgui_theme_preset,              DISPLAYLIST_RGUI_THEME_PRESETS)
+#ifdef HAVE_VULKAN_CUSTOM_DRIVER
+GENERIC_DEFERRED_PUSH(deferred_push_vulkan_driver,                  DISPLAYLIST_VULKAN_DRIVERS)
+#endif
 
 #ifdef HAVE_NETWORKING
 GENERIC_DEFERRED_PUSH(deferred_push_pl_thumbnails_updater_list,     DISPLAYLIST_PL_THUMBNAILS_UPDATER)
@@ -322,35 +329,42 @@ static int general_push(menu_displaylist_info_t *info,
       unsigned id, enum menu_displaylist_ctl_state state)
 {
    size_t _len                                = 0;
-   /* Maximum size for the deduplicated '|'-delimited extension list.
-    * With dedup the realistic ceiling is ~1500 bytes even with all
-    * cores + multimedia extensions combined.  2048 provides headroom. */
-   /* The extension filter plus the two path scratch buffers below sit
-    * in one heap block: together they were a 3 KiB frame at console
-    * path lengths, on the deferred-push path that runs from menu task
-    * threads.  Everything that leaves this function is copied out
-    * (info->exts is strdup()d), so the block dies with the frame. */
+   /* The path scratch buffers and the extension filter share one heap
+    * block; info->exts is strdup()d out of it. */
    struct general_push_bufs
    {
-      char ext_filter[2048];
       char tmp_str[PATH_MAX_LENGTH];
       char tmp_path[PATH_MAX_LENGTH];
    } *gb = NULL;
    char *ext_filter = NULL;
+   /* Fixed lists (archive, audio mixer, media player, image viewer)
+    * plus every variable-length source merged below. */
+   size_t ext_size                            = 2048;
+   struct retro_system_info *cur_sysinfo      = &runloop_state_get_ptr()->system.info;
+   core_info_list_t *core_list                = NULL;
    settings_t                  *settings      = config_get_ptr();
    menu_handle_t                  *menu       = menu_state_get_ptr()->driver_data;
 #if defined(HAVE_FFMPEG) || defined(HAVE_MPV) || defined (HAVE_AUDIOMIXER)
    bool multimedia_builtin_mediaplayer_enable = settings->bools.multimedia_builtin_mediaplayer_enable;
 #endif
-#ifdef HAVE_IMAGEVIEWER
+#if defined(HAVE_IMAGEVIEWER) || defined(HAVE_MENU)
    bool multimedia_builtin_imageviewer_enable = settings->bools.multimedia_builtin_imageviewer_enable;
 #endif
    if (!menu)
       return -1;
 
-   if (!(gb = (struct general_push_bufs*)calloc(1, sizeof(*gb))))
+   core_info_get_list(&core_list);
+   if (cur_sysinfo->valid_extensions)
+      ext_size += strlen(cur_sysinfo->valid_extensions);
+   if (info->exts)
+      ext_size += strlen(info->exts);
+   if (core_list && core_list->all_ext)
+      ext_size += strlen(core_list->all_ext);
+   ext_size += strlen(manual_content_scan_get_file_exts());
+
+   if (!(gb = (struct general_push_bufs*)calloc(1, sizeof(*gb) + ext_size)))
       return -1;
-   ext_filter = gb->ext_filter;
+   ext_filter = (char*)(gb + 1);
 
    if (   (id == PUSH_ARCHIVE_OPEN_DETECT_CORE)
        || (id == PUSH_ARCHIVE_OPEN))
@@ -401,7 +415,7 @@ static int general_push(menu_displaylist_info_t *info,
       case PUSH_ARCHIVE_OPEN:
          /* Overlay picker still wants only .cfg inside the archive. */
          if (filebrowser_get_type() == FILEBROWSER_SELECT_OVERLAY)
-            string_ext_list_merge_dedup(ext_filter, &_len, 2048, "cfg");
+            string_ext_list_merge_dedup(ext_filter, &_len, ext_size, "cfg");
          else
          {
             /* Browse Archive from Load Content uses this push (not
@@ -436,9 +450,9 @@ static int general_push(menu_displaylist_info_t *info,
 
             if (valid_extensions && *valid_extensions)
             {
-               string_ext_list_merge_dedup(ext_filter, &_len, 2048, valid_extensions);
+               string_ext_list_merge_dedup(ext_filter, &_len, ext_size, valid_extensions);
 #ifdef HAVE_RMODTRACKER
-               string_ext_list_merge_dedup(ext_filter, &_len, 2048, "s3m|mod|xm");
+               string_ext_list_merge_dedup(ext_filter, &_len, ext_size, "s3m|mod|xm");
 #endif
             }
          }
@@ -452,52 +466,52 @@ static int general_push(menu_displaylist_info_t *info,
 
             if (sysinfo && sysinfo->valid_extensions && *sysinfo->valid_extensions
                 && filter_by_current_core)
-               string_ext_list_merge_dedup(ext_filter, &_len, 2048, sysinfo->valid_extensions);
+               string_ext_list_merge_dedup(ext_filter, &_len, ext_size, sysinfo->valid_extensions);
             else
             {
                core_info_list_t *list = NULL;
                core_info_get_list(&list);
                if (list && *list->all_ext)
-                  string_ext_list_merge_dedup(ext_filter, &_len, 2048, list->all_ext);
+                  string_ext_list_merge_dedup(ext_filter, &_len, ext_size, list->all_ext);
             }
 #if defined(HAVE_AUDIOMIXER)
             if (multimedia_builtin_mediaplayer_enable)
             {
 #if defined(HAVE_RMP3)
-               string_ext_list_merge_dedup(ext_filter, &_len, 2048, "mp3");
+               string_ext_list_merge_dedup(ext_filter, &_len, ext_size, "mp3");
 #endif
 #if defined(HAVE_RVORBIS)
-               string_ext_list_merge_dedup(ext_filter, &_len, 2048, "ogg");
+               string_ext_list_merge_dedup(ext_filter, &_len, ext_size, "ogg");
 #endif
 #if defined(HAVE_RFLAC)
-               string_ext_list_merge_dedup(ext_filter, &_len, 2048, "flac");
+               string_ext_list_merge_dedup(ext_filter, &_len, ext_size, "flac");
 #endif
 #if defined(HAVE_RWAV)
-               string_ext_list_merge_dedup(ext_filter, &_len, 2048, "wav");
+               string_ext_list_merge_dedup(ext_filter, &_len, ext_size, "wav");
 #endif
 #ifdef HAVE_RAAC
 #ifdef HAVE_RMP4
-               string_ext_list_merge_dedup(ext_filter, &_len, 2048, "m4a");
+               string_ext_list_merge_dedup(ext_filter, &_len, ext_size, "m4a");
 #endif
-               string_ext_list_merge_dedup(ext_filter, &_len, 2048, "aac");
+               string_ext_list_merge_dedup(ext_filter, &_len, ext_size, "aac");
 #endif
 #ifdef HAVE_RAC3
-               string_ext_list_merge_dedup(ext_filter, &_len, 2048, "ac3");
-               string_ext_list_merge_dedup(ext_filter, &_len, 2048, "eac3");
-               string_ext_list_merge_dedup(ext_filter, &_len, 2048, "ec3");
+               string_ext_list_merge_dedup(ext_filter, &_len, ext_size, "ac3");
+               string_ext_list_merge_dedup(ext_filter, &_len, ext_size, "eac3");
+               string_ext_list_merge_dedup(ext_filter, &_len, ext_size, "ec3");
 #endif
 #ifdef HAVE_RLPCM
-               string_ext_list_merge_dedup(ext_filter, &_len, 2048, "lpcm");
-               string_ext_list_merge_dedup(ext_filter, &_len, 2048, "pcm");
+               string_ext_list_merge_dedup(ext_filter, &_len, ext_size, "lpcm");
+               string_ext_list_merge_dedup(ext_filter, &_len, ext_size, "pcm");
 #endif
 #ifdef HAVE_ROPUS
-               string_ext_list_merge_dedup(ext_filter, &_len, 2048, "opus");
+               string_ext_list_merge_dedup(ext_filter, &_len, ext_size, "opus");
 #endif
 #if defined(HAVE_RWEBM) && (defined(HAVE_ROPUS) || defined(HAVE_RVORBIS))
-               string_ext_list_merge_dedup(ext_filter, &_len, 2048, "weba");
+               string_ext_list_merge_dedup(ext_filter, &_len, ext_size, "weba");
 #endif
 #ifdef HAVE_RMODTRACKER
-               string_ext_list_merge_dedup(ext_filter, &_len, 2048, "s3m|mod|xm");
+               string_ext_list_merge_dedup(ext_filter, &_len, ext_size, "s3m|mod|xm");
 #endif
             }
 #endif
@@ -518,27 +532,53 @@ static int general_push(menu_displaylist_info_t *info,
 #endif
       if (*sysinfo.valid_extensions)
       {
-         string_ext_list_merge_dedup(ext_filter, &_len, 2048, sysinfo.valid_extensions);
+         string_ext_list_merge_dedup(ext_filter, &_len, ext_size, sysinfo.valid_extensions);
       }
    }
 #endif
 
-#ifdef HAVE_IMAGEVIEWER
+   /* Movies the menu previews with the in-tree demuxers */
+#if defined(HAVE_RWEBM) || defined(HAVE_RMP4)
+   if (id != PUSH_ARCHIVE_OPEN)
+   {
+#ifdef HAVE_RWEBM
+      string_ext_list_merge_dedup(ext_filter, &_len, ext_size, "webm|mkv");
+#endif
+#ifdef HAVE_RMP4
+      string_ext_list_merge_dedup(ext_filter, &_len, ext_size, "mp4|m4v");
+#endif
+   }
+#endif
+
+#if defined(HAVE_IMAGEVIEWER) || defined(HAVE_MENU)
    if (multimedia_builtin_imageviewer_enable && id != PUSH_ARCHIVE_OPEN)
    {
-      struct retro_system_info sysinfo = {0};
-      libretro_imageviewer_retro_get_system_info(&sysinfo);
-      if (*sysinfo.valid_extensions)
-      {
-         string_ext_list_merge_dedup(ext_filter, &_len, 2048, sysinfo.valid_extensions);
-      }
+#ifdef HAVE_RPNG
+      string_ext_list_merge_dedup(ext_filter, &_len, ext_size, "png");
+#endif
+#ifdef HAVE_RJPEG
+      string_ext_list_merge_dedup(ext_filter, &_len, ext_size, "jpg|jpeg");
+#endif
+#ifdef HAVE_RBMP
+      string_ext_list_merge_dedup(ext_filter, &_len, ext_size, "bmp");
+#endif
+#ifdef HAVE_RTGA
+      string_ext_list_merge_dedup(ext_filter, &_len, ext_size, "tga");
+#endif
+#ifdef HAVE_RWEBP
+      string_ext_list_merge_dedup(ext_filter, &_len, ext_size, "webp");
+#endif
    }
 #endif
 
-   if (     string_is_equal(info->label, MENU_ENUM_LABEL_MANUAL_CONTENT_SCAN_DIR_STR)
-         && manual_content_scan_get_scan_method_enum() == MANUAL_CONTENT_SCAN_METHOD_CUSTOM)
+   /* Content Location lists what the scan reads: in Custom its
+    * extensions, in Automatic every file */
+   if (string_is_equal(info->label, MENU_ENUM_LABEL_MANUAL_CONTENT_SCAN_DIR_STR))
    {
-      strlcpy(ext_filter, manual_content_scan_get_file_exts(), 2048);
+      if (manual_content_scan_get_scan_method_enum() == MANUAL_CONTENT_SCAN_METHOD_CUSTOM)
+         strlcpy(ext_filter, manual_content_scan_get_file_exts(), ext_size);
+      else
+         ext_filter[0] = '\0';
       string_replace_all_chars(ext_filter, ' ', '|');
    }
 
@@ -594,6 +634,8 @@ GENERIC_DEFERRED_PUSH_GENERAL(deferred_push_dropdown_box_list_input_device_type,
 GENERIC_DEFERRED_PUSH_GENERAL(deferred_push_dropdown_box_list_input_description, PUSH_DEFAULT, DISPLAYLIST_DROPDOWN_LIST_INPUT_DESCRIPTION)
 GENERIC_DEFERRED_PUSH_GENERAL(deferred_push_dropdown_box_list_input_description_kbd, PUSH_DEFAULT, DISPLAYLIST_DROPDOWN_LIST_INPUT_DESCRIPTION_KBD)
 GENERIC_DEFERRED_PUSH_GENERAL(deferred_push_dropdown_box_list_input_select_reserved_device, PUSH_DEFAULT, DISPLAYLIST_DROPDOWN_LIST_INPUT_SELECT_RESERVED_DEVICE)
+GENERIC_DEFERRED_PUSH_GENERAL(deferred_push_dropdown_box_list_input_plays_as, PUSH_DEFAULT, DISPLAYLIST_DROPDOWN_LIST_INPUT_PLAYS_AS)
+GENERIC_DEFERRED_PUSH_GENERAL(deferred_push_dropdown_box_list_input_plays_as_add, PUSH_DEFAULT, DISPLAYLIST_DROPDOWN_LIST_INPUT_PLAYS_AS_ADD)
 #ifdef ANDROID
 GENERIC_DEFERRED_PUSH_GENERAL(deferred_push_dropdown_box_list_input_select_physical_keyboard, PUSH_DEFAULT, DISPLAYLIST_DROPDOWN_LIST_INPUT_SELECT_PHYSICAL_KEYBOARD)
 #endif
@@ -646,6 +688,8 @@ static int menu_cbs_init_bind_deferred_push_compare_label(
       {MENU_ENUM_LABEL_DEFERRED_DROPDOWN_BOX_LIST_INPUT_DESCRIPTION, deferred_push_dropdown_box_list_input_description},
       {MENU_ENUM_LABEL_DEFERRED_DROPDOWN_BOX_LIST_INPUT_DESCRIPTION_KBD, deferred_push_dropdown_box_list_input_description_kbd},
       {MENU_ENUM_LABEL_DEFERRED_DROPDOWN_BOX_LIST_INPUT_SELECT_RESERVED_DEVICE, deferred_push_dropdown_box_list_input_select_reserved_device},
+      {MENU_ENUM_LABEL_DEFERRED_DROPDOWN_BOX_LIST_INPUT_PLAYS_AS, deferred_push_dropdown_box_list_input_plays_as},
+      {MENU_ENUM_LABEL_DEFERRED_DROPDOWN_BOX_LIST_INPUT_PLAYS_AS_ADD, deferred_push_dropdown_box_list_input_plays_as_add},
 #ifdef ANDROID
       {MENU_ENUM_LABEL_DEFERRED_DROPDOWN_BOX_LIST_INPUT_SELECT_PHYSICAL_KEYBOARD, deferred_push_dropdown_box_list_input_select_physical_keyboard},
 #endif
@@ -684,6 +728,7 @@ static int menu_cbs_init_bind_deferred_push_compare_label(
       {MENU_ENUM_LABEL_DEFERRED_OVERLAY_CUSTOM_INPUT_LIST, deferred_push_overlay_custom_input_list},
 #endif
       {MENU_ENUM_LABEL_DEFERRED_MENU_FILE_BROWSER_SETTINGS_LIST, deferred_push_menu_file_browser_settings_list},
+      {MENU_ENUM_LABEL_DEFERRED_MEDIA_PLAYER_SETTINGS_LIST, deferred_push_media_player_settings_list},
       {MENU_ENUM_LABEL_DEFERRED_MENU_VIEWS_SETTINGS_LIST, deferred_push_menu_views_settings_list},
       {MENU_ENUM_LABEL_DEFERRED_SETTINGS_VIEWS_SETTINGS_LIST, deferred_push_settings_views_settings_list},
       {MENU_ENUM_LABEL_DEFERRED_QUICK_MENU_VIEWS_SETTINGS_LIST, deferred_push_quick_menu_views_settings_list},
@@ -756,6 +801,7 @@ static int menu_cbs_init_bind_deferred_push_compare_label(
       {MENU_ENUM_LABEL_DEFERRED_VIDEO_SCALING_SETTINGS_LIST, deferred_push_video_scaling_settings_list},
       {MENU_ENUM_LABEL_DEFERRED_VIDEO_HDR_SETTINGS_LIST, deferred_push_video_hdr_settings_list},
       {MENU_ENUM_LABEL_DEFERRED_VIDEO_STEREO_SETTINGS_LIST, deferred_push_video_stereo_settings_list},
+      {MENU_ENUM_LABEL_DEFERRED_VIDEO_DLSS_NR_SETTINGS_LIST, deferred_push_video_dlss_nr_settings_list},
       {MENU_ENUM_LABEL_DEFERRED_CRT_SWITCHRES_SETTINGS_LIST, deferred_push_crt_switchres_settings_list},
       {MENU_ENUM_LABEL_DEFERRED_AUDIO_SETTINGS_LIST, deferred_push_audio_settings_list},
       {MENU_ENUM_LABEL_DEFERRED_AUDIO_SYNCHRONIZATION_SETTINGS_LIST, deferred_push_audio_synchronization_settings_list},
@@ -784,6 +830,7 @@ static int menu_cbs_init_bind_deferred_push_compare_label(
       {MENU_ENUM_LABEL_SHADER_OPTIONS, deferred_push_shader_options},
       {MENU_ENUM_LABEL_DEFERRED_USER_BINDS_LIST, deferred_user_binds_list},
       {MENU_ENUM_LABEL_DEFERRED_INPUT_RETROPAD_BINDS_LIST, deferred_push_input_retropad_binds_list},
+      {MENU_ENUM_LABEL_DEFERRED_INPUT_CONTROLLERS_LIST, deferred_push_input_controllers_list},
       {MENU_ENUM_LABEL_DEFERRED_INPUT_HOTKEY_BINDS_LIST, deferred_push_input_hotkey_binds_list},
       {MENU_ENUM_LABEL_DEFERRED_QUICK_MENU_OVERRIDE_OPTIONS, deferred_push_quick_menu_override_options},
       {MENU_ENUM_LABEL_DEFERRED_ACCOUNTS_YOUTUBE_LIST, deferred_push_accounts_youtube_list},
@@ -803,6 +850,7 @@ static int menu_cbs_init_bind_deferred_push_compare_label(
       {MENU_ENUM_LABEL_DEFERRED_PLAYLIST_MANAGER_LIST, deferred_push_playlist_manager_list},
       {MENU_ENUM_LABEL_DEFERRED_PLAYLIST_MANAGER_SETTINGS, deferred_push_playlist_manager_settings},
       {MENU_ENUM_LABEL_LOAD_CONTENT_LIST, deferred_push_load_content_list},
+      {MENU_ENUM_LABEL_DEFERRED_MANUAL_CONTENT_SCAN_DIR_LIST, deferred_push_manual_content_scan_dir_list},
       {MENU_ENUM_LABEL_DEFERRED_PLAYLIST_SETTINGS_LIST, deferred_push_playlist_settings_list},
       {MENU_ENUM_LABEL_DEFERRED_DATABASE_MANAGER_LIST, deferred_push_database_manager_list_deferred},
       {MENU_ENUM_LABEL_CONFIGURATIONS, deferred_push_configurations},
@@ -836,6 +884,9 @@ static int menu_cbs_init_bind_deferred_push_compare_label(
       {MENU_ENUM_LABEL_RECORD_CONFIG, deferred_push_record_configfile},
       {MENU_ENUM_LABEL_STREAM_CONFIG, deferred_push_stream_configfile},
       {MENU_ENUM_LABEL_RGUI_MENU_THEME_PRESET, deferred_push_rgui_theme_preset},
+#ifdef HAVE_VULKAN_CUSTOM_DRIVER
+      {MENU_ENUM_LABEL_VIDEO_VULKAN_DRIVER_PATH, deferred_push_vulkan_driver},
+#endif
       {MENU_ENUM_LABEL_NETPLAY, deferred_push_netplay},
       {MENU_ENUM_LABEL_CONTENT_SETTINGS, deferred_push_content_settings},
       {MENU_ENUM_LABEL_ADD_CONTENT_LIST, deferred_push_add_content_list},
@@ -900,6 +951,7 @@ static int menu_cbs_init_bind_deferred_push_compare_label(
          { MENU_ENUM_LABEL_DEFERRED_PLAYLIST_MANAGER_SETTINGS, deferred_push_playlist_manager_settings },
          { MENU_ENUM_LABEL_DEFERRED_RECORDING_SETTINGS_LIST, deferred_push_recording_settings_list },
          { MENU_ENUM_LABEL_DEFERRED_INPUT_RETROPAD_BINDS_LIST, deferred_push_input_retropad_binds_list },
+         { MENU_ENUM_LABEL_DEFERRED_INPUT_CONTROLLERS_LIST, deferred_push_input_controllers_list },
          { MENU_ENUM_LABEL_DEFERRED_INPUT_HOTKEY_BINDS_LIST, deferred_push_input_hotkey_binds_list },
          { MENU_ENUM_LABEL_DEFERRED_ACCOUNTS_CHEEVOS_LIST, deferred_push_accounts_cheevos_list },
          { MENU_ENUM_LABEL_DEFERRED_ACCOUNTS_YOUTUBE_LIST, deferred_push_accounts_youtube_list },
@@ -919,6 +971,9 @@ static int menu_cbs_init_bind_deferred_push_compare_label(
          { MENU_ENUM_LABEL_RECORD_CONFIG, deferred_push_record_configfile },
          { MENU_ENUM_LABEL_STREAM_CONFIG, deferred_push_stream_configfile },
          { MENU_ENUM_LABEL_RGUI_MENU_THEME_PRESET, deferred_push_rgui_theme_preset },
+#ifdef HAVE_VULKAN_CUSTOM_DRIVER
+         { MENU_ENUM_LABEL_VIDEO_VULKAN_DRIVER_PATH, deferred_push_vulkan_driver },
+#endif
          { MENU_ENUM_LABEL_SHADER_OPTIONS, deferred_push_shader_options },
          { MENU_ENUM_LABEL_ONLINE_UPDATER, deferred_push_options },
          { MENU_ENUM_LABEL_NETPLAY, deferred_push_netplay },
@@ -927,6 +982,7 @@ static int menu_cbs_init_bind_deferred_push_compare_label(
          { MENU_ENUM_LABEL_CONFIGURATIONS_LIST, deferred_push_configurations_list },
          { MENU_ENUM_LABEL_LOAD_CONTENT_LIST, deferred_push_load_content_list },
          { MENU_ENUM_LABEL_LOAD_CONTENT_SPECIAL, deferred_push_load_content_special },
+         { MENU_ENUM_LABEL_DEFERRED_MANUAL_CONTENT_SCAN_DIR_LIST, deferred_push_manual_content_scan_dir_list },
          { MENU_ENUM_LABEL_INFORMATION_LIST, deferred_push_information_list },
          { MENU_ENUM_LABEL_INFORMATION, deferred_push_information },
          { MENU_ENUM_LABEL_DEFERRED_CORE_LIST, deferred_push_core_list_deferred },
@@ -969,6 +1025,7 @@ static int menu_cbs_init_bind_deferred_push_compare_label(
          { MENU_ENUM_LABEL_DEFERRED_VIDEO_OUTPUT_SETTINGS_LIST, deferred_push_video_output_settings_list },
          { MENU_ENUM_LABEL_DEFERRED_VIDEO_HDR_SETTINGS_LIST, deferred_push_video_hdr_settings_list },
          { MENU_ENUM_LABEL_DEFERRED_VIDEO_STEREO_SETTINGS_LIST, deferred_push_video_stereo_settings_list },
+         { MENU_ENUM_LABEL_DEFERRED_VIDEO_DLSS_NR_SETTINGS_LIST, deferred_push_video_dlss_nr_settings_list },
          { MENU_ENUM_LABEL_DEFERRED_VIDEO_SCALING_SETTINGS_LIST, deferred_push_video_scaling_settings_list },
          { MENU_ENUM_LABEL_DEFERRED_CRT_SWITCHRES_SETTINGS_LIST, deferred_push_crt_switchres_settings_list },
          { MENU_ENUM_LABEL_DEFERRED_CONFIGURATION_SETTINGS_LIST, deferred_push_configuration_settings_list },

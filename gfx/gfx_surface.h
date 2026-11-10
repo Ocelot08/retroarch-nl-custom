@@ -99,8 +99,8 @@ struct gfx_surface
     * cancelled upload cannot strand it. NULL otherwise. */
    gfx_surface_payload_free_t payload_free;
    void *payload;
-   /* Each slot is a frame of @pixfmt: VIDEO_SCALE_AREA(dims) times
-    * IMAGE_PIXFMT_BPP(pixfmt) bytes. */
+   /* Each slot is a frame of @pixfmt, with rows pitch[i] bytes apart.
+    * Owned slots are packed; opted-in producers may borrow wider rows. */
    uint32_t *slots[GFX_SURFACE_MAX_SLOTS];
    /* The surface's own slot memory. Under direct video a slot whose
     * texture the driver can stream may instead be lent upload memory
@@ -114,6 +114,12 @@ struct gfx_surface
     * turns to the spare while the GPU still reads the current one. */
    uint32_t *own_slots[GFX_SURFACE_MAX_SLOTS];
    uint32_t *lent_spare;
+   /* A replaced texture retains these until the producer ends. */
+   uint32_t *producer_mem[GFX_SURFACE_MAX_SLOTS];
+   size_t pitch[GFX_SURFACE_MAX_SLOTS];
+   size_t producer_pitch[GFX_SURFACE_MAX_SLOTS];
+   size_t lent_spare_pitch;
+   size_t img_pitch;
    /* The texture, 0 until a submit has completed. A replacement load
     * in flight leaves the previous texture here, drawable, until the
     * new one arrives. */
@@ -129,6 +135,9 @@ struct gfx_surface
     * answer lands nowhere. Wide enough never to come round on one. */
    uint32_t decode_gen;
    enum texture_filter_type filter;
+   enum texture_filter_type texture_filter;
+   /* Producer honours pitch[]; otherwise lending requires packed rows. */
+   uint8_t padded;
    uint8_t inflight;
    uint8_t dying;      /* freed while in flight; the completion frees */
    /* Decodes of this surface's image still on the task queue
@@ -140,6 +149,7 @@ struct gfx_surface
     * 0xff = none. */
    uint8_t fmt;
    uint8_t lent;       /* driver slots borrowed, a bit each */
+   uint8_t lend_refresh; /* per-write mappings, a bit each */
    uint8_t lent_cur;   /* one slot: the driver slot slots[0] is */
    /* Under the thread wrapper, the wrapper's record of each driver
     * slot lent, plus one (video_thread_lend_ready); 0 under direct
@@ -236,10 +246,10 @@ typedef struct
     * streaming producer keeps one texture rather than loading a
     * replacement per frame. */
    bool can_update;
-   /* Row pitch in bytes the upload wants for @width pixels of
+   /* Packed upload row pitch in bytes for @width pixels of
     * @preferred, and the alignment the first row should start on.
     * Both are what the current upload paths use; a producer that can
-    * honour them saves the repack. */
+    * honour them saves the repack. Streaming lends report slot pitches separately. */
    size_t pitch;
    unsigned align;
 } gfx_surface_requirements_t;
@@ -336,6 +346,19 @@ bool gfx_surface_submit_image(gfx_surface_t *s, struct texture_image *img);
  * to free as before. Main thread. */
 bool gfx_surface_take_image(gfx_surface_t *s, struct texture_image *img);
 
+/* gfx_surface_submit_image for pixels the caller keeps and may upload
+ * again: @img stays the caller's and is fitted in place. Its pixels
+ * are read before the call returns, or, under threaded video, by the
+ * completion, which calls @payload_free(@payload) on the main thread
+ * when the pixels are no longer read. @payload_free is called exactly
+ * once for a true return, before it or at that completion, and never
+ * for a false one: the surface has an upload in flight, or the image
+ * cannot be sampled or was refused, and the pixels were not kept. For
+ * uncompressed images. Main thread. */
+bool gfx_surface_submit_image_borrowed(gfx_surface_t *s,
+      struct texture_image *img, void *payload,
+      gfx_surface_payload_free_t payload_free);
+
 /* Decode the image of @type held in @buf here and now and upload it
  * as gfx_surface_submit_image does. Main thread. */
 bool gfx_surface_submit_buffer(gfx_surface_t *s,
@@ -384,6 +407,18 @@ bool gfx_surface_submit_path(gfx_surface_t *s, const char *path,
  * again (image_texture_narrow_10bit). Main thread. */
 enum gfx_surface_submit_result gfx_surface_submit_external(gfx_surface_t *s,
       const gfx_surface_src_t *src,
+      gfx_surface_release_t release, void *user);
+
+/* Upload the GPU-native payload @img carries (img->compressed) to a
+ * still, without decoding it. FAILED for a format the driver does not
+ * sample: the caller decodes it (image_texture_realize_rgba) and
+ * submits the pixels instead. The payload is read before the call
+ * returns (DONE) or, for QUEUED, until the completion; release() then
+ * says whether a texture came of it. A driver that refuses it under
+ * direct video has it decoded into @img's pixels for the upload. Main
+ * thread. */
+enum gfx_surface_submit_result gfx_surface_submit_compressed(
+      gfx_surface_t *s, struct texture_image *img,
       gfx_surface_release_t release, void *user);
 
 /* A surface of @num_slots (1..GFX_SURFACE_MAX_SLOTS) frames of @dims
@@ -468,6 +503,16 @@ void gfx_surface_free(gfx_surface_t *s);
  * forget the pointer. Otherwise the surface is freed as usual and the
  * pixels stay the caller's: false. @pixels must be a malloc() block. */
 bool gfx_surface_free_adopt(gfx_surface_t *s, void *pixels);
+
+/* gfx_surface_free_adopt() for anything the caller frees with
+ * @payload_free, a compressed payload say. */
+bool gfx_surface_free_adopt_payload(gfx_surface_t *s, void *payload,
+      gfx_surface_payload_free_t payload_free);
+
+/* A count that moves whenever a surface lets a texture go - replaced by
+ * a new one, or the surface freed - so a handle taken with
+ * GFX_SURFACE_HANDLE() and kept is to be taken again once it moves. */
+unsigned gfx_surface_retired(void);
 
 RETRO_END_DECLS
 

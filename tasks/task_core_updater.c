@@ -42,7 +42,7 @@
 
 #if defined(ANDROID)
 #include "../file_path_special.h"
-#include "../play_feature_delivery/play_feature_delivery.h"
+#include "../os/android/play_feature_delivery.h"
 #endif
 
 #if defined(RARCH_INTERNAL) && defined(HAVE_MENU)
@@ -70,6 +70,12 @@ enum core_updater_list_status
    CORE_UPDATER_LIST_END
 };
 
+/* A wait whose sub-task's callback wakes it parks this long between
+ * looks while it mirrors the sub-task's progress into its own... */
+#define CORE_UPDATER_PROGRESS_PARK_USEC 100000
+/* ...and this long when only the wake ends it. */
+#define CORE_UPDATER_WAIT_PARK_USEC     1000000
+
 typedef struct core_updater_list_handle
 {
    core_updater_list_t* core_list;
@@ -85,6 +91,8 @@ typedef struct core_updater_list_handle
     * the transfer does, and the callback still writes the payload
     * here.  The last reference frees the handle. */
    retro_atomic_int_t refs;
+   /* The task's ident, for the HTTP callback's wake. */
+   uint32_t ident;
    bool refresh_menu;
    /* Update Installed Cores' fetch: keep installed cores only, and
     * read core info for those alone */
@@ -132,6 +140,8 @@ typedef struct
    char *error;
    retro_atomic_int_t refs;
    retro_atomic_int_t complete;
+   /* The waiting task, which signal() wakes. */
+   uint32_t waiter;
 } core_updater_sub_task_done_t;
 
 typedef struct core_updater_download_handle
@@ -156,6 +166,8 @@ typedef struct core_updater_download_handle
    core_crc_slice_t crc_slice;
    uint32_t local_crc;
    uint32_t remote_crc;
+   /* The task's ident, for the HTTP and decompress callbacks' wakes. */
+   uint32_t ident;
    enum core_updater_download_status status;
    /* One reference for the task, one each for the HTTP and
     * decompress callbacks while those tasks are pushed: a download
@@ -451,8 +463,10 @@ static void core_updater_sub_task_done_release(
 }
 
 /* One reference for the waiting handler, one for the sub-task's
- * callback, which may run before the push returns. */
-static core_updater_sub_task_done_t *core_updater_sub_task_done_new(void)
+ * callback, which may run before the push returns.  @waiter is the
+ * waiting task's ident. */
+static core_updater_sub_task_done_t *core_updater_sub_task_done_new(
+      uint32_t waiter)
 {
    core_updater_sub_task_done_t *done =
          (core_updater_sub_task_done_t*)malloc(sizeof(*done));
@@ -462,6 +476,7 @@ static core_updater_sub_task_done_t *core_updater_sub_task_done_new(void)
       done->error       = NULL;
       retro_atomic_int_init(&done->refs, 2);
       retro_atomic_int_init(&done->complete, 0);
+      done->waiter      = waiter;
    }
    return done;
 }
@@ -475,6 +490,7 @@ static void core_updater_sub_task_done_signal(
    if (err && *err)
       done->error = strdup(err);
    retro_atomic_store_release_int(&done->complete, 1);
+   task_queue_wake(done->waiter);
    core_updater_sub_task_done_release(done);
 }
 
@@ -539,6 +555,7 @@ static void cb_http_task_core_updater_get_list(
          list_handle->http_data         = data;
          list_handle->http_task_success = ret;
          retro_atomic_store_release_int(&list_handle->http_task_complete, 1);
+         task_queue_wake(list_handle->ident);
       }
    }
 
@@ -672,11 +689,15 @@ static void task_core_updater_get_list_handler(retro_task_t *task)
                         strdup(msg_hash_to_str(MSG_CORE_LIST_FAILED)));
                }
             }
-            /* If HTTP task is running, copy current
-             * progress value to *this* task */
-            else if (core_updater_sub_task_running(
-                     list_handle->http_task, &progress))
-               task_set_progress(task, progress);
+            else
+            {
+               /* If HTTP task is running, copy current
+                * progress value to *this* task */
+               if (core_updater_sub_task_running(
+                        list_handle->http_task, &progress))
+                  task_set_progress(task, progress);
+               task_queue_park(task, CORE_UPDATER_PROGRESS_PARK_USEC);
+            }
          }
          break;
       case CORE_UPDATER_LIST_PARSE:
@@ -863,6 +884,7 @@ static void *task_push_get_core_updater_list_captured(
    task->handler          = task_core_updater_get_list_handler;
    task->cleanup          = task_core_updater_get_list_cleanup;
    task->state            = list_handle;
+   list_handle->ident = task->ident;
    task->title            = strdup(msg_hash_to_str(MSG_FETCHING_CORE_LIST));
    task->progress         = 0;
    task->progress_cb      = task_window_progress_cb;
@@ -966,6 +988,7 @@ static void cb_decompress_task_core_updater_download(
    {
       retro_atomic_store_release_int(
             &download_handle->decompress_task_complete, 1);
+      task_queue_wake(download_handle->ident);
       core_updater_download_handle_release(download_handle);
    }
 
@@ -1082,6 +1105,7 @@ finish:
        * decompress flag above are the payload the worker reads once
        * it acquires this. */
       retro_atomic_store_release_int(&download_handle->http_task_complete, 1);
+      task_queue_wake(download_handle->ident);
 
       /* The download task may have retired already */
       core_updater_download_handle_release(download_handle);
@@ -1319,7 +1343,7 @@ static void task_core_updater_download_handler(retro_task_t *task)
       case CORE_UPDATER_DOWNLOAD_START_BACKUP:
          {
             core_updater_sub_task_done_t *done =
-                  core_updater_sub_task_done_new();
+                  core_updater_sub_task_done_new(task->ident);
 
             /* Request core backup */
             if (done)
@@ -1389,6 +1413,7 @@ static void task_core_updater_download_handler(retro_task_t *task)
                      download_handle->backup_task, &progress))
                task_set_progress(task,
                      (int8_t)(((float)progress * (1.0f / 3.0f)) + 0.5f));
+            task_queue_park(task, CORE_UPDATER_PROGRESS_PARK_USEC);
          }
          break;
       case CORE_UPDATER_DOWNLOAD_START_TRANSFER:
@@ -1549,6 +1574,8 @@ static void task_core_updater_download_handler(retro_task_t *task)
                /* Start waiting for file to be extracted */
                download_handle->status = CORE_UPDATER_DOWNLOAD_WAIT_DECOMPRESS;
             }
+            else
+               task_queue_park(task, CORE_UPDATER_PROGRESS_PARK_USEC);
          }
          break;
       case CORE_UPDATER_DOWNLOAD_WAIT_DECOMPRESS:
@@ -1585,6 +1612,8 @@ static void task_core_updater_download_handler(retro_task_t *task)
                download_handle->status = download_handle->staged_core_path
                      ? CORE_UPDATER_DOWNLOAD_START_INSTALL
                      : CORE_UPDATER_DOWNLOAD_END;
+            else
+               task_queue_park(task, CORE_UPDATER_PROGRESS_PARK_USEC);
          }
          break;
       case CORE_UPDATER_DOWNLOAD_START_INSTALL:
@@ -1602,7 +1631,7 @@ static void task_core_updater_download_handler(retro_task_t *task)
              * backups, the staged one into place, and prunes the
              * backup history; the record is created before the push,
              * which the callback may outrun */
-            if ((done = core_updater_sub_task_done_new()))
+            if ((done = core_updater_sub_task_done_new(task->ident)))
             {
                if (!(download_handle->backup_task = (retro_task_t*)
                         task_push_core_backup_install(
@@ -1662,6 +1691,8 @@ static void task_core_updater_download_handler(retro_task_t *task)
                   ? CORE_UPDATER_DOWNLOAD_ERROR
                   : CORE_UPDATER_DOWNLOAD_END;
          }
+         else
+            task_queue_park(task, CORE_UPDATER_WAIT_PARK_USEC);
          break;
       case CORE_UPDATER_DOWNLOAD_ERROR:
          {
@@ -1867,6 +1898,7 @@ static void *task_push_core_updater_download_internal(
 
    task->handler          = task_core_updater_download_handler;
    task->state            = download_handle;
+   download_handle->ident = task->ident;
    task->title            = strdup(task_title);
    task->progress         = 0;
    task->progress_cb      = task_window_progress_cb;
@@ -2344,7 +2376,7 @@ static void task_update_installed_cores_scan(retro_task_t *task,
 
          /* The record exists *before* the push, since the child
           * task can complete before it returns */
-         if (!(handle->download_done = core_updater_sub_task_done_new()))
+         if (!(handle->download_done = core_updater_sub_task_done_new(task->ident)))
          {
             handle->status = UPDATE_INSTALLED_CORES_ITERATE;
             continue;
@@ -2430,7 +2462,7 @@ static void task_update_installed_cores_handler(retro_task_t *task)
           *   is shown when the final task title is set) */
          update_installed_handle->status = UPDATE_INSTALLED_CORES_END;
          if ((update_installed_handle->list_done =
-                  core_updater_sub_task_done_new()))
+                  core_updater_sub_task_done_new(task->ident)))
          {
             if (!task_push_get_core_updater_list_captured(
                      update_installed_handle->core_list,
@@ -2487,6 +2519,8 @@ static void task_update_installed_cores_handler(retro_task_t *task)
                else
                   update_installed_handle->status = UPDATE_INSTALLED_CORES_ITERATE;
             }
+            else
+               task_queue_park(task, CORE_UPDATER_WAIT_PARK_USEC);
          }
          break;
       case UPDATE_INSTALLED_CORES_ITERATE:
@@ -2511,6 +2545,8 @@ static void task_update_installed_cores_handler(retro_task_t *task)
                update_installed_handle->download_done = NULL;
                update_installed_handle->status = UPDATE_INSTALLED_CORES_ITERATE;
             }
+            else
+               task_queue_park(task, CORE_UPDATER_WAIT_PARK_USEC);
          }
          break;
       case UPDATE_INSTALLED_CORES_END:
@@ -2816,7 +2852,7 @@ static void task_play_feature_delivery_core_install_handler(
 
             /* Start download */
             if (play_feature_delivery_download(
-                  pfd_install_handle->core_filename))
+                  pfd_install_handle->core_filename, task->ident))
                pfd_install_handle->status = PLAY_FEATURE_DELIVERY_INSTALL_WAIT;
             else
                pfd_install_handle->status = PLAY_FEATURE_DELIVERY_INSTALL_END;
@@ -2868,9 +2904,11 @@ static void task_play_feature_delivery_core_install_handler(
             }
 
             /* If install is inactive, end task (regardless
-             * of status) */
+             * of status); otherwise the next status update wakes it */
             if (!install_active)
                pfd_install_handle->status = PLAY_FEATURE_DELIVERY_INSTALL_END;
+            else
+               task_queue_park(task, CORE_UPDATER_WAIT_PARK_USEC);
          }
          break;
       case PLAY_FEATURE_DELIVERY_INSTALL_END:
@@ -2965,12 +3003,58 @@ static bool task_play_feature_delivery_core_install_finder(
            && !(task_get_flags(task) & RETRO_TASK_FLG_FINISHED));
 }
 
+/* Cores picked from the Core Downloader while another installs: Play
+ * Feature Delivery takes one at a time, and the pick was turned away
+ * without a word - choosing a second core did nothing. Held now, in
+ * order, and started as the install ahead of them finishes. Only the
+ * menu's picks are held; the core switch pushes its own one at a time
+ * and moves on when one is refused. Frame thread only: the menu pushes
+ * these and the install's callback runs there. */
+#define PFD_INSTALLS_HELD_MAX 4
+static retro_task_t *pfd_installs_held[PFD_INSTALLS_HELD_MAX];
+static unsigned      pfd_installs_held_count = 0;
+
+/* Starts @task: the core it replaces is unloaded first, as the install
+ * may delete its file. */
+static void pfd_install_start(retro_task_t *task)
+{
+   play_feature_delivery_install_handle_t *h =
+      (play_feature_delivery_install_handle_t*)task->state;
+   if (retroarch_ctl(RARCH_CTL_IS_CORE_LOADED, (void*)h->local_core_path))
+      command_event(CMD_EVENT_UNLOAD_CORE, NULL);
+   task_queue_push(task);
+}
+
+static void cb_task_pfd_core_install(retro_task_t *task,
+      void *task_data, void *user_data, const char *err)
+{
+   task_finder_data_t find_data;
+   unsigned i;
+   retro_task_t *next;
+
+   cb_task_core_updater_download(task, task_data, user_data, err);
+
+   if (!pfd_installs_held_count)
+      return;
+   find_data.func     = task_play_feature_delivery_core_install_finder;
+   find_data.userdata = NULL;
+   /* the core switch may have pushed one meanwhile */
+   if (task_queue_find(&find_data))
+      return;
+   next = pfd_installs_held[0];
+   for (i = 1; i < pfd_installs_held_count; i++)
+      pfd_installs_held[i - 1] = pfd_installs_held[i];
+   pfd_installs_held[--pfd_installs_held_count] = NULL;
+   pfd_install_start(next);
+}
+
 static void *task_push_play_feature_delivery_core_install_internal(
       core_updater_list_t* core_list,
       const char *filename,
       bool mute,
       core_updater_sub_task_done_t *install_done)
 {
+   bool hold = false;
    size_t _len;
    task_finder_data_t find_data;
    char task_title[128];
@@ -2995,12 +3079,26 @@ static void *task_push_play_feature_delivery_core_install_internal(
        || (!list_entry->display_name || !*list_entry->display_name))
       goto error;
 
-   /* Only one core may be downloaded at a time */
+   /* Only one core may be downloaded at a time: a pick from the menu
+    * waits behind it, once, and anything else is refused */
    find_data.func     = task_play_feature_delivery_core_install_finder;
    find_data.userdata = NULL;
 
-   if (task_queue_find(&find_data))
-      goto error;
+   if (pfd_installs_held_count || task_queue_find(&find_data))
+   {
+      unsigned i;
+      if (install_done || pfd_installs_held_count >= PFD_INSTALLS_HELD_MAX)
+         goto error;
+      for (i = 0; i < pfd_installs_held_count; i++)
+      {
+         play_feature_delivery_install_handle_t *h =
+            (play_feature_delivery_install_handle_t*)
+            pfd_installs_held[i]->state;
+         if (string_is_equal(h->core_filename, list_entry->remote_filename))
+            goto error;
+      }
+      hold = true;
+   }
 
    /* Configure handle */
    pfd_install_handle->core_filename          = strdup(list_entry->remote_filename);
@@ -3027,7 +3125,7 @@ static void *task_push_play_feature_delivery_core_install_internal(
    task->title            = strdup(task_title);
    task->progress         = 0;
    task->progress_cb      = task_window_progress_cb;
-   task->callback         = cb_task_core_updater_download;
+   task->callback         = cb_task_pfd_core_install;
    task->user_data        = (void*)install_done;
    task->flags           |=  RETRO_TASK_FLG_ALTERNATIVE_LOOK;
    if (mute)
@@ -3035,15 +3133,14 @@ static void *task_push_play_feature_delivery_core_install_internal(
    else
       task->flags        &= ~RETRO_TASK_FLG_MUTE;
 
-   /* Install process may involve the *deletion*
-    * of an existing core file. If core is
-    * already running, must therefore unload it
-    * to prevent undefined behaviour */
-   if (retroarch_ctl(RARCH_CTL_IS_CORE_LOADED, (void*)list_entry->local_core_path))
-      command_event(CMD_EVENT_UNLOAD_CORE, NULL);
-
-   /* Push task */
-   task_queue_push(task);
+   if (hold)
+      pfd_installs_held[pfd_installs_held_count++] = task;
+   else
+      /* Install process may involve the *deletion*
+       * of an existing core file. If core is
+       * already running, must therefore unload it
+       * to prevent undefined behaviour */
+      pfd_install_start(task);
 
    return task;
 
@@ -3250,7 +3347,7 @@ static void task_play_feature_delivery_switch_cores_handler(
              *   install task can finish and fire its callback
              *   before this returns */
             if (     (pfd_switch_cores_handle->install_done =
-                        core_updater_sub_task_done_new())
+                        core_updater_sub_task_done_new(task->ident))
                   && !task_push_play_feature_delivery_core_install_internal(
                         pfd_switch_cores_handle->core_list,
                         list_entry->remote_filename,
@@ -3302,7 +3399,10 @@ static void task_play_feature_delivery_switch_cores_handler(
                   pfd_switch_cores_handle->install_done;
 
             if (!retro_atomic_load_acquire_int(&install_done->complete))
+            {
+               task_queue_park(task, CORE_UPDATER_WAIT_PARK_USEC);
                break;
+            }
 
             /* Check for installation errors
              * > These should be considered 'serious', and

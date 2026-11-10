@@ -14,6 +14,7 @@
 
 #include "../../../gfx/drivers_shader/shader_gl3.h"
 #include "../../../gfx/drivers_shader/slang_process.h"
+#include "../../../gfx/drivers_shader/slang_blob.h"
 
 static unsigned alloc_calls; /* calloc() calls so far */
 static unsigned fail_at;     /* the one to fail, 1-based; 0 none */
@@ -39,28 +40,48 @@ static void *test_realloc(void *p, size_t size)
    return realloc(p, size);
 }
 
-/* Reflect the stock shader's Source sampler, with no uniform buffers. */
+/* Reflect the stock shader's Source sampler, with no uniform buffers.
+ * With replay_reflect each pass also reads PassFeedback0 and
+ * OriginalHistory1, on units 1 and 2. */
 static slang_texture_semantic_meta texture_meta[SLANG_NUM_TEXTURE_SEMANTICS];
+static slang_texture_semantic_meta history_meta[2];
+static bool replay_reflect;
 static bool test_reflection_init(slang_reflection *r)
 {
    unsigned i;
    memset(r, 0, sizeof(*r));
    memset(texture_meta, 0, sizeof(texture_meta));
+   memset(history_meta, 0, sizeof(history_meta));
    for (i = 0; i < SLANG_NUM_TEXTURE_SEMANTICS; i++)
    {
       r->semantic_textures[i].data = &texture_meta[i];
       r->semantic_textures[i].size = 1;
       memset(&texture_meta[i].location, -1, sizeof(texture_meta[i].location));
    }
+   if (replay_reflect)
+   {
+      r->semantic_textures[SLANG_TEXTURE_SEMANTIC_ORIGINAL_HISTORY].data =
+         history_meta;
+      r->semantic_textures[SLANG_TEXTURE_SEMANTIC_ORIGINAL_HISTORY].size = 2;
+      memset(&history_meta[0].location, -1, sizeof(history_meta[0].location));
+      memset(&history_meta[1].location, -1, sizeof(history_meta[1].location));
+   }
    return true;
 }
 static void test_reflection_free(slang_reflection *r)
 { memset(r, 0, sizeof(*r)); }
-static bool test_reflect(const uint32_t *v, size_t vn,
-      const uint32_t *f, size_t fn, slang_reflection *r)
+static bool test_reflect(const struct slang_blob *v,
+      const struct slang_blob *f, slang_reflection *r)
 {
    r->semantic_textures[SLANG_TEXTURE_SEMANTIC_SOURCE].data[0].texture = true;
-   return v && vn && f && fn;
+   if (replay_reflect)
+   {
+      r->semantic_textures[SLANG_TEXTURE_SEMANTIC_PASS_FEEDBACK].data[0].texture = true;
+      r->semantic_textures[SLANG_TEXTURE_SEMANTIC_PASS_FEEDBACK].data[0].binding = 1;
+      r->semantic_textures[SLANG_TEXTURE_SEMANTIC_ORIGINAL_HISTORY].data[1].texture = true;
+      r->semantic_textures[SLANG_TEXTURE_SEMANTIC_ORIGINAL_HISTORY].data[1].binding = 2;
+   }
+   return v && v->nwords && f && f->nwords;
 }
 static unsigned test_miplevels(unsigned w, unsigned h)
 {
@@ -78,6 +99,18 @@ static unsigned next_texture = 1;
 static int live_textures, live_framebuffers, live_buffers, live_shaders, live_programs;
 static unsigned mipmaps, trilinear, storage_levels, draws;
 static GLuint bound_texture, mip_texture;
+/* What each draw saw: the textures on units 0-2, each texture's draws
+ * into it so far (its generation), and what draws write. */
+#define TEX_NAMES 4096
+static unsigned active_unit;
+static GLuint unit_texture[3];
+static unsigned tex_gen[TEX_NAMES];
+static GLuint fb_texture[TEX_NAMES];
+static GLuint bound_fb;
+static GLuint seen_texture[3];
+static unsigned seen_gen[3];
+static uint64_t seen_count;
+static const uint64_t *watched_count;
 static void APIENTRY mock_gen_textures(GLsizei n, GLuint *names)
 {
    GLsizei i;
@@ -87,7 +120,12 @@ static void APIENTRY mock_gen_textures(GLsizei n, GLuint *names)
 static void APIENTRY mock_delete_textures(GLsizei n, const GLuint *names)
 { (void)names; live_textures -= n; }
 static void APIENTRY mock_bind_texture(GLenum target, GLuint name)
-{ (void)target; bound_texture = name; }
+{
+   (void)target;
+   bound_texture = name;
+   if (active_unit < 3)
+      unit_texture[active_unit] = name;
+}
 static void APIENTRY mock_tex_parameter(GLenum target, GLenum pname, GLint value)
 {
    (void)target;
@@ -96,21 +134,44 @@ static void APIENTRY mock_tex_parameter(GLenum target, GLenum pname, GLint value
       trilinear++;
 }
 static void APIENTRY mock_draw(GLenum mode, GLint first, GLsizei count)
-{ (void)mode; (void)first; (void)count; draws++; }
+{
+   unsigned u;
+   GLuint target = bound_fb < TEX_NAMES ? fb_texture[bound_fb] : 0;
+   (void)mode;
+   (void)first;
+   (void)count;
+   draws++;
+   for (u = 0; u < 3; u++)
+   {
+      seen_texture[u] = unit_texture[u];
+      seen_gen[u]     = unit_texture[u] < TEX_NAMES
+         ? tex_gen[unit_texture[u]] : 0;
+   }
+   if (watched_count)
+      seen_count = *watched_count;
+   if (target && target < TEX_NAMES)
+      tex_gen[target]++;
+}
 
 #define slang_reflection_init test_reflection_init
 #define slang_reflection_free test_reflection_free
-#define slang_reflect_spirv test_reflect
+#define slang_reflect_pass test_reflect
 #define glslang_num_miplevels test_miplevels
 #define glGenTextures mock_gen_textures
 #define glDeleteTextures mock_delete_textures
 #define glBindTexture mock_bind_texture
 #define glTexParameteri mock_tex_parameter
 #define glDrawArrays mock_draw
+bool test_image_load(struct texture_image *img, const char *path);
+void test_image_free(struct texture_image *img);
+#define image_texture_load test_image_load
+#define image_texture_free test_image_free
 #define calloc(n, size) test_calloc(n, size)
 #define malloc(size) test_malloc(size)
 #define realloc(p, size) test_realloc(p, size)
 #include "../../../gfx/drivers_shader/shader_gl3.c"
+#undef image_texture_load
+#undef image_texture_free
 #undef calloc
 #undef malloc
 #undef realloc
@@ -135,18 +196,26 @@ static void APIENTRY mock_gen_framebuffers(GLsizei n, GLuint *names)
 static void APIENTRY mock_delete_framebuffers(GLsizei n, const GLuint *names)
 { (void)names; live_framebuffers -= n; }
 static void APIENTRY mock_bind_framebuffer(GLenum target, GLuint name)
-{ (void)target; (void)name; }
+{ (void)target; bound_fb = name; }
 static GLenum APIENTRY mock_framebuffer_status(GLenum target)
 { (void)target; return GL_FRAMEBUFFER_COMPLETE; }
 static void APIENTRY mock_framebuffer_texture(GLenum target, GLenum attach,
       GLenum textarget, GLuint texture, GLint level)
-{ (void)target; (void)attach; (void)textarget; (void)texture; (void)level; }
+{
+   (void)target;
+   (void)attach;
+   (void)textarget;
+   (void)level;
+   if (bound_fb < TEX_NAMES)
+      fb_texture[bound_fb] = texture;
+}
 static void APIENTRY mock_storage(GLenum target, GLsizei levels, GLenum format,
       GLsizei width, GLsizei height)
 { (void)target; (void)format; (void)width; (void)height; storage_levels = levels; }
 static void APIENTRY mock_mipmap(GLenum target)
 { (void)target; mipmaps++; mip_texture = bound_texture; }
-static void APIENTRY mock_active_texture(GLenum target) { (void)target; }
+static void APIENTRY mock_active_texture(GLenum target)
+{ active_unit = target - GL_TEXTURE0; }
 static void APIENTRY mock_attrib(GLuint index) { (void)index; }
 static void APIENTRY mock_attrib_pointer(GLuint index, GLint size, GLenum type,
       GLboolean normalized, GLsizei stride, const void *p)
@@ -210,6 +279,171 @@ static void render_shrink_chain(struct gl3_filter_chain *chain)
          "copy pass changed the source size");
 }
 
+/* A blob of the stock stage's words, as the compile output hands one
+ * over. */
+static struct slang_blob *stock_blob(const uint32_t *words, size_t len)
+{
+   uint32_t *copy = (uint32_t*)malloc(len);
+   if (!copy)
+      return NULL;
+   memcpy(copy, words, len);
+   return slang_blob_adopt_words(copy, len / sizeof(uint32_t));
+}
+
+/* @passes passes binding @vs/@fs by reference, as a preset's passes do
+ * once the blob table hands the same stages to each of them, with the
+ * text rslc printed for them. */
+static bool chain_replay;
+static bool chain_frame_rect;
+static struct gl3_filter_chain *chain_of(unsigned passes,
+      struct slang_blob *vs, struct slang_blob *fs)
+{
+   struct gl3_filter_chain_pass_info pass_info;
+   struct gl3_filter_chain *chain = gl3_chain_new(passes);
+   unsigned i;
+   if (!chain)
+      return NULL;
+   chain->replay            = chain_replay;
+   chain->common.frame_rect = chain_frame_rect;
+   pass_info.scale_type_x  = GLSLANG_FILTER_CHAIN_SCALE_VIEWPORT;
+   pass_info.scale_type_y  = GLSLANG_FILTER_CHAIN_SCALE_VIEWPORT;
+   pass_info.scale_x       = 1.0f;
+   pass_info.scale_y       = 1.0f;
+   pass_info.rt_format     = 0;
+   pass_info.source_filter = GLSLANG_FILTER_CHAIN_NEAREST;
+   pass_info.mip_filter    = GLSLANG_FILTER_CHAIN_NEAREST;
+   pass_info.address       = GLSLANG_FILTER_CHAIN_ADDRESS_CLAMP_TO_EDGE;
+   pass_info.max_levels    = 0;
+   for (i = 0; i < passes; i++)
+   {
+      gl3_chain_set_pass_info(chain, i, pass_info);
+      gl3_chain_set_blob(chain, i, GL_VERTEX_SHADER, slang_blob_ref(vs));
+      gl3_chain_set_blob(chain, i, GL_FRAGMENT_SHADER, slang_blob_ref(fs));
+      gl3_pass_set_shader_text(chain->passes[i], GL_VERTEX_SHADER, "void main() {}\n");
+      gl3_pass_set_shader_text(chain->passes[i], GL_FRAGMENT_SHADER, "void main() {}\n");
+   }
+   if (!gl3_chain_init(chain))
+   {
+      gl3_chain_free(chain);
+      return NULL;
+   }
+   return chain;
+}
+
+/* Passes that bind the same two blobs share one linked program, within
+ * a chain and across the chain being built and the one it replaces;
+ * the program goes with the last pass that holds it. */
+static void test_shared_programs(void)
+{
+   struct slang_blob *vs = stock_blob(spirv_opaque_vert, spirv_opaque_vert_size);
+   struct slang_blob *fs = stock_blob(spirv_opaque_frag, spirv_opaque_frag_size);
+   struct slang_blob *fs2 = stock_blob(spirv_opaque_frag, spirv_opaque_frag_size);
+   struct gl3_filter_chain *live, *next;
+   unsigned reused0 = gl3_programs.reused;
+   /* every chain links a quad program of its own besides its passes' */
+   int chains = 0;
+
+   CHECK(vs && fs && fs2, "stock blobs");
+   live = chain_of(3, vs, fs);
+   chains++;
+   CHECK(live && live_programs - chains == 1 && gl3_programs.n == 1,
+         "three passes of one blob pair: %d pass programs, %u listed",
+         live_programs - chains, (unsigned)gl3_programs.n);
+   CHECK(gl3_programs.reused - reused0 == 2, "two of them took the first one's program");
+   CHECK(live && live->passes[0]->pipeline == live->passes[2]->pipeline,
+         "the passes draw with the same program");
+
+   next = chain_of(2, vs, fs);
+   chains++;
+   CHECK(next && live_programs - chains == 1, "a chain built beside the live one links nothing");
+   gl3_chain_free(live);
+   chains--;
+   CHECK(live_programs - chains == 1, "freeing the outgoing chain keeps the program the new one holds");
+   live = next;
+
+   next = chain_of(1, vs, fs2);
+   chains++;
+   CHECK(next && live_programs - chains == 2, "another fragment blob is another program");
+   gl3_chain_free(live);
+   chains--;
+   CHECK(live_programs - chains == 1 && gl3_programs.n == 1, "the first program went with its last pass");
+   gl3_chain_free(next);
+   chains--;
+   CHECK(live_programs == 0 && gl3_programs.n == 0 && !gl3_programs.v,
+         "no pass, no program, no table");
+
+   CHECK(retro_atomic_load_relaxed_int(&vs->refs) == 1 && retro_atomic_load_relaxed_int(&fs->refs) == 1 && retro_atomic_load_relaxed_int(&fs2->refs) == 1,
+         "the programs' blob references went with them");
+   slang_blob_unref(vs);
+   slang_blob_unref(fs);
+   slang_blob_unref(fs2);
+   check_gl_objects();
+}
+
+/* LUT images decoded, by path */
+static unsigned used_loads, unused_loads;
+bool test_image_load(struct texture_image *img, const char *path)
+{
+   if (!strcmp(path, "used.png"))
+      used_loads++;
+   else
+      unused_loads++;
+   img->width  = 4;
+   img->height = 4;
+   img->pixels = (uint32_t*)calloc(16, sizeof(uint32_t));
+   return img->pixels != NULL;
+}
+void test_image_free(struct texture_image *img)
+{
+   free(img->pixels);
+   img->pixels = NULL;
+}
+
+/* A LUT no pass reads is named for the semantic map and never loaded;
+ * one a pass reads is loaded once, however often the chain is built. */
+static void test_unread_luts(void)
+{
+   static slang_texture_semantic_meta reads[1];
+   struct gl3_filter_chain *chain = gl3_chain_new(1);
+   struct video_shader *preset    = (struct video_shader*)calloc(1, sizeof(*preset));
+   slang_texture_semantic_array *user;
+
+   CHECK(chain && preset, "a chain and a preset");
+   if (!chain || !preset)
+   {
+      free(preset);
+      gl3_chain_free(chain);
+      return;
+   }
+   preset->luts = 2;
+   strcpy(preset->lut[0].id, "Used");
+   strcpy(preset->lut[0].path, "used.png");
+   strcpy(preset->lut[1].id, "Unused");
+   strcpy(preset->lut[1].path, "unused.png");
+   used_loads = unused_loads = 0;
+   CHECK(gl3_filter_chain_load_luts(chain, preset), "the LUTs are named");
+   gl3_chain_set_shader_preset(chain, preset);
+   CHECK(chain->common.num_luts == 2 && !strcmp(chain->common.luts[1].id, "Unused"),
+         "both LUTs are named");
+   CHECK(!used_loads && !unused_loads, "nothing is loaded before the passes are reflected");
+
+   memset(reads, 0, sizeof(reads));
+   reads[0].texture = true;
+   user       = &chain->passes[0]->reflection.semantic_textures[SLANG_TEXTURE_SEMANTIC_USER];
+   user->data = reads;
+   user->size = 1;
+   CHECK(gl3_chain_load_luts(chain), "the read LUT loads");
+   CHECK(gl3_chain_load_luts(chain), "a rebuild loads nothing new");
+   CHECK(used_loads == 1, "the read LUT is decoded once: %u", used_loads);
+   CHECK(!unused_loads, "the unread LUT is never decoded: %u", unused_loads);
+   CHECK(chain->common.luts[0].image && !chain->common.luts[1].image,
+         "only the read LUT has a texture");
+   user->data = NULL;
+   user->size = 0;
+   gl3_chain_free(chain);
+   check_gl_objects();
+}
+
 static void test_shrink_chain(void)
 {
    struct gl3_filter_chain *chain;
@@ -235,6 +469,203 @@ static void test_shrink_chain(void)
       gl3_chain_free(chain);
       check_gl_objects();
    }
+}
+
+/* The history copy, drawn into its framebuffer's texture. */
+extern void (*test_framebuffer_copied)(unsigned fb_id);
+static void framebuffer_copied(unsigned fb_id)
+{
+   if (fb_id < TEX_NAMES && fb_texture[fb_id] < TEX_NAMES)
+      tex_gen[fb_texture[fb_id]]++;
+}
+
+/* One frame through @chain: its input @in, count @count, every pass,
+ * and the frame ended. */
+static void replay_frame(struct gl3_filter_chain *chain, GLuint in,
+      uint64_t count)
+{
+   struct gl3_filter_chain_texture texture;
+   struct gl3_viewport vp;
+   float mvp[16];
+   memset(&texture, 0, sizeof(texture));
+   texture.image  = in;
+   texture.dims   = VIDEO_SCALE_PACK(64, 32);
+   texture.format = GL_RGBA8;
+   vp.pos         = 0;
+   vp.dims        = VIDEO_SCALE_PACK(64, 32);
+   gl3_build_default_matrix(mvp);
+   gl3_filter_chain_set_frame_count(chain, count);
+   gl3_filter_chain_set_input_texture(chain, &texture);
+   gl3_filter_chain_build_offscreen_passes(chain, &vp);
+   mock_bind_framebuffer(GL_FRAMEBUFFER, 0);
+   gl3_filter_chain_build_viewport_pass(chain, &vp, mvp);
+   gl3_filter_chain_end_frame(chain);
+}
+
+/* A replay of the last frame's final pass, in a later frame and at
+ * another size, reads what that pass read: the same textures - the
+ * first pass's output, its feedback, the history - with nothing drawn
+ * into them since, and that frame's count. Feedback does not swap. The
+ * history keeps a spare slot, so the frame's end did not write over the
+ * one the pass read. */
+static void test_replay(void)
+{
+   GLuint   texture[3];
+   unsigned gen[3], u;
+   struct gl3_filter_chain *chain;
+   struct gl3_framebuffer *fb, *feedback;
+   struct gl3_viewport vp;
+   float mvp[16];
+   uint32_t words[] = { 0x07230203u, 0x00010000u };
+   struct slang_blob *vs = stock_blob(words, sizeof(words));
+   struct slang_blob *fs = stock_blob(words, sizeof(words));
+
+   /* Created to replay: one history texture more than read. Any other
+    * chain keeps only what its passes read. */
+   replay_reflect = true;
+   chain          = chain_of(2, vs, fs);
+   CHECK(chain && chain->num_original_history == 1,
+         "a chain made without replay keeps %u history framebuffers",
+         chain ? (unsigned)chain->num_original_history : 0);
+   gl3_chain_free(chain);
+   chain_replay   = true;
+   chain          = chain_of(2, vs, fs);
+   chain_replay   = false;
+   replay_reflect = false;
+   slang_blob_unref(vs);
+   slang_blob_unref(fs);
+   CHECK(chain, "replay chain not built");
+   if (!chain)
+      return;
+   watched_count           = &chain->passes[1]->frame_count;
+   test_framebuffer_copied = framebuffer_copied;
+   CHECK(chain->num_original_history == 2
+         && chain->common.num_original_history == 1,
+         "history: %u framebuffers for %u read",
+         (unsigned)chain->num_original_history,
+         (unsigned)chain->common.num_original_history);
+   CHECK(!gl3_filter_chain_replay_ready(chain),
+         "a chain with no frame drawn is ready to replay");
+   replay_frame(chain, 0x1001, 1);
+   replay_frame(chain, 0x1002, 2);
+   for (u = 0; u < 3; u++)
+   {
+      texture[u] = seen_texture[u];
+      gen[u]     = seen_gen[u];
+   }
+   CHECK(seen_count == 2, "frame 2 drew with count %u", (unsigned)seen_count);
+   CHECK(gl3_filter_chain_replay_ready(chain), "no replay after a frame");
+
+   fb       = chain->passes[0]->framebuffer;
+   feedback = chain->passes[0]->framebuffer_feedback;
+   gl3_filter_chain_set_frame_count(chain, 3);
+   vp.pos  = 0;
+   vp.dims = VIDEO_SCALE_PACK(80, 40);
+   gl3_build_default_matrix(mvp);
+   mock_bind_framebuffer(GL_FRAMEBUFFER, 0);
+   draws = 0;
+   gl3_filter_chain_build_viewport_pass_replay(chain, &vp, mvp);
+   CHECK(draws == 1, "replay drew %u passes", draws);
+   for (u = 0; u < 3; u++)
+      CHECK(seen_texture[u] == texture[u] && seen_gen[u] == gen[u],
+            "replay unit %u: texture %u gen %u, want %u gen %u", u,
+            seen_texture[u], seen_gen[u], texture[u], gen[u]);
+   CHECK(seen_count == 2, "replay drew with count %u, want 2",
+         (unsigned)seen_count);
+   CHECK(chain->passes[1]->frame_count == 3,
+         "replay left the count at %u",
+         (unsigned)chain->passes[1]->frame_count);
+   CHECK(chain->passes[0]->framebuffer == fb
+         && chain->passes[0]->framebuffer_feedback == feedback,
+         "replay swapped the feedback buffers");
+   watched_count           = NULL;
+   test_framebuffer_copied = NULL;
+   gl3_chain_free(chain);
+}
+
+/* A frame read where it lies in a larger texture, with history: the
+ * passes read it there, and the frame's end copies the history straight
+ * out of that rectangle, through the chain's own quad buffer; the frame
+ * is not copied out first. */
+extern struct test_partial_copy
+{
+   unsigned fb_id, vbo, w, h, image, calls;
+   float ox, oy, rx, ry;
+} test_partial_copy;
+static unsigned whole_copies;
+static void count_whole_copy(unsigned fb_id) { (void)fb_id; whole_copies++; }
+static void test_history_in_place(void)
+{
+   struct gl3_filter_chain_texture texture;
+   struct gl3_viewport vp;
+   struct gl3_filter_chain *chain;
+   struct gl3_framebuffer *newest;
+   float mvp[16];
+   uint32_t words[] = { 0x07230203u, 0x00010000u };
+   struct slang_blob *vs = stock_blob(words, sizeof(words));
+   struct slang_blob *fs = stock_blob(words, sizeof(words));
+
+   replay_reflect   = true;
+   chain_frame_rect = true;
+   chain            = chain_of(2, vs, fs);
+   chain_frame_rect = false;
+   replay_reflect   = false;
+   slang_blob_unref(vs);
+   slang_blob_unref(fs);
+   CHECK(chain && chain->num_original_history,
+         "a chain reading history was not built");
+   if (!chain)
+      return;
+   /* The stock stages are not slang's: as passes the rewrite took */
+   chain->passes[0]->frame_copy = false;
+   chain->passes[1]->frame_copy = false;
+   gl3_chain_init_frame_in_place(chain);
+   CHECK(gl3_filter_chain_reads_in_place(chain),
+         "a chain with history reads frames where they lie");
+
+   memset(&texture, 0, sizeof(texture));
+   texture.image       = 0x2001;
+   texture.dims        = VIDEO_SCALE_PACK(64, 32);
+   texture.padded_dims = VIDEO_SCALE_PACK(256, 128);
+   texture.origin      = VIDEO_SCALE_PACK(16, 8);
+   texture.format      = GL_RGBA8;
+   vp.pos              = 0;
+   vp.dims             = VIDEO_SCALE_PACK(64, 32);
+   gl3_build_default_matrix(mvp);
+   memset(&test_partial_copy, 0, sizeof(test_partial_copy));
+   whole_copies            = 0;
+   test_framebuffer_copied = count_whole_copy;
+   gl3_filter_chain_set_input_texture(chain, &texture);
+   CHECK(!chain->copy_framebuffer && !test_partial_copy.calls,
+         "the frame was copied out of its texture");
+   gl3_filter_chain_build_offscreen_passes(chain, &vp);
+   mock_bind_framebuffer(GL_FRAMEBUFFER, 0);
+   gl3_filter_chain_build_viewport_pass(chain, &vp, mvp);
+   gl3_filter_chain_end_frame(chain);
+   test_framebuffer_copied = NULL;
+   newest = chain->original_history[0];
+   CHECK(test_partial_copy.calls == 1 && !whole_copies,
+         "history: %u copies from the rectangle, %u of the whole texture",
+         test_partial_copy.calls, whole_copies);
+   CHECK(     test_partial_copy.fb_id == newest->framebuffer
+         && test_partial_copy.image == 0x2001
+         && test_partial_copy.w == 64 && test_partial_copy.h == 32,
+         "history copied into %u from %u, %ux%u",
+         test_partial_copy.fb_id, test_partial_copy.image,
+         test_partial_copy.w, test_partial_copy.h);
+   CHECK(     test_partial_copy.ox == 16.0f / 256.0f
+         && test_partial_copy.oy == 8.0f / 128.0f
+         && test_partial_copy.rx == 64.0f / 256.0f
+         && test_partial_copy.ry == 32.0f / 128.0f,
+         "history copied from (%g, %g) size (%g, %g)",
+         test_partial_copy.ox, test_partial_copy.oy,
+         test_partial_copy.rx, test_partial_copy.ry);
+   CHECK(test_partial_copy.vbo && test_partial_copy.vbo == chain->common.partial_vbo
+         && test_partial_copy.vbo != chain->common.quad_vbo,
+         "the copy drew through buffer %u, not the chain's own",
+         test_partial_copy.vbo);
+   gl3_chain_free(chain);
+   check_gl_objects();
 }
 
 int main(void)
@@ -296,6 +727,10 @@ int main(void)
    }
 
    test_shrink_chain();
+   test_shared_programs();
+   test_unread_luts();
+   test_replay();
+   test_history_in_place();
 
    if (failures)
    {

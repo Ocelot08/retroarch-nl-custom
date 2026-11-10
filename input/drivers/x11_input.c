@@ -281,10 +281,22 @@ static void x_pointer_event(x11_input_t *x11, XGenericEventCookie *cookie)
                && (de->evtype == XI_ButtonPress || de->detail >= 8))
          {
             XButtonEvent button;
-            memset(&button, 0, sizeof(button));
-            button.type   = (de->evtype == XI_ButtonPress)
+            button.type        = (de->evtype == XI_ButtonPress)
                ? ButtonPress : ButtonRelease;
-            button.button = (unsigned)de->detail;
+            button.serial      = 0;
+            button.send_event  = False;
+            button.display     = NULL;
+            button.window      = None;
+            button.root        = None;
+            button.subwindow   = None;
+            button.time        = CurrentTime;
+            button.x           = 0;
+            button.y           = 0;
+            button.x_root      = 0;
+            button.y_root      = 0;
+            button.state       = 0;
+            button.button      = (unsigned)de->detail;
+            button.same_screen = False;
             x_input_poll_wheel(&button, true);
          }
          break;
@@ -848,7 +860,7 @@ static void x_input_poll_devices(void *data)
  * mouse, the pointer and the lightgun's aim from it. */
 static void x_input_poll(void *data)
 {
-   input_pointer_frame_t frame[MAX_MOUSE_IDX];
+   input_pointer_frame_t *frame = input_driver_pointers_lend();
    x11_input_t *x11 = (x11_input_t*)data;
    unsigned count   = 1;
    unsigned i;

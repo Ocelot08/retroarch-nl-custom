@@ -38,6 +38,9 @@ struct input_output_writer
    void *userdata;
    sthread_t *thread;
    retro_atomic_int_t quit;
+   /* a wake is on its way and the writer has yet to look: another
+    * needs no syscall */
+   retro_atomic_int_t pending;
 #ifdef _WIN32
    HANDLE wake;
 #else
@@ -45,9 +48,32 @@ struct input_output_writer
 #endif
 };
 
+#ifdef _WIN32
+typedef HANDLE (WINAPI *output_writer_timer_new_t)(LPSECURITY_ATTRIBUTES,
+      LPCWSTR, DWORD, DWORD);
+
+/* A wait of a few milliseconds is a whole timer tick, 15.6 ms, unless
+ * something raised the process's timer resolution: the timeout goes
+ * through a high resolution waitable timer where Windows has one
+ * (10 1803 on). The thread's own; NULL elsewhere. */
+static HANDLE output_writer_timer_new(void)
+{
+   HMODULE kernel32 = GetModuleHandleA("kernel32.dll");
+   output_writer_timer_new_t timer_new = kernel32
+      ? (output_writer_timer_new_t)GetProcAddress(kernel32,
+            "CreateWaitableTimerExW") : NULL;
+   /* CREATE_WAITABLE_TIMER_HIGH_RESOLUTION, TIMER_ALL_ACCESS */
+   return timer_new ? timer_new(NULL, NULL, 0x00000002,
+         STANDARD_RIGHTS_REQUIRED | SYNCHRONIZE | 0x3) : NULL;
+}
+#endif
+
 static void input_output_writer_thread(void *data)
 {
    input_output_writer_t *writer = (input_output_writer_t*)data;
+#ifdef _WIN32
+   HANDLE timer = writer->timeout_cb ? output_writer_timer_new() : NULL;
+#endif
 
    for (;;)
    {
@@ -55,7 +81,19 @@ static void input_output_writer_thread(void *data)
       int timeout = writer->timeout_cb
          ? writer->timeout_cb(writer->userdata) : -1;
 #ifdef _WIN32
-      if (WaitForSingleObject(writer->wake,
+      LARGE_INTEGER due;
+      due.QuadPart = -(LONGLONG)timeout * 10000;
+      if (timeout > 0 && timer && SetWaitableTimer(timer, &due, 0,
+               NULL, NULL, FALSE))
+      {
+         HANDLE both[2];
+         both[0] = writer->wake;
+         both[1] = timer;
+         if (WaitForMultipleObjects(2, both, FALSE, INFINITE)
+               == WAIT_FAILED)
+            quit = true;
+      }
+      else if (WaitForSingleObject(writer->wake,
                timeout < 0 ? INFINITE : (DWORD)timeout) == WAIT_FAILED)
          quit = true;
 #else
@@ -83,12 +121,18 @@ static void input_output_writer_thread(void *data)
             quit = true;
       }
 #endif
+      /* before the driver looks, so a wake from here on is not lost */
+      retro_atomic_exchange_int(&writer->pending, 0);
       if (retro_atomic_load_acquire_int(&writer->quit))
          quit = true;
       writer->cb(writer->userdata, quit);
       if (quit)
          break;
    }
+#ifdef _WIN32
+   if (timer)
+      CloseHandle(timer);
+#endif
 }
 
 input_output_writer_t *input_output_writer_new_timed(
@@ -104,6 +148,7 @@ input_output_writer_t *input_output_writer_new_timed(
    writer->cb       = cb;
    writer->userdata = userdata;
    retro_atomic_store_release_int(&writer->quit, 0);
+   retro_atomic_store_release_int(&writer->pending, 0);
 
 #ifdef _WIN32
    if (!(writer->wake = CreateEventA(NULL, FALSE, FALSE, NULL)))
@@ -136,10 +181,8 @@ input_output_writer_t *input_output_writer_new_timed(
    return writer;
 }
 
-void input_output_writer_wake(input_output_writer_t *writer)
+static void input_output_writer_signal(input_output_writer_t *writer)
 {
-   if (!writer)
-      return;
 #ifdef _WIN32
    SetEvent(writer->wake);
 #else
@@ -154,12 +197,18 @@ void input_output_writer_wake(input_output_writer_t *writer)
 #endif
 }
 
+void input_output_writer_wake(input_output_writer_t *writer)
+{
+   if (writer && !retro_atomic_exchange_int(&writer->pending, 1))
+      input_output_writer_signal(writer);
+}
+
 void input_output_writer_free(input_output_writer_t *writer)
 {
    if (!writer)
       return;
    retro_atomic_store_release_int(&writer->quit, 1);
-   input_output_writer_wake(writer);
+   input_output_writer_signal(writer);
    sthread_join(writer->thread);
 #ifdef _WIN32
    CloseHandle(writer->wake);

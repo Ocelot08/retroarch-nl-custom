@@ -16,6 +16,8 @@
  */
 
 #include <stdio.h>
+#include <limits.h>
+#include <float.h>
 #include <string.h>
 #include <math.h>
 
@@ -31,23 +33,31 @@
 
 static int scale_into_range_i(int value, int lower_limit, int higher_limit)
 {
-   int scale = 1;
-   while (value * scale < lower_limit)
-      scale++;
-   if (value * scale <= higher_limit)
-      return scale;
-   return 0;
+   int scale;
+   if (value <= 0 || lower_limit < 0 || higher_limit < lower_limit)
+      return 0;
+   scale = lower_limit > value ? (lower_limit - 1) / value + 1 : 1;
+   return scale <= higher_limit / value ? scale : 0;
 }
 
 static int scale_into_range_d(double value, double lower_limit,
       double higher_limit)
 {
-   int scale = 1;
-   while (value * scale < lower_limit)
+   double quotient;
+   int scale;
+   if (!(value > 0.0 && value <= DBL_MAX && lower_limit >= 0.0
+            && higher_limit >= lower_limit && higher_limit <= DBL_MAX))
+      return 0;
+   quotient = lower_limit / value;
+   if (!(quotient <= INT_MAX)) return 0;
+   scale = quotient > 1.0 ? (int)quotient : 1;
+   if (value > DBL_MAX / scale) return 0;
+   if (value * scale < lower_limit)
+   {
+      if (scale == INT_MAX || value > DBL_MAX / (scale + 1)) return 0;
       scale++;
-   if (value * scale <= higher_limit)
-      return scale;
-   return 0;
+   }
+   return value * scale <= higher_limit ? scale : 0;
 }
 
 static int scale_into_aspect(int source_res, int tot_res,
@@ -791,7 +801,8 @@ int modeline_is_different(const video_modeline_t *n,
       ||  n->interlace  != p->interlace
       ||  n->doublescan != p->doublescan
       ||  n->hsync      != p->hsync
-      ||  n->vsync      != p->vsync;
+      ||  n->vsync      != p->vsync
+      ||  n->csync      != p->csync;
 }
 
 void modeline_copy_timings(video_modeline_t *n, const video_modeline_t *p)
@@ -809,6 +820,7 @@ void modeline_copy_timings(video_modeline_t *n, const video_modeline_t *p)
    n->doublescan = p->doublescan;
    n->hsync      = p->hsync;
    n->vsync      = p->vsync;
+   n->csync      = p->csync;
    n->vfreq      = p->vfreq;
    n->hfreq      = p->hfreq;
 }
@@ -830,14 +842,16 @@ char *modeline_print(const video_modeline_t *mode, char *s, size_t len,
 
    if ((flags & MODELINE_PRINT_PARAMS) && _len < len)
       snprintf(s + _len, len - _len,
-            " %.6f %d %d %d %d %d %d %d %d %s %s %s %s",
+            " %.6f %d %d %d %d %d %d %d %d %s %s %s %s%s",
             (double)mode->pclock / 1000000.0,
             mode->hactive, mode->hbegin, mode->hend, mode->htotal,
             mode->vactive, mode->vbegin, mode->vend, mode->vtotal,
             mode->interlace ? "interlace" : "",
             mode->doublescan ? "doublescan" : "",
             mode->hsync ? "+hsync" : "-hsync",
-            mode->vsync ? "+vsync" : "-vsync");
+            mode->vsync ? "+vsync" : "-vsync",
+            mode->csync == MODELINE_CSYNC_NEGATIVE ? " CSync -CSync" :
+            mode->csync == MODELINE_CSYNC_POSITIVE ? " CSync +CSync" : "");
 
    return s;
 }

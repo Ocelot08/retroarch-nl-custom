@@ -46,14 +46,15 @@
 #endif
 #include "../../playlist.h"
 #include "../../manual_content_scan.h"
-#include "../misc/cpufreq/cpufreq.h"
+#include "../../os/lakka/cpufreq/cpufreq.h"
 #ifdef HAVE_LAKKA
-#include "../../lakka.h"
+#include "../../os/lakka/lakka.h"
 #endif
 #ifdef HAVE_LAKKA_SWITCH
-#include "../../misc/reboot2payload/reboot2payload.h"
+#include "../../os/lakka/reboot2payload/reboot2payload.h"
 #endif
 #include "../../audio/audio_driver.h"
+#include "../../input/input_remapping.h"
 
 #ifdef HAVE_NETWORKING
 #include "../../network/netplay/netplay.h"
@@ -305,7 +306,7 @@ static size_t menu_action_setting_disp_set_label_shader_parameter_internal(
    video_shader_driver_get_current_shader(&shader_info);
    if (shader_info.data && (param = &shader_info.data->parameters[type - offset]))
       return snprintf(s, len, "%.2f [%.2f %.2f]",
-            param->current, param->minimum, param->maximum);
+            video_shader_param_get(param), param->minimum, param->maximum);
    *s = '\0';
    return 0;
 }
@@ -831,7 +832,7 @@ static size_t menu_action_setting_disp_set_label_input_desc(
    if ((remap_idx   = settings->uints.input_remap_ids[user_idx][btn_idx]) !=
          RARCH_UNMAPPED)
    {
-      unsigned mapped_port   = settings->uints.input_remap_ports[user_idx];
+      unsigned mapped_port   = input_remapping_user_port(user_idx);
       const char *descriptor = (mapped_port < MAX_USERS)
          ? runloop_state_get_ptr()->system.input_desc_btn[mapped_port][remap_idx]
          : NULL;
@@ -848,6 +849,40 @@ static size_t menu_action_setting_disp_set_label_input_desc(
    }
    /* If descriptor was not found, set this instead */
    return strlcpy(s, RARCH_NO_BIND, len);
+}
+
+/* Settings > Input > Controllers: a controller's player, or the one
+ * Auto gave it. */
+static size_t menu_action_setting_disp_set_label_input_plays_as(
+      file_list_t* list,
+      unsigned *w, unsigned type, unsigned i,
+      const char *label,
+      char *s, size_t len,
+      const char *path,
+      char *s2, size_t len2)
+{
+   unsigned player, port;
+   unsigned row = type - MENU_SETTINGS_INPUT_PLAYS_AS_BEGIN;
+
+   *w = 19;
+   if (path && *path)
+      strlcpy(s2, path, len2);
+   player = (row < MAX_INPUT_DEVICES)
+      ? input_config_plays_as_player(row)
+      : input_config_plays_as_entry_player(row - MAX_INPUT_DEVICES);
+   if (player)
+      return snprintf(s, len, "%u", player);
+   switch (input_config_plays_as_where(row, &player, &port))
+   {
+      case INPUT_PLAYS_AS_SHARING:
+      case INPUT_PLAYS_AS_OWN_PORT:
+         return snprintf(s, len,
+               msg_hash_to_str(MENU_ENUM_LABEL_VALUE_INPUT_PLAYS_AS_AUTO_PLAYER),
+               player);
+      default:
+         break;
+   }
+   return strlcpy(s, msg_hash_to_str(MENU_ENUM_LABEL_VALUE_AUTO), len);
 }
 
 static size_t menu_action_setting_disp_set_label_input_desc_kbd(
@@ -2455,6 +2490,11 @@ static int menu_cbs_init_bind_get_string_representation_compare_type(
          MENU_SETTINGS_REMAPPING_PORT_BEGIN,
          MENU_SETTINGS_REMAPPING_PORT_END,
          menu_action_setting_disp_set_label_menu_more
+      },
+      {
+         MENU_SETTINGS_INPUT_PLAYS_AS_BEGIN,
+         MENU_SETTINGS_INPUT_PLAYS_AS_END,
+         menu_action_setting_disp_set_label_input_plays_as
       },
    };
 

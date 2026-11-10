@@ -18,6 +18,7 @@
 #include "gfx_surface_player.h"
 #include "gfx_instrument.h"
 #include "video_defines.h"
+#include "../configuration.h"
 
 /* An animation's frames are linear scRGB half floats where the source
  * is HDR and the driver offers such a texture (only while the output
@@ -39,6 +40,7 @@ static int gfx_surface_player_start(void *user, unsigned width,
    if (!(s = gsp->cb.surface(gsp->cb.user,
          VIDEO_SCALE_PACK(width, height), num_slots, pixfmt)))
       return -1;
+   s->padded     = 1;
    gsp->rgba     = have_req && req.rgba;
    gsp->threaded = num_slots > 1;
    return (gsp->rgba ? VIDEO_PLAYER_RGBA : 0)
@@ -55,11 +57,20 @@ static int gfx_surface_player_start_hw(void *user, unsigned width,
 {
    gfx_surface_player_t *gsp = (gfx_surface_player_t*)user;
    gfx_surface_t *s;
-   if (     !VIDEO_SCALE_FITS(width, height)
-         || !(s = gsp->cb.surface(gsp->cb.user,
-               VIDEO_SCALE_PACK(width, height), 0, IMAGE_PIXFMT_NV12))
-         || !s->imported)
+   gfx_surface_requirements_t req;
+   gsp->hw_output_pixfmt = IMAGE_PIXFMT_8888;
+   if (     gfx_surface_query_requirements(0, &req)
+         && (req.formats & IMAGE_PIXFMT_FP16)
+         && image_transfer_anim_stream_is_hdr(gsp->stream, gsp->type))
+      gsp->hw_output_pixfmt = IMAGE_PIXFMT_FP16;
+   if (!VIDEO_SCALE_FITS(width, height))
+      return VIDEO_PLAYER_HW_REFUSED;
+   if (!(s = gsp->cb.surface(gsp->cb.user,
+               VIDEO_SCALE_PACK(width, height), 0, IMAGE_PIXFMT_NV12)))
       return -1;
+   if (!s->imported)
+      return VIDEO_PLAYER_HW_REFUSED;
+   gsp->hw_confirmed = false;
    gsp->threaded = jobs > 1;
    return 0;
 }
@@ -74,20 +85,33 @@ static enum video_player_present gfx_surface_player_present_hw(
    video_frame_import_t imp;
    const video_hw_frame_t *hw = fr->hw;
 
+   uint32_t pixfmt = hw->pixfmt ? hw->pixfmt : IMAGE_PIXFMT_NV12;
+   if (pixfmt != IMAGE_PIXFMT_NV12 && pixfmt != IMAGE_PIXFMT_P010
+         && pixfmt != IMAGE_PIXFMT_YUV8_FP16 && pixfmt != IMAGE_PIXFMT_YUV10_FP16)
+      return VIDEO_PLAYER_PRESENT_FAILED;
+
    imp.image      = hw->image;
+   imp.plane_views[0] = hw->plane_views[0];
+   imp.plane_views[1] = hw->plane_views[1];
    imp.wait       = hw->wait;
    imp.wait_value = hw->wait_value;
    imp.done       = hw->done;
    imp.done_value = hw->done_value;
-   imp.pixfmt     = IMAGE_PIXFMT_NV12;
+   imp.pixfmt     = pixfmt;
+   imp.output_pixfmt = gsp->hw_output_pixfmt;
    imp.dims       = VIDEO_SCALE_PACK(hw->width, hw->height);
    imp.layout     = hw->layout;
    imp.yuv        = hw->yuv;
+   imp.color      = hw->color;
+   imp.array_slice = hw->array_slice;
+   imp.crop_x = hw->crop_x;
+   imp.crop_y = hw->crop_y;
    imp.abandon    = hw->abandon;
    imp.owner      = hw->owner;
    switch (gfx_surface_submit_import(s, &imp))
    {
       case GFX_SURFACE_SUBMIT_DONE:
+         gsp->hw_confirmed = true;
          gsp->cb.shown(gsp->cb.user, s);
          return VIDEO_PLAYER_PRESENT_DONE;
       case GFX_SURFACE_SUBMIT_QUEUED:
@@ -97,10 +121,9 @@ static enum video_player_present gfx_surface_player_present_hw(
       case GFX_SURFACE_SUBMIT_BUSY:
          return VIDEO_PLAYER_PRESENT_BUSY;
       case GFX_SURFACE_SUBMIT_DROPPED:
-         if (gsp->threaded)
-            return VIDEO_PLAYER_PRESENT_BUSY;
-         video_hw_frame_abandon(hw);
-         return VIDEO_PLAYER_PRESENT_DONE;
+         /* A dropped conversion did not reach the texture. Retain a movie's
+          * inline lease for retry too; never confirm an unshown first frame. */
+         return VIDEO_PLAYER_PRESENT_BUSY;
       default:
          break;
    }
@@ -118,6 +141,21 @@ static uint32_t *gfx_surface_player_slot_begin(void *user, unsigned slot)
    if (s->inflight)
       return NULL;
    return s->slots[slot];
+}
+
+static unsigned gfx_surface_player_slot_stride(void *user, unsigned slot)
+{
+   gfx_surface_player_t *gsp = (gfx_surface_player_t*)user;
+   gfx_surface_t *s = (gfx_surface_t*)*gsp->surface;
+   size_t stride;
+   unsigned bpp;
+   if (!s || slot >= s->num_slots)
+      return 0;
+   bpp = IMAGE_PIXFMT_BPP(s->pixfmt);
+   stride = s->pitch[slot] / bpp;
+   if (s->pitch[slot] % bpp || stride > UINT32_MAX)
+      return 0;
+   return (unsigned)stride;
 }
 
 static void gfx_surface_player_slot_end(void *user, unsigned slot)
@@ -171,7 +209,7 @@ static enum video_player_present gfx_surface_player_present(void *user,
 static bool gfx_surface_player_feed(void *user)
 {
    gfx_surface_player_t *gsp = (gfx_surface_player_t*)user;
-   return gsp->cb.feed(gsp->cb.user);
+   return gsp->cb.feed(gsp->cb.feed_user);
 }
 
 static void gfx_surface_player_decoded(void *user, enum video_player_how how)
@@ -194,19 +232,28 @@ static void gfx_surface_player_decoded(void *user, enum video_player_how how)
    }
 }
 
+static int gfx_surface_player_restart_software(void *user)
+{
+   gfx_surface_player_t *gsp = (gfx_surface_player_t*)user;
+   return image_transfer_anim_stream_stop_hw(gsp->stream, gsp->type) ? 1 : -1;
+}
+
 gfx_surface_player_t *gfx_surface_player_new(void *stream,
       enum image_type_enum type, int loop_count, void **surface,
       const gfx_surface_player_cbs_t *cb, unsigned flags)
 {
    video_player_sink_t sink;
    gfx_surface_player_t *gsp;
+   settings_t *settings = config_get_ptr();
+   bool hardware = (flags & GFX_SURFACE_PLAYER_GPU)
+      && (!settings || settings->uints.video_hw_decode != VIDEO_HW_DECODE_OFF);
 
    if (!surface || !cb || !cb->surface || !cb->shown)
       return NULL;
    if (!(gsp = (gfx_surface_player_t*)calloc(1, sizeof(*gsp))))
       return NULL;
-   sink.start_hw   = (flags & GFX_SURFACE_PLAYER_GPU)
-      ? gfx_surface_player_start_hw : NULL;
+   /* Snapshot policy on the polling owner, before any decoder work. */
+   sink.start_hw   = hardware ? gfx_surface_player_start_hw : NULL;
    flags          &= ~GFX_SURFACE_PLAYER_GPU;
    gsp->stream     = stream;
    gsp->type       = type;
@@ -215,6 +262,7 @@ gfx_surface_player_t *gfx_surface_player_new(void *stream,
    sink.user       = gsp;
    sink.start      = gfx_surface_player_start;
    sink.slot_begin = gfx_surface_player_slot_begin;
+   sink.slot_stride = gfx_surface_player_slot_stride;
    sink.slot_end   = gfx_surface_player_slot_end;
    sink.present    = gfx_surface_player_present;
    sink.feed       = cb->feed ? gfx_surface_player_feed : NULL;
@@ -225,6 +273,8 @@ gfx_surface_player_t *gfx_surface_player_new(void *stream,
       free(gsp);
       return NULL;
    }
+   video_player_set_hw_fallback(gsp->vp,
+         gfx_surface_player_restart_software, gsp);
    return gsp;
 }
 
@@ -241,23 +291,42 @@ bool gfx_surface_player_release(gfx_surface_player_t *gsp,
 {
    if (s->imported)
    {
+      bool refused = true;
+#ifdef HAVE_THREADS
+      refused = s->node.kind == VIDEO_THREAD_ASYNC_IMPORT && !s->node.dropped;
+#endif
       /* sent again once; then, or with the player gone, the frame
        * goes back to its decoder unread */
       if (s->dropped)
       {
-         if (     gsp && !gsp->hw_resent
-               && gfx_surface_submit_import(s, &s->import)
-                  == GFX_SURFACE_SUBMIT_QUEUED)
+         if (gsp && !gsp->hw_resent)
          {
-            gsp->hw_resent = true;
-            return true;
+            enum gfx_surface_submit_result r =
+                  gfx_surface_submit_import(s, &s->import);
+            if (r == GFX_SURFACE_SUBMIT_QUEUED)
+            {
+               gsp->hw_resent = true;
+               return true;
+            }
+            if (r == GFX_SURFACE_SUBMIT_DONE)
+               s->dropped = 0;
+            else if (r == GFX_SURFACE_SUBMIT_DROPPED)
+               refused = false;
+            else if (r == GFX_SURFACE_SUBMIT_FAILED)
+               refused = true;
          }
-         if (s->import.abandon)
+         if (s->dropped && s->import.abandon)
             s->import.abandon(s->import.owner, s->import.done,
                   s->import.done_value);
       }
       if (gsp)
+      {
+         if (!s->dropped)
+            gsp->hw_confirmed = true;
+         else if (refused && !gsp->hw_confirmed)
+            video_player_request_software(gsp->vp);
          video_player_slot_released(gsp->vp, gsp->hw_slot);
+      }
       return false;
    }
    /* Only a two-slot surface is fed by the worker, whose frame sits in

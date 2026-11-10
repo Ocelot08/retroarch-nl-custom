@@ -73,8 +73,21 @@ RETRO_BEGIN_DECLS
 
 typedef struct rh264_video rh264_video;
 
+typedef struct rh264_video_color
+{
+   unsigned primaries, transfer, matrix, full_range;
+   int video_signal_present, description_present;
+} rh264_video_color_t;
+
+/* SPS VUI color; unspecified CICP values are 2. Failure clears out. */
+int rh264_video_get_color(const rh264_video *v, rh264_video_color_t *out);
+
 /* Create a decoder. Returns NULL on allocation failure. */
 rh264_video *rh264_video_open(void);
+
+/* Restart at an IDR while retaining a healthy hardware session. On success
+ * replaces *video; on failure leaves it unchanged. Software returns 0. */
+int rh264_video_restart_hw(rh264_video **video);
 
 /* Supply the avcC (AVCDecoderConfigurationRecord) extradata from the sample
  * description, which carries the SPS/PPS and the NAL length size. Optional
@@ -91,11 +104,31 @@ int rh264_video_set_extradata(rh264_video *v, const uint8_t *avcc, size_t len);
 /* 2 on hardware backpressure: retry with the same live data and length. */
 int rh264_video_decode(rh264_video *v, const uint8_t *data, size_t len);
 
+/* A caller's value for the picture the next rh264_video_decode opens,
+ * given back with that picture by rh264_video_tag once it is handed out:
+ * with B pictures the output is not the input's order. A field pair
+ * keeps its first field's. 0 until set. */
+void rh264_video_set_tag(rh264_video *v, uint64_t tag);
+uint64_t rh264_video_tag(const rh264_video *v);
+
 /* Hand out the next pending picture in display order without feeding more
  * data, for end of stream. Returns 0 when a picture became available through
  * rh264_video_plane, -1 when nothing is pending. */
 /* 2 when hardware output is busy; retry later. */
+/* -2 on terminal hardware failure; -1 means no pending output. */
 int rh264_video_drain(rh264_video *v);
+
+/* The decoder's state between access units, for savestates: what the
+ * pictures after it predict from and how they are ordered for output.
+ * Pictures still decoding on a pool are finished first, so call these
+ * between access units only. Size is 0 when
+ * there is none to give: half a field pair, or a hardware session.
+ * Save writes it and returns the bytes written, 0 if @size is short.
+ * Load takes it into a software decoder, which then decodes on exactly
+ * as the saved one would; on -1 the decoder starts over, as at a seek. */
+size_t rh264_video_state_size(rh264_video *v);
+size_t rh264_video_save_state(rh264_video *v, void *data, size_t size);
+int rh264_video_load_state(rh264_video *v, const void *data, size_t size);
 
 /* Bits per sample of the decoded pictures (8..14).  Above 8 the planes
  * hold uint16_t samples: rh264_video_plane still returns a byte
@@ -160,6 +193,7 @@ void rh264_video_row_wait_stats(int *waits, int *rows_short_x100);
 int rh264_video_jobs_at_once(void);
 
 int rh264_video_bit_depth(const rh264_video *v);
+unsigned rh264_video_reorder_depth(const rh264_video *v);
 
 /* Borrow a decoded plane (0=Y, 1=U, 2=V). Valid until the next decode call. */
 const uint8_t *rh264_video_plane(const rh264_video *v, int plane,
@@ -267,6 +301,7 @@ typedef struct rh264_hw_ops
    /* Optional: copy the visible picture in slot to packed I420 planes.
     * Strides are width for Y, ceil(width/2) for U and V. */
    int (*readback)(void *dec, unsigned slot, uint8_t *planes[3]);
+   unsigned api;  /* video_hw_api for exported output */
 } rh264_hw_ops_t;
 
 /* The backend decoders try when asked to (rh264_video_set_hw);
@@ -282,6 +317,21 @@ int rh264_video_set_hw(rh264_video *v, int enable);
 /* Request hardware decoding with CPU planes before feeding Annex-B input.
  * Parameter sets enable it before the first slice, or software is used. */
 void rh264_video_set_hw_readback(rh264_video *v, int enable);
+/* Defer CPU readback until rh264_video_readback. Set before decoding to
+ * reserve a pending-output slot when available. Without spare capacity,
+ * eager readback remains valid. Discarding output by the next decode/drain
+ * never changes reference reconstruction or presentation order. */
+void rh264_video_set_deferred_readback(rh264_video *v, int enable);
+/* Metadata for the last successful decode/drain output, without readback. */
+int rh264_video_frame_size(const rh264_video *v, int *width, int *height);
+/* Make that output's planes available once; 0 success, -1 unavailable/error.
+ * Repeated calls reuse the CPU copy. The next decode/drain expires it. */
+int rh264_video_readback(rh264_video *v);
+/* Export deferred output once without a CPU copy: 0 leased, 2 busy, -1
+ * unavailable/error. The reader must signal done or abandon the lease
+ * before closing the decoder. CPU materialization remains available
+ * until the next decode/drain, independent of the exported copy. */
+int rh264_video_export_frame(rh264_video *v, video_hw_frame_t *out);
 /* Whether the pictures come from the backend. */
 int rh264_video_is_hw(const rh264_video *v);
 /* The picture decode or drain made ready, as a hardware frame; 0 when

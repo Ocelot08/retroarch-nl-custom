@@ -67,7 +67,10 @@ struct http_handle
     * two backends honour the same API contract: body on disk,
     * data == NULL in the callback. */
    char                 *sink_path;
-   bool                  settled;
+   /* Set by the fetch callbacks on the thread that started the fetch,
+    * after the response; read by the handler, which may be on the
+    * task worker. */
+   retro_atomic_int_t    settled;
    /* Full request URL, owned; see the matching comment in
     * tasks/task_http.c.  A fixed buffer truncated the stored copy but
     * not the candidate task_http_finder() compares it against, so the
@@ -78,6 +81,9 @@ struct http_handle
 };
 
 typedef struct http_handle http_handle_t;
+
+/* Watchdog for a task waiting on its fetch, which wakes it. */
+#define HTTP_EMSCRIPTEN_PARK_USEC 1000000
 
 /* ------------------------------------------------------------------ */
 /* Header marshalling                                                  */
@@ -249,9 +255,11 @@ static void task_http_transfer_handler(retro_task_t *task)
    if ((flg & RETRO_TASK_FLG_CANCELLED) > 0)
       goto task_finished;
 
-   if (http->settled)
+   if (retro_atomic_load_acquire_int(&http->settled))
       goto task_finished;
 
+   /* The fetch's callbacks wake the task when it settles. */
+   task_queue_park(task, HTTP_EMSCRIPTEN_PARK_USEC);
    return;
 
 task_finished:
@@ -292,10 +300,12 @@ task_finished:
     * note in tasks/task_http.c. */
 }
 
+/* A finished transfer is no longer in flight; see task_http.c. */
 static bool task_http_finder(retro_task_t *task, void *user_data)
 {
    http_handle_t *http = NULL;
-   if (task && (task->handler == task_http_transfer_handler) && user_data)
+   if (     task && (task->handler == task_http_transfer_handler) && user_data
+         && !(task_get_flags(task) & RETRO_TASK_FLG_FINISHED))
       if ((http = (http_handle_t*)task->state))
          return http->connection_url
              && string_is_equal(http->connection_url, (const char*)user_data);
@@ -383,7 +393,8 @@ static void http_fetch_settle(emscripten_fetch_t *fetch)
    else
       RARCH_ERR("[HTTP] Out of memory allocating response.\n");
 
-   http->settled = true;
+   retro_atomic_store_release_int(&http->settled, 1);
+   task_queue_wake(task->ident);
 
    /* Unconditional.  The old onload handler returned early on malloc
     * failure and leaked the entire response buffer. */
@@ -458,6 +469,7 @@ static void *task_push_http_transfer_generic(
 
    if (!(http = (http_handle_t*)calloc(1, sizeof(*http))))
       return NULL;
+   retro_atomic_int_init(&http->settled, 0);
 
    http->connection_url = strdup(url);
 
@@ -530,7 +542,7 @@ static void *task_push_http_transfer_generic(
       /* Could not even start.  Mark it settled so the handler
        * finalises the task on its next tick; the task owns `http`
        * from here, so it must not be freed on this path. */
-      http->settled = true;
+      retro_atomic_store_release_int(&http->settled, 1);
 
    return t;
 

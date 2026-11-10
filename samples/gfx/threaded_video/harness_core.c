@@ -46,6 +46,11 @@ static int hw_mode;
  * frontend then does on the strength of an optional extension is a
  * validation error here. */
 static int hw_own_device;
+/* HARNESS_CORE_IGNORE_REQUIRED_EXTS (with HARNESS_CORE_HW_VULKAN=2):
+ * create_device leaves the required extensions out, as Flycast does,
+ * for the frontend to add. =2 also resolves vkCreateDevice through
+ * the vkGetInstanceProcAddr it gets from the one it was given. */
+static int hw_ignore_required_exts;
 /* HARNESS_CORE_HW_VULKAN=3: the core caches its context across a video
  * reinit (hw_render.cache_context), as Azahar does: the frontend keeps
  * the instance and device and calls neither context_destroy nor
@@ -481,8 +486,7 @@ static bool hw_create_device(struct retro_vulkan_context *context,
    PFN_vkGetPhysicalDeviceSurfaceSupportKHR surface_support =
       (PFN_vkGetPhysicalDeviceSurfaceSupportKHR)
       gipa(instance, "vkGetPhysicalDeviceSurfaceSupportKHR");
-   PFN_vkCreateDevice create_device = (PFN_vkCreateDevice)
-      gipa(instance, "vkCreateDevice");
+   PFN_vkCreateDevice create_device;
    PFN_vkGetDeviceProcAddr gdpa = (PFN_vkGetDeviceProcAddr)
       gipa(instance, "vkGetDeviceProcAddr");
    PFN_vkGetDeviceQueue get_queue;
@@ -495,6 +499,11 @@ static bool hw_create_device(struct retro_vulkan_context *context,
    uint32_t i;
    static const float prio = 1.0f;
 
+   if (hw_ignore_required_exts == 2)
+      gipa = (PFN_vkGetInstanceProcAddr)gipa(instance,
+            "vkGetInstanceProcAddr");
+   create_device = gipa
+      ? (PFN_vkCreateDevice)gipa(instance, "vkCreateDevice") : NULL;
    if (!enum_gpus || !family_props || !create_device || !gdpa)
       return false;
    if (gpu == VK_NULL_HANDLE)
@@ -527,7 +536,7 @@ static bool hw_create_device(struct retro_vulkan_context *context,
    di.sType                   = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
    di.queueCreateInfoCount    = 1;
    di.pQueueCreateInfos       = &qi;
-   di.enabledExtensionCount   = num_exts;
+   di.enabledExtensionCount   = hw_ignore_required_exts ? 0 : num_exts;
    di.ppEnabledExtensionNames = exts;
    di.enabledLayerCount       = num_layers;
    di.ppEnabledLayerNames     = layers;
@@ -617,6 +626,8 @@ void retro_set_environment(retro_environment_t cb)
       hw_mode          = (hw && *hw) ? 1 : 0;
       hw_own_device    = (hw && *hw == '2') ? 1 : 0;
       hw_cache_context = (hw && *hw == '3') ? 1 : 0;
+      hw = getenv("HARNESS_CORE_IGNORE_REQUIRED_EXTS");
+      hw_ignore_required_exts = (hw && *hw) ? (*hw == '2' ? 2 : 1) : 0;
    }
    /* RGB565 by default; XRGB8888 with HARNESS_CORE_XRGB8888 set. The
     * two take different paths through a driver - Vulkan converts
@@ -644,8 +655,10 @@ void retro_set_audio_sample(retro_audio_sample_t cb) { (void)cb; }
 void retro_set_audio_sample_batch(retro_audio_sample_batch_t cb) { (void)cb; }
 void retro_set_input_poll(retro_input_poll_t cb) { (void)cb; }
 void retro_set_input_state(retro_input_state_t cb) { (void)cb; }
-void retro_init(void) { }
-void retro_deinit(void) { }
+static void harness_env_init(void);
+static void harness_env_report(void);
+void retro_init(void) { harness_env_init(); }
+void retro_deinit(void) { harness_env_report(); }
 unsigned retro_api_version(void) { return RETRO_API_VERSION; }
 void retro_get_system_info(struct retro_system_info *info)
 {
@@ -716,6 +729,19 @@ RETRO_API void harness_core_set_run_us(unsigned us)
  * the base size, so two ways of drawing it can be compared on screen */
 static unsigned harness_frozen;
 RETRO_API void harness_core_freeze(unsigned n) { harness_frozen = n; }
+/* Says a new pixel format, as a core restarting its video would, and
+ * draws in it from the next run: 16-bit pixels for RGB565 and 0RGB1555,
+ * 32-bit for XRGB8888 and XRGB2101010. False when the frontend refuses. */
+RETRO_API bool harness_core_set_format(unsigned fmt)
+{
+   enum retro_pixel_format f = (enum retro_pixel_format)fmt;
+   if (!environ_cb || !environ_cb(RETRO_ENVIRONMENT_SET_PIXEL_FORMAT, &f))
+      return false;
+   pixel_format = f;
+   bpp          = (f == RETRO_PIXEL_FORMAT_XRGB8888
+         || f == RETRO_PIXEL_FORMAT_XRGB2101010) ? 4 : 2;
+   return true;
+}
 /* The access a framebuffer is asked with: read and write by default,
  * as a core that snapshots its frame for a wipe asks; write only for
  * one that only draws */
@@ -733,6 +759,33 @@ RETRO_API void harness_core_stamp(unsigned on)      { harness_stamp = on; }
 RETRO_API unsigned harness_core_last_pushed(void)   { return harness_last_pushed; }
 RETRO_API unsigned harness_core_fb_granted(void)   { return harness_fb_granted; }
 RETRO_API unsigned harness_core_fb_uncached(void)  { return harness_fb_uncached; }
+
+/* The same switches from the environment, for a core RetroArch loads
+ * itself (samples/gfx/menu_wine/swfb.py): HARNESS_CORE_SW_FB as
+ * harness_core_use_framebuffer, HARNESS_CORE_FREEZE and
+ * HARNESS_CORE_STAMP as theirs, and HARNESS_CORE_REPORT, which prints
+ * how many framebuffers were asked for and lent at deinit. */
+static void harness_env_init(void)
+{
+   const char *v;
+   if ((v = getenv("HARNESS_CORE_SW_FB")) && *v)
+      harness_use_fb = atoi(v);
+   if ((v = getenv("HARNESS_CORE_FREEZE")) && *v)
+      harness_frozen = (unsigned)atoi(v);
+   if ((v = getenv("HARNESS_CORE_STAMP")) && *v)
+      harness_stamp  = (unsigned)atoi(v);
+}
+
+static void harness_env_report(void)
+{
+   const char *v = getenv("HARNESS_CORE_REPORT");
+   if (v && *v)
+   {
+      fprintf(stderr, "harness: %u runs, %u framebuffers lent\n",
+            runs, harness_fb_granted);
+      fflush(stderr);
+   }
+}
 
 void retro_run(void)
 {

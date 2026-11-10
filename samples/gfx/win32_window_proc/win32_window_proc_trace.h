@@ -10,8 +10,12 @@ extern bool   stub_input_takes;
 extern bool   trace_on;
 /* which of the video families' creation steps ran: 1 GL, 2 Vulkan */
 extern unsigned stub_create_steps;
+/* the client size the last Vulkan surface was made for */
+extern unsigned stub_vk_surface_dims;
 /* WM_SETFOCUS and WM_KILLFOCUS offered to the input driver */
 extern unsigned stub_input_focus_msgs;
+/* calls out of the window procedure into the input and video drivers */
+extern unsigned stub_frontend_calls;
 void trace(const char *fmt, ...);
 void stubs_init(void);
 void stub_set_geometry(unsigned width, unsigned height);

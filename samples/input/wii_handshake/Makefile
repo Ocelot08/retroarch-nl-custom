@@ -9,6 +9,7 @@ LIBRETRO_COMM_DIR := $(RARCH_DIR)/libretro-common
 # handshake and packet handler.
 SOURCES := \
 	wii_handshake_test.c \
+	$(LIBRETRO_COMM_DIR)/compat/compat_strl.c \
 	$(LIBRETRO_COMM_DIR)/features/features_cpu.c
 
 OBJS := $(call sample_objs,$(SOURCES:.c=.o))
@@ -34,6 +35,9 @@ all: $(TARGET)
 $(SAMPLE_OBJDIR)/%.o: $$(call sample_src,$$*).c
 	@mkdir -p $(@D)
 	$(CC) -c -o $@ $< $(CFLAGS)
+
+# the handler is built inside the test's own object
+wii_handshake_test.o: $(RARCH_DIR)/input/connect/connect_wii.c
 
 $(TARGET): $(OBJS)
 	$(CC) -o $@ $(OBJS) $(LDFLAGS)

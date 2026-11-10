@@ -24,6 +24,9 @@ tls_fetch_noaes: $(SRC)
 	$(CC) $(CPPFLAGS) -DAES_NO_X86 -DAES_NO_ARM $(CFLAGS) $(SRC) $(LDLIBS) -o $@
 tls_bench: tls_bench.c $(filter-out tls_fetch.c,$(SRC))
 	$(CC) $(CPPFLAGS) $(CFLAGS) tls_bench.c $(filter-out tls_fetch.c,$(SRC)) $(LDLIBS) -o $@
+# one connection under ssl_socket_retro_configure()
+tls_config: tls_config.c $(filter-out tls_fetch.c,$(SRC))
+	$(CC) $(CPPFLAGS) $(CFLAGS) tls_config.c $(filter-out tls_fetch.c,$(SRC)) $(LDLIBS) -o $@
 tls_keyupdate: tls_keyupdate.c $(filter-out tls_fetch.c,$(SRC))
 	$(CC) $(CPPFLAGS) $(CFLAGS) tls_keyupdate.c $(filter-out tls_fetch.c,$(SRC)) $(LDLIBS) -o $@
 # net_http over the built-in client, as RetroArch's HTTP task drives it
@@ -39,7 +42,8 @@ tls_http: $(HTTP_SRC)
 SSL_BACKEND ?= retro
 STALL_BASE = tls_stall.c $(COMMON)/net/net_socket.c $(COMMON)/net/net_compat.c \
       $(COMMON)/features/features_cpu.c $(COMMON)/compat/compat_strl.c $(COMMON)/string/stdstring.c \
-      $(COMMON)/encodings/encoding_utf.c $(COMMON)/rthreads/rthreads.c $(COMMON)/file/file_path.c \
+      $(COMMON)/encodings/encoding_utf.c $(COMMON)/rthreads/rthreads.c \
+      $(COMMON)/rthreads/retro_eventcount.c $(COMMON)/file/file_path.c \
       $(COMMON)/time/rtime.c $(COMMON)/streams/file_stream.c $(COMMON)/vfs/vfs_implementation.c \
       $(COMMON)/file/file_path_io.c $(COMMON)/compat/fopen_utf8.c $(COMMON)/string/rstrtod.c
 ifeq ($(SSL_BACKEND),mbed)
@@ -51,7 +55,8 @@ else ifeq ($(SSL_BACKEND),bear)
    STALL_FLAGS = -I$(COMMON)/include -DHAVE_SSL -DHAVE_BEARSSL -D_GNU_SOURCE
    STALL_LIBS  = -lbearssl
 else
-   STALL_SRC   = tls_stall.c $(filter-out tls_fetch.c,$(SRC)) $(COMMON)/rthreads/rthreads.c
+   STALL_SRC   = tls_stall.c $(filter-out tls_fetch.c,$(SRC)) $(COMMON)/rthreads/rthreads.c \
+      $(COMMON)/rthreads/retro_eventcount.c
    STALL_FLAGS = $(CPPFLAGS)
 endif
 tls_stall: $(STALL_SRC)
@@ -60,9 +65,10 @@ tls_stall: $(STALL_SRC)
 HOOK_SRC = $(patsubst tls_stall.c,tls_verify_hook.c,$(STALL_SRC))
 tls_verify_hook: $(HOOK_SRC)
 	$(CC) $(STALL_FLAGS) -DHAVE_THREADS $(CFLAGS) $(HOOK_SRC) $(STALL_LIBS) $(LDLIBS) -lpthread -o $@
-THR_SRC = tls_threads.c $(filter-out tls_fetch.c,$(SRC)) $(COMMON)/rthreads/rthreads.c
+THR_SRC = tls_threads.c $(filter-out tls_fetch.c,$(SRC)) $(COMMON)/rthreads/rthreads.c \
+      $(COMMON)/rthreads/retro_eventcount.c
 tls_threads: $(THR_SRC)
 	$(CC) $(CPPFLAGS) -DHAVE_THREADS $(CFLAGS) $(THR_SRC) $(LDLIBS) -lpthread -o $@
 clean:
-	rm -f tls_verify_hook tls_verify_hook.exe tls_stall tls_stall.exe tls_fetch_noaes tls_fetch_noaes.exe tls_http tls_http.exe tls_fetch tls_fetch.exe tls_bench tls_bench.exe tls_keyupdate tls_keyupdate.exe tls_threads tls_threads.exe
+	rm -f tls_verify_hook tls_verify_hook.exe tls_stall tls_stall.exe tls_fetch_noaes tls_fetch_noaes.exe tls_http tls_http.exe tls_fetch tls_fetch.exe tls_bench tls_bench.exe tls_keyupdate tls_keyupdate.exe tls_config tls_config.exe tls_threads tls_threads.exe
 .PHONY: all clean

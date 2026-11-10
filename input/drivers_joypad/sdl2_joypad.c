@@ -27,6 +27,9 @@
 
 #define SDL_SUPPORTS_RUMBLE  SDL_VERSION_ATLEAST(2, 0, 9)
 #define SDL_SUPPORTS_SENSORS SDL_VERSION_ATLEAST(2, 0, 14)
+/* the _L sensors: a Wii Remote's Nunchuk, the left Joy-Con of a pair */
+#define SDL_SUPPORTS_SENSORS_L SDL_VERSION_ATLEAST(2, 26, 0)
+#define SDL_SUPPORTS_TOUCHPAD SDL_VERSION_ATLEAST(2, 0, 14)
 #define SDL_SUPPORTS_HIDAPI_WII SDL_VERSION_ATLEAST(2, 26, 0)
 #define SDL_SUPPORTS_HIDAPI_PS3 SDL_VERSION_ATLEAST(2, 26, 0)
 
@@ -40,6 +43,7 @@ typedef struct _sdl2_joypad
    unsigned num_buttons;
    unsigned num_hats;
    unsigned num_balls;
+   uint8_t touch_fingers; /* the first touchpad's, at most two */
 } sdl2_joypad_t;
 
 /* TODO/FIXME - static globals */
@@ -256,6 +260,14 @@ static void sdl2_pad_connect(unsigned id)
                id,
                has_accel ? "yes" : "no",
                has_gyro  ? "yes" : "no");
+   }
+#endif
+#if SDL_SUPPORTS_TOUCHPAD
+   if (pad->controller && SDL_GameControllerGetNumTouchpads(pad->controller) > 0)
+   {
+      int fingers        = SDL_GameControllerGetNumTouchpadFingers(pad->controller, 0);
+      pad->touch_fingers = (uint8_t)(fingers > INPUT_PAD_VIEW_TOUCHES
+            ? INPUT_PAD_VIEW_TOUCHES : fingers > 0 ? fingers : 0);
    }
 #endif
 }
@@ -505,14 +517,13 @@ static bool sdl2_joypad_set_rumble(unsigned pad, enum retro_rumble_effect effect
    SDL_HapticEffect efx;
    sdl2_joypad_t *joypad = (sdl2_joypad_t*)&sdl2_pads[pad];
 
-   memset(&efx, 0, sizeof(efx));
-
    if (!joypad->joypad)
       return false;
 
-   efx.type             = SDL_HAPTIC_LEFTRIGHT;
-   efx.leftright.type   = SDL_HAPTIC_LEFTRIGHT;
-   efx.leftright.length = 5000;
+   efx.leftright.type            = SDL_HAPTIC_LEFTRIGHT;
+   efx.leftright.length          = 5000;
+   efx.leftright.large_magnitude = 0;
+   efx.leftright.small_magnitude = 0;
 
    switch (effect)
    {
@@ -574,6 +585,31 @@ static bool sdl2_joypad_set_sensor_state(unsigned pad, enum retro_sensor_action 
    sdl2_joypad_t *joypad = (sdl2_joypad_t*)&sdl2_pads[pad];
    (void)joypad; /* maybe unused */
 
+   /* sensor sub-device 1 (RETRO_SENSOR_SUBDEVICE): the part in the
+    * left hand */
+   if (RETRO_SENSOR_INDEX(action))
+   {
+#if SDL_SUPPORTS_SENSORS_L
+      unsigned base = RETRO_SENSOR_BASE(action);
+      SDL_SensorType type;
+      if (RETRO_SENSOR_INDEX(action) != 1)
+         return false;
+      if (     base == RETRO_SENSOR_GYROSCOPE_ENABLE
+            || base == RETRO_SENSOR_GYROSCOPE_DISABLE)
+         type = SDL_SENSOR_GYRO_L;
+      else if (base == RETRO_SENSOR_ACCELEROMETER_ENABLE
+            || base == RETRO_SENSOR_ACCELEROMETER_DISABLE)
+         type = SDL_SENSOR_ACCEL_L;
+      else
+         return false;
+      if (SDL_GameControllerHasSensor(joypad->controller, type))
+         return !SDL_GameControllerSetSensorEnabled(joypad->controller, type,
+               (SDL_bool)(   base == RETRO_SENSOR_GYROSCOPE_ENABLE
+                          || base == RETRO_SENSOR_ACCELEROMETER_ENABLE));
+#endif
+      return false;
+   }
+
    switch (action)
    {
 #if SDL_SUPPORTS_SENSORS
@@ -606,9 +642,18 @@ static bool sdl2_joypad_get_sensor_input(unsigned pad, unsigned id, float *value
    sdl2_joypad_t *joypad = (sdl2_joypad_t*)&sdl2_pads[pad];
    SDL_SensorType sensor_type;
    float sensor_data[3];
+   unsigned idx = RETRO_SENSOR_INDEX(id);
 
    if (!joypad->controller)
       return false;
+#if SDL_SUPPORTS_SENSORS_L
+   if (idx > 1)
+      return false;
+#else
+   if (idx)
+      return false;
+#endif
+   id = RETRO_SENSOR_BASE(id);
 
    if ((id >= RETRO_SENSOR_ACCELEROMETER_X) && (id <= RETRO_SENSOR_ACCELEROMETER_Z))
       sensor_type = SDL_SENSOR_ACCEL;
@@ -616,6 +661,11 @@ static bool sdl2_joypad_get_sensor_input(unsigned pad, unsigned id, float *value
       sensor_type = SDL_SENSOR_GYRO;
    else
       return false;
+#if SDL_SUPPORTS_SENSORS_L
+   if (idx)
+      sensor_type = sensor_type == SDL_SENSOR_ACCEL
+         ? SDL_SENSOR_ACCEL_L : SDL_SENSOR_GYRO_L;
+#endif
 
    if (SDL_GameControllerGetSensorData(joypad->controller, sensor_type, sensor_data, 3) < 0)
       return false;
@@ -648,6 +698,41 @@ static bool sdl2_joypad_get_sensor_input(unsigned pad, unsigned id, float *value
 #endif
 }
 
+#if SDL_SUPPORTS_TOUCHPAD
+static bool sdl2_joypad_get_touchpad(unsigned pad, input_pad_view_t *view)
+{
+   unsigned i;
+   uint8_t down = 0;
+   SDL_GameController *controller;
+
+   if (     pad >= MAX_USERS
+         || !(controller = sdl2_pads[pad].controller)
+         || !sdl2_pads[pad].touch_fingers)
+      return false;
+
+   for (i = 0; i < sdl2_pads[pad].touch_fingers; i++)
+   {
+      Uint8 on;
+      float x, y;
+      if (     !SDL_GameControllerGetTouchpadFinger(controller, 0, (int)i,
+                  &on, &x, &y, NULL)
+            && on)
+      {
+         /* 0..1 across, as -0x7fff..0x7fff */
+         int32_t tx      = (int32_t)(x * 65534.0f) - 0x7fff;
+         int32_t ty      = (int32_t)(y * 65534.0f) - 0x7fff;
+         view->touch[i]  = (uint32_t)(uint16_t)(int16_t)tx
+                         | ((uint32_t)(uint16_t)(int16_t)ty << 16);
+         down           |= (uint8_t)(1 << i);
+      }
+   }
+   if (SDL_GameControllerGetButton(controller, SDL_CONTROLLER_BUTTON_TOUCHPAD))
+      down |= INPUT_PAD_TOUCH_PRESS;
+   view->touch_down = down;
+   return true;
+}
+#endif
+
 static bool sdl2_joypad_query_pad(unsigned pad)
 {
    return pad < MAX_USERS && sdl2_pads[pad].joypad;
@@ -667,5 +752,15 @@ input_device_driver_t sdl2_joypad = {
    sdl2_joypad_set_sensor_state,
    sdl2_joypad_get_sensor_input,
    sdl2_joypad_name,
-   "sdl2"
+   "sdl2",
+   NULL, /* get_bt_host */
+   NULL, /* set_bt_host */
+   NULL, /* survives_video */
+   NULL, /* set_player */
+   NULL, /* view */
+#if SDL_SUPPORTS_TOUCHPAD
+   sdl2_joypad_get_touchpad
+#else
+   NULL  /* get_touchpad */
+#endif
 };

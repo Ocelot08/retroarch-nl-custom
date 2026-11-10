@@ -13,6 +13,7 @@ SOURCES_C := \
 	stubs_retroarch.c \
 	$(CORE_DIR)/camera/drivers/ffmpeg.c \
 	$(LIBRETRO_COMM_DIR)/rthreads/rthreads.c \
+	$(LIBRETRO_COMM_DIR)/rthreads/retro_eventcount.c \
 	$(LIBRETRO_COMM_DIR)/lists/string_list.c \
 	$(LIBRETRO_COMM_DIR)/string/stdstring.c \
 	$(LIBRETRO_COMM_DIR)/compat/compat_strl.c \
@@ -34,6 +35,9 @@ LDFLAGS += $(FF_LIBS) -lm -lpthread
 LDFLAGS += -Wl,--wrap=av_image_copy_to_buffer
 LDFLAGS += -Wl,--wrap=av_read_frame
 LDFLAGS += -Wl,--wrap=avcodec_send_packet
+LDFLAGS += -Wl,--wrap=avformat_open_input
+LDFLAGS += -Wl,--wrap=avcodec_receive_frame
+LDFLAGS += -Wl,--wrap=avformat_find_stream_info
 
 ifneq ($(SANITIZER),)
    CFLAGS  := -fsanitize=$(SANITIZER) -fno-omit-frame-pointer -g1 $(CFLAGS)
@@ -42,7 +46,16 @@ else
    CFLAGS  += -g1 -O1
 endif
 
-all: $(TARGET)
+all: $(TARGET) decoder_delay.mkv decoder_resize.h264
+
+decoder_resize.h264:
+	ffmpeg -hide_banner -loglevel error -f lavfi -i "color=c=black:size=32x16:rate=25,format=gray,geq=lum=32" -frames:v 3 -c:v libx264 -crf 1 -pix_fmt yuv420p -f h264 -y resize-small.h264
+	ffmpeg -hide_banner -loglevel error -f lavfi -i "color=c=black:size=64x32:rate=25,format=gray,geq=lum=112" -frames:v 3 -c:v libx264 -crf 1 -pix_fmt yuv444p -f h264 -y resize-large.h264
+	cat resize-small.h264 resize-large.h264 > $@
+	rm -f resize-small.h264 resize-large.h264
+
+decoder_delay.mkv:
+	ffmpeg -hide_banner -loglevel error -f lavfi -i "color=c=black:size=32x16:rate=25,format=gray,geq=lum=N*16" -frames:v 8 -c:v libx264 -crf 1 -pix_fmt yuv420p -x264-params "bframes=2:b-adapt=0:keyint=30:min-keyint=30:scenecut=0" -y $@
 
 $(TARGET): $(OBJS)
 	$(CC) -o $@ $^ $(LDFLAGS)
@@ -54,11 +67,13 @@ $(SAMPLE_OBJDIR)/%.o: $$(call sample_src,$$*).c
 	@mkdir -p $(@D)
 	$(CC) $(CFLAGS) -c -o $@ $<
 
-check: $(TARGET)
+check: all
 	./$(TARGET)
 
 clean:
 	rm -rf $(SAMPLE_OBJDIR)
 	rm -f $(OBJS) $(TARGET)
+	rm -f decoder_delay.mkv
+	rm -f decoder_resize.h264 resize-small.h264 resize-large.h264
 
 .PHONY: all check clean

@@ -1580,6 +1580,14 @@ MSG_HASH(
    "Pacing"
    )
 MSG_HASH(
+   MENU_ENUM_LABEL_VALUE_SYSTEM_INFO_DRIVER_PACING,
+   "Driver Pacing"
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_VALUE_SYSTEM_INFO_TEMPORAL_UPSCALER,
+   "Temporal Upscaler"
+   )
+MSG_HASH(
    MENU_ENUM_LABEL_VALUE_SYSTEM_INFO_DISPLAY_METRIC_MM_WIDTH,
    "Display Width (mm)"
    )
@@ -3358,6 +3366,10 @@ MSG_HASH(
    "OpenSL driver."
    )
 MSG_HASH(
+   MENU_ENUM_LABEL_HELP_AUDIO_DRIVER_AAUDIO,
+   "AAudio driver, Android 8.0 and later. Lower latency than OpenSL; surround layouts go to an output that takes only stereo PCM as AC-3 where it decodes it (Android 14 and later)."
+   )
+MSG_HASH(
    MENU_ENUM_LABEL_HELP_AUDIO_DRIVER_DSOUND,
    "DirectSound driver. DirectSound is used mainly from Windows 95 to Windows XP."
    )
@@ -4504,6 +4516,7 @@ MSG_HASH(MENU_ENUM_SUBLABEL_##T, sub)
 #define S_ACTION_EX_NS(T, n, sd, ok, rp, c, us) \
 MSG_HASH(MENU_ENUM_LABEL_VALUE_##T, us)
 #include "../settings/settings_def_shader_delay.h"
+#include "../settings/settings_def_shader_simulated_resolution.h"
 #undef S_BOOL
 #undef S_BOOL_NS
 #undef S_BOOL_H
@@ -7512,6 +7525,158 @@ MSG_HASH(
    MENU_ENUM_LABEL_VALUE_VIDEO_HDR_EXPAND_GAMUT_SUPER,
    "Super"
    )
+MSG_HASH(
+   MENU_ENUM_LABEL_VALUE_VIDEO_TEMPORAL_UPSCALER_DLSS,
+   "NVIDIA DLSS Super Resolution"
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_VALUE_VIDEO_TEMPORAL_UPSCALER_FSR,
+   "AMD FidelityFX Super Resolution (FSR)"
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_VALUE_VIDEO_TEMPORAL_UPSCALER_XESS,
+   "Intel XeSS Super Resolution"
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_VALUE_VIDEO_TEMPORAL_UPSCALER_QUALITY_AUTO,
+   "Auto"
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_VALUE_VIDEO_TEMPORAL_UPSCALER_QUALITY_NATIVE,
+   "Native (DLAA, anti-aliasing only)"
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_VALUE_VIDEO_TEMPORAL_UPSCALER_QUALITY_QUALITY,
+   "Quality"
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_VALUE_VIDEO_TEMPORAL_UPSCALER_QUALITY_BALANCED,
+   "Balanced"
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_VALUE_VIDEO_TEMPORAL_UPSCALER_QUALITY_PERFORMANCE,
+   "Performance"
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_VALUE_VIDEO_TEMPORAL_UPSCALER_QUALITY_ULTRA_PERFORMANCE,
+   "Ultra Performance"
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_VALUE_VIDEO_TEMPORAL_UPSCALER_PRESET_DEFAULT,
+   "Default"
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_VALUE_VIDEO_TEMPORAL_UPSCALER_PRESET_J,
+   "Preset J (Transformer, less ghosting)"
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_VALUE_VIDEO_TEMPORAL_UPSCALER_PRESET_K,
+   "Preset K (Transformer, best quality)"
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_VALUE_VIDEO_TEMPORAL_UPSCALER_PRESET_A,
+   "Preset A (CNN, DLSS 2/3)"
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_VALUE_VIDEO_TEMPORAL_UPSCALER_PRESET_B,
+   "Preset B (CNN, DLSS 2/3)"
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_VALUE_VIDEO_TEMPORAL_UPSCALER_PRESET_C,
+   "Preset C (CNN, DLSS 2/3)"
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_VALUE_VIDEO_TEMPORAL_UPSCALER_PRESET_D,
+   "Preset D (CNN, DLSS 2/3)"
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_VALUE_VIDEO_TEMPORAL_UPSCALER_PRESET_E,
+   "Preset E (CNN, DLSS 3)"
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_VALUE_VIDEO_TEMPORAL_UPSCALER_PRESET_F,
+   "Preset F (CNN, DLSS 2/3)"
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_VALUE_VIDEO_TEMPORAL_UPSCALER_PRESET_G,
+   "Preset G (CNN)"
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_VALUE_VIDEO_TEMPORAL_UPSCALER_PRESET_H,
+   "Preset H"
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_VALUE_VIDEO_TEMPORAL_UPSCALER_PRESET_I,
+   "Preset I"
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_VALUE_VIDEO_TEMPORAL_UPSCALER_PRESET_L,
+   "Preset L"
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_VALUE_VIDEO_TEMPORAL_UPSCALER_PRESET_M,
+   "Preset M"
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_VALUE_VIDEO_TEMPORAL_UPSCALER_PRESET_N,
+   "Preset N"
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_VALUE_VIDEO_TEMPORAL_UPSCALER_PRESET_O,
+   "Preset O"
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_VALUE_VIDEO_TEMPORAL_UPSCALER_PRESET_NOT_IN_RUNTIME,
+   " (not in this DLSS runtime)"
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_VALUE_VIDEO_DLSS_NR_PRESET_DEFAULT,
+   "Default"
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_VALUE_VIDEO_DLSS_NR_PRESET_1,
+   "Preset 1"
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_VALUE_VIDEO_DLSS_NR_PRESET_2,
+   "Preset 2"
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_VALUE_VIDEO_DLSS_NR_PRESET_3,
+   "Preset 3"
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_VALUE_VIDEO_DLSS_NR_STYLE_DEFAULT,
+   "Default"
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_VALUE_VIDEO_DLSS_NR_STYLE_NATURAL,
+   "Natural"
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_VALUE_VIDEO_DLSS_NR_STYLE_CINEMATIC,
+   "Cinematic"
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_VALUE_VIDEO_DLSS_NR_SKIN_STRUCTURE_FOLLOW,
+   "Follow Local Structure"
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_VALUE_VIDEO_VULKAN_DRIVER_PATH_SYSTEM,
+   "System"
+   )
+MSG_HASH(
+   MENU_ENUM_SUBLABEL_VIDEO_VULKAN_DRIVER_PATH_CRASHED,
+   "Crashed last run, using System"
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_VALUE_VIDEO_VULKAN_DRIVER_PATH_SAFE_MODE,
+   "System (Safe start)"
+   )
+MSG_HASH(
+   MENU_ENUM_SUBLABEL_VIDEO_VULKAN_DRIVER_PATH_SAFE_MODE,
+   "%s is used again at the next normal start"
+   )
 /* GENERATED REGION: HDR toggle group, stereo 3D & screens group and headset group (see settings_def_video_hdr_toggles.h, settings_def_video_stereo.h and settings_def_video_headset.h). */
 #define SETTINGS_DEF_STRINGS_PASS
 #define S_BOOL(f, T, n, d, sd, df, c, us, sub) \
@@ -7590,8 +7755,11 @@ MSG_HASH(MENU_ENUM_SUBLABEL_##T, sub)
 #define S_ACTION_EX_NS(T, n, sd, ok, rp, c, us) \
 MSG_HASH(MENU_ENUM_LABEL_VALUE_##T, us)
 #include "../settings/settings_def_video_hdr_toggles.h"
+#include "../settings/settings_def_video_upscaler.h"
+#include "../settings/settings_def_vulkan_driver_path.h"
 #include "../settings/settings_def_video_stereo.h"
 #include "../settings/settings_def_video_headset.h"
+#include "../settings/settings_def_video_screens.h"
 #undef S_BOOL
 #undef S_BOOL_NS
 #undef S_BOOL_H
@@ -7722,6 +7890,74 @@ MSG_HASH(
    "Horizontal"
    )
 MSG_HASH(
+   MENU_ENUM_LABEL_VALUE_VIDEO_WINDOW_ATTACHED,
+   "Attached"
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_VALUE_VIDEO_WINDOW_SEPARATE,
+   "Separate"
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_VALUE_VIDEO_WINDOW_HIDDEN,
+   "Hidden"
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_VALUE_VIDEO_WINDOWS_ENABLE_ANDROID,
+   "Game Screens on Other Displays"
+   )
+MSG_HASH(
+   MENU_ENUM_SUBLABEL_VIDEO_WINDOWS_ENABLE_ANDROID,
+   "Let game screens and the menu use other displays. Off keeps everything in one window."
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_VALUE_VIDEO_SCREEN_WINDOW_MODE,
+   "Screen %u"
+   )
+MSG_HASH(
+   MENU_ENUM_SUBLABEL_VIDEO_SCREEN_WINDOW_MODE,
+   "Attached keeps this screen with the others. Separate puts it on a window or display of its own. Hidden leaves it out."
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_VALUE_VIDEO_SCREEN_WINDOW_MONITOR,
+   "Screen %u Display"
+   )
+MSG_HASH(
+   MENU_ENUM_SUBLABEL_VIDEO_SCREEN_WINDOW_MONITOR,
+   "Where this screen goes when it has a window of its own. Auto picks a second display. The display RetroArch is on keeps the screen attached."
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_VALUE_VIDEO_SCREEN_DISPLAY,
+   "Game Screen %u Display"
+   )
+MSG_HASH(
+   MENU_ENUM_SUBLABEL_VIDEO_SCREEN_DISPLAY,
+   "The display this game screen appears on. Auto picks one; Off leaves it out."
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_VALUE_VIDEO_MENU_DISPLAY,
+   "Menu Display"
+   )
+MSG_HASH(
+   MENU_ENUM_SUBLABEL_VIDEO_MENU_DISPLAY,
+   "The display the menu appears on. Auto uses Game Screen 1's Auto choice."
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_VALUE_VIDEO_MENU_FOLLOWS_SCREEN,
+   "Game Screen %u"
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_VALUE_VIDEO_WINDOW_DISPLAY,
+   "Display: %s"
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_VALUE_VIDEO_NOTIFICATIONS_WITH_GAME,
+   "With the Game"
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_VALUE_VIDEO_NOTIFICATIONS_WITH_MENU,
+   "With the Menu"
+   )
+MSG_HASH(
    MENU_ENUM_LABEL_VALUE_VIDEO_OPENXR_CONTROLLERS_COMBINED,
    "Combined"
    )
@@ -7740,6 +7976,138 @@ MSG_HASH(
 MSG_HASH(
    MENU_ENUM_LABEL_VALUE_VIDEO_OPENXR_LASER_OFF,
    "Off"
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_VALUE_VIDEO_OPENXR_LASER_BEAM_OFF,
+   "Off"
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_VALUE_VIDEO_OPENXR_LASER_BEAM_EDIT,
+   "Edit Mode Only"
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_VALUE_VIDEO_OPENXR_LASER_BEAM_ALWAYS,
+   "Always"
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_VALUE_VIDEO_OPENXR_EDIT_SNAP_ANGLES_OFF,
+   "Off"
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_VALUE_VIDEO_OPENXR_EDIT_SNAP_ANGLES_15,
+   "15°"
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_VALUE_VIDEO_OPENXR_EDIT_SNAP_ANGLES_30,
+   "30°"
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_VALUE_VIDEO_OPENXR_EDIT_SNAP_ANGLES_45,
+   "45°"
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_VALUE_VIDEO_OPENXR_EDIT_SNAP_ANGLES_90,
+   "90°"
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_VALUE_VIDEO_OPENXR_EDIT_HINGE_GAP_0,
+   "0 cm"
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_VALUE_VIDEO_OPENXR_EDIT_HINGE_GAP_1,
+   "1 cm"
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_VALUE_VIDEO_OPENXR_EDIT_HINGE_GAP_2,
+   "2 cm"
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_VALUE_VIDEO_OPENXR_EDIT_HINGE_GAP_3,
+   "3 cm"
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_VALUE_VIDEO_OPENXR_EDIT_HINGE_GAP_5,
+   "5 cm"
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_VALUE_VIDEO_OPENXR_EDIT_HINGE_GAP_10,
+   "10 cm"
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_VALUE_VIDEO_OPENXR_EDIT_SMOOTHING_OFF,
+   "Off"
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_VALUE_VIDEO_OPENXR_EDIT_SMOOTHING_LOW,
+   "Low"
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_VALUE_VIDEO_OPENXR_EDIT_SMOOTHING_MEDIUM,
+   "Medium"
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_VALUE_VIDEO_OPENXR_EDIT_SMOOTHING_HIGH,
+   "High"
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_VALUE_VIDEO_OPENXR_EDIT_PAUSE_OFF,
+   "Keep Running"
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_VALUE_VIDEO_OPENXR_EDIT_PAUSE_ON,
+   "Pause"
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_VALUE_VIDEO_OPENXR_TOUCH_HANDS_BOTH,
+   "Both"
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_VALUE_VIDEO_OPENXR_TOUCH_HANDS_LEFT,
+   "Left"
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_VALUE_VIDEO_OPENXR_TOUCH_HANDS_RIGHT,
+   "Right"
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_VALUE_VIDEO_OPENXR_TOUCH_HANDS_NONE,
+   "None"
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_VALUE_VIDEO_OPENXR_TOUCH_BUTTON_TRIGGER,
+   "Trigger"
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_VALUE_VIDEO_OPENXR_TOUCH_BUTTON_GRIP,
+   "Grip"
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_VALUE_VIDEO_OPENXR_TOUCH_BUTTON_STICK,
+   "Stick Click"
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_VALUE_VIDEO_OPENXR_TOUCH_BUTTON_BUMPER,
+   "Bumper"
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_VALUE_VIDEO_OPENXR_TOUCH_BUTTON_A,
+   "A"
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_VALUE_VIDEO_OPENXR_TOUCH_BUTTON_B,
+   "B"
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_VALUE_VIDEO_OPENXR_TOUCH_BUTTON_X,
+   "X"
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_VALUE_VIDEO_OPENXR_TOUCH_BUTTON_Y,
+   "Y"
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_VALUE_VIDEO_OPENXR_TOUCH_BUTTON_MISSING,
+   "%s (not on this controller)"
    )
 MSG_HASH(
    MENU_ENUM_LABEL_VALUE_VIDEO_OPENXR_PLACEMENT_FIXED,
@@ -7793,6 +8161,7 @@ MSG_HASH(MENU_ENUM_SUBLABEL_##T, sub)
 MSG_HASH(MENU_ENUM_LABEL_VALUE_##T, us)
 #include "../settings/settings_def_video_adaptive_vsync.h"
 #include "../settings/settings_def_video_gl_direct_spirv.h"
+#include "../settings/settings_def_shader_compiler.h"
 #undef S_BOOL
 #undef S_BOOL_NS
 #undef S_UINT
@@ -10813,6 +11182,14 @@ MSG_HASH(
    "Allow stylus hover (without touching screen) to move the cursor. Essential for drawing and painting games or lightgun games. Turn OFF if cursor moves unexpectedly."
    )
 MSG_HASH(
+   MENU_ENUM_LABEL_VALUE_INPUT_STYLUS_HIDE_OVERLAY,
+   "Hide Overlay While Using Stylus"
+   )
+MSG_HASH(
+   MENU_ENUM_SUBLABEL_INPUT_STYLUS_HIDE_OVERLAY,
+   "Hide the on-screen overlay while the stylus is in use, and show it again once the stylus has been idle for two seconds. A stylus hovering counts only when 'Stylus Hover Moves Cursor' is on. Turn OFF to keep the overlay on screen, to play with it while using the stylus on the screen."
+   )
+MSG_HASH(
    MENU_ENUM_LABEL_VALUE_INPUT_STYLUS_PRESSURE_SENSITIVITY,
    "Stylus Pressure Sensitivity"
    )
@@ -12346,6 +12723,22 @@ MSG_HASH(
    "Switches the headset's Laser Pointer between Off and its last mode."
    )
 MSG_HASH(
+   MENU_ENUM_LABEL_VALUE_INPUT_META_HEADSET_VIEW_TOGGLE,
+   "Headset View (Toggle)"
+   )
+MSG_HASH(
+   MENU_ENUM_SUBLABEL_INPUT_META_HEADSET_VIEW_TOGGLE,
+   "Cycles what the core is told the headset currently displays: Immersive (head-tracked), Stereoscopic (a 3D screen) or Flat. Returns to core's default on core closure."
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_VALUE_INPUT_META_HEADSET_EDIT_SCREENS,
+   "Edit Headset Screens"
+   )
+MSG_HASH(
+   MENU_ENUM_SUBLABEL_INPUT_META_HEADSET_EDIT_SCREENS,
+   "Starts or stops moving the headset's screens and menu with its controllers."
+   )
+MSG_HASH(
    MENU_ENUM_LABEL_VALUE_INPUT_META_FPS_TOGGLE,
    "Show FPS (Toggle)"
    )
@@ -12482,6 +12875,50 @@ MSG_HASH(
    "Device Reservation Type"
    )
 MSG_HASH(
+   MENU_ENUM_LABEL_VALUE_INPUT_PLAYS_AS_AUTO_PLAYER,
+   "Auto (%u)"
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_VALUE_INPUT_PLAYS_AS_ADD,
+   "Add Controller"
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_VALUE_INPUT_PLAYS_AS_ADD_ITEM,
+   "%s (Player %u)"
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_VALUE_INPUT_PLAYS_AS_BINDS,
+   "%s (Port %u Controls)"
+   )
+MSG_HASH(
+   MENU_ENUM_SUBLABEL_INPUT_PLAYS_AS_PLAYER,
+   "Player %u"
+   )
+MSG_HASH(
+   MENU_ENUM_SUBLABEL_INPUT_PLAYS_AS_SHARING,
+   "Player %u, shared · binds in Port %u Controls"
+   )
+MSG_HASH(
+   MENU_ENUM_SUBLABEL_INPUT_PLAYS_AS_NO_PORT,
+   "Not playing: more controllers than Max Users"
+   )
+MSG_HASH(
+   MENU_ENUM_SUBLABEL_INPUT_PLAYS_AS_ABOVE_MAX_USERS,
+   "Above Max Users: plays as Auto (Player %u)"
+   )
+MSG_HASH(
+   MENU_ENUM_SUBLABEL_INPUT_PLAYS_AS_GONE,
+   "Not connected"
+   )
+MSG_HASH(
+   MENU_ENUM_SUBLABEL_INPUT_PLAYS_AS_THIS_PORT,
+   "This port"
+   )
+MSG_HASH(
+   MENU_ENUM_SUBLABEL_INPUT_PLAYS_AS_SHARED_BINDS,
+   "Shared · binds in Port %u Controls"
+   )
+MSG_HASH(
    MENU_ENUM_SUBLABEL_INPUT_DEVICE_RESERVATION_TYPE,
    "Preferred: if specified device is present, it will be allocated for this player. Reserved: no other controller will be allocated for this player."
    )
@@ -12492,6 +12929,10 @@ MSG_HASH(
 MSG_HASH(
    MENU_ENUM_SUBLABEL_INPUT_REMAP_PORT,
    "Specifies which core port will receive input from frontend controller port %u. 'None' sends its input to no core port."
+   )
+MSG_HASH(
+   MENU_ENUM_SUBLABEL_INPUT_REMAP_PORT_SHARING,
+   "Shares Player %u (core port %u)"
    )
 MSG_HASH(
    MENU_ENUM_LABEL_VALUE_INPUT_BIND_ALL,
@@ -12528,6 +12969,42 @@ MSG_HASH(
 MSG_HASH(
    MENU_ENUM_LABEL_VALUE_INPUT_AIM_STICK,
    "Aim From Analog Stick"
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_VALUE_INPUT_TOUCHPAD,
+   "Controller Touchpad"
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_VALUE_INPUT_TOUCHPAD_POINTER,
+   "Touchscreen"
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_VALUE_INPUT_TOUCHPAD_MOUSE,
+   "Mouse"
+   )
+MSG_HASH( /* Controller Touchpad value: a click on each half of the touchpad is a button */
+   MENU_ENUM_LABEL_VALUE_INPUT_TOUCHPAD_HALVES,
+   "Halves as Buttons"
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_VALUE_INPUT_TOUCHPAD_LEFT,
+   "Touchpad Left Half"
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_VALUE_INPUT_TOUCHPAD_RIGHT,
+   "Touchpad Right Half"
+   )
+MSG_HASH(
+   MENU_ENUM_SUBLABEL_INPUT_TOUCHPAD,
+   "What the touchpad on this port's controller is to the core, on a DualShock 4 or DualSense. 'Touchscreen': a finger on the pad touches that spot on the screen, two fingers two spots. 'Mouse': moving a finger moves the mouse, and pressing the pad in clicks, with two fingers on it a right click. 'Halves as Buttons': pressing the pad in on its left or right half presses the button set for that half, both with a finger on each; needs 'Remap Controls'."
+   )
+MSG_HASH(
+   MENU_ENUM_SUBLABEL_INPUT_TOUCHPAD_LEFT,
+   "With 'Controller Touchpad' set to 'Halves as Buttons': the RetroPad button pressing the left half of the touchpad in presses."
+   )
+MSG_HASH(
+   MENU_ENUM_SUBLABEL_INPUT_TOUCHPAD_RIGHT,
+   "With 'Controller Touchpad' set to 'Halves as Buttons': the RetroPad button pressing the right half of the touchpad in presses."
    )
 MSG_HASH(
    MENU_ENUM_SUBLABEL_INPUT_AIM_STICK,
@@ -15275,6 +15752,30 @@ MSG_HASH(
 MSG_HASH(
    MENU_ENUM_SUBLABEL_OVERLAY_RESET_LAYOUT,
    "Put a built-in gamepad (Main, Nintendo DS, Nintendo 3DS) back as it comes."
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_VALUE_INPUT_OVERLAY_DPAD_METHOD,
+   "D-Pad Input Method"
+   )
+MSG_HASH(
+   MENU_ENUM_SUBLABEL_INPUT_OVERLAY_DPAD_METHOD,
+   "How the D-pad reads a touch. 'Direction': the way the finger's centre lies. 'Contact Area': every way the finger's contact covers, so a thumb laid across two directions presses both. 'Both': either."
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_VALUE_INPUT_OVERLAY_ABXY_METHOD,
+   "ABXY Input Method"
+   )
+MSG_HASH(
+   MENU_ENUM_SUBLABEL_INPUT_OVERLAY_ABXY_METHOD,
+   "How the face buttons read a touch. 'Direction': the button the finger's centre is nearest. 'Contact Area': every button the finger's contact covers, so a thumb between two presses both. 'Both': either."
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_VALUE_INPUT_OVERLAY_CONTACT_SCALE,
+   "Contact Area Size"
+   )
+MSG_HASH(
+   MENU_ENUM_SUBLABEL_INPUT_OVERLAY_CONTACT_SCALE,
+   "How large a finger's contact counts, against the size the touchscreen reports. Raise it for a touchscreen that reports small contacts."
    )
 MSG_HASH(
    MENU_ENUM_LABEL_VALUE_OVERLAY,
@@ -22965,6 +23466,14 @@ MSG_HASH(
    "Add new content and remove invalid entries by repeating the content scan operation last used to create or edit the playlist."
    )
 MSG_HASH(
+   MENU_ENUM_LABEL_VALUE_PLAYLIST_MANAGER_REFRESH_ALL_PLAYLISTS,
+   "Refresh All Playlists"
+   )
+MSG_HASH(
+   MENU_ENUM_SUBLABEL_PLAYLIST_MANAGER_REFRESH_ALL_PLAYLISTS,
+   "Rescan every playlist that has saved scan settings, with those settings."
+   )
+MSG_HASH(
    MENU_ENUM_LABEL_VALUE_DELETE_PLAYLIST,
    "Delete Playlist"
    )
@@ -24231,14 +24740,6 @@ MSG_HASH(
    "Results are added to this playlist. In case of Auto - Any, multiple system playlists may be updated. Custom without database reference will not link the entries to any database in the playlist."
    )
 MSG_HASH(
-   MENU_ENUM_LABEL_VALUE_SCAN_SINGLE_FILE,
-   "Scan Single File"
-   )
-MSG_HASH(
-   MENU_ENUM_SUBLABEL_SCAN_SINGLE_FILE,
-   "Scans only one file instead of a directory. Re-select content location after changing this entry."
-   )
-MSG_HASH(
    MENU_ENUM_LABEL_VALUE_SCAN_OMIT_DB_REF,
    "Skip Database References From Playlist"
    )
@@ -25052,7 +25553,7 @@ MSG_HASH(
    )
 MSG_HASH(
    MENU_ENUM_SUBLABEL_INPUT_COMBO_HOLD,
-   "Instant acts the moment all of the buttons are down. Hold For waits until they have been held together for a time you choose next, so that pressing them briefly - in the middle of a game, say - does nothing."
+   "Instant acts the moment all of the buttons are down. Hold For waits until they have been held together for a time you choose next, so that pressing them briefly - in the middle of a game, say - does nothing. Press Depth waits until they are pushed in as far as you choose next, so that analog triggers and pressure-sensitive buttons (DualShock 2 and 3) only act when pressed hard."
    )
 MSG_HASH(
    MENU_ENUM_LABEL_VALUE_INPUT_COMBO_HOLD_TIME,
@@ -25061,6 +25562,14 @@ MSG_HASH(
 MSG_HASH(
    MENU_ENUM_SUBLABEL_INPUT_COMBO_HOLD_TIME,
    "How long all of the combination's buttons must be held down together before it acts."
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_VALUE_INPUT_COMBO_DEPTH,
+   "Press Depth"
+   )
+MSG_HASH(
+   MENU_ENUM_SUBLABEL_INPUT_COMBO_DEPTH,
+   "How far in each of the combination's buttons must be pushed before it acts: for analog triggers and pressure-sensitive buttons. A button that only reads pressed or not counts as pushed all the way."
    )
 MSG_HASH(
    MENU_ENUM_SUBLABEL_INPUT_REMAP_FIND,
@@ -25983,6 +26492,10 @@ MSG_HASH(
    "No Bluetooth Devices Found"
    )
 MSG_HASH(
+   MENU_ENUM_LABEL_VALUE_BLUETOOTH_SCAN,
+   "Scan for Devices"
+   )
+MSG_HASH(
    MENU_ENUM_LABEL_VALUE_NO_NETWORKS_FOUND,
    "No Networks Found"
    )
@@ -26005,6 +26518,10 @@ MSG_HASH(
 MSG_HASH(
    MENU_ENUM_LABEL_VALUE_BASIC_MENU_CONTROLS_BACK,
    "Back"
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_VALUE_BASIC_MENU_CONTROLS_CANCEL,
+   "Cancel"
    )
 MSG_HASH(
    MENU_ENUM_LABEL_VALUE_BASIC_MENU_CONTROLS_OK,
@@ -27072,6 +27589,18 @@ MSG_HASH(
 MSG_HASH(
    MENU_ENUM_LABEL_VALUE_INPUT_SOCD_UP,
    "Up Priority"
+   )
+MSG_HASH( /* An overlay D-pad or face buttons read the way the finger's centre lies */
+   MENU_ENUM_LABEL_VALUE_OVERLAY_CONTACT_METHOD_VECTOR,
+   "Direction"
+   )
+MSG_HASH( /* ... every way the finger's contact on the touchscreen covers */
+   MENU_ENUM_LABEL_VALUE_OVERLAY_CONTACT_METHOD_AREA,
+   "Contact Area"
+   )
+MSG_HASH( /* ... either of the two */
+   MENU_ENUM_LABEL_VALUE_OVERLAY_CONTACT_METHOD_BOTH,
+   "Both"
    )
 MSG_HASH(
    MENU_ENUM_LABEL_VALUE_TIMEDATE_YMD_HMS,
@@ -30603,10 +31132,7 @@ MSG_HASH(
    MENU_ENUM_LABEL_VALUE_OZONE_COLOR_THEME_SELENIUM,
    "Selenium"
    )
-MSG_HASH(
-   MENU_ENUM_LABEL_VALUE_OZONE_COLOR_THEME_BRIGHT,
-   "Bright"
-   )
+
 
 /* MaterialUI: Settings > User Interface > Appearance */
 
@@ -31002,6 +31528,10 @@ MSG_HASH(
 MSG_HASH(
    MENU_ENUM_LABEL_VALUE_QT_MENU_VIEW_OPTIONS,
    "&Settings..."
+   )
+MSG_HASH( /* The desktop companion's window of controller combinations and macros, as the hotkeys list has them */
+   MENU_ENUM_LABEL_VALUE_QT_MENU_VIEW_CONTROLLER_SHORTCUTS,
+   "Controller &Shortcuts..."
    )
 MSG_HASH(
    MENU_ENUM_LABEL_VALUE_QT_MENU_VIEW_OPTIONS_SAVE_DOCK_POSITIONS,
@@ -31768,9 +32298,37 @@ MSG_HASH( /* The same, when that address is this computer's */
    MENU_ENUM_LABEL_VALUE_PORT_BT_HOST_THIS,
    "- Connects over Bluetooth to: This Computer (%s)"
    )
+MSG_HASH( /* The same, when the controller holds no address: it is paired with no computer */
+   MENU_ENUM_LABEL_VALUE_PORT_BT_HOST_NONE,
+   "- Connects over Bluetooth to: Nothing (not paired)"
+   )
 MSG_HASH( /* Under the same entry: selecting it makes the controller connect to this computer over Bluetooth when it is unplugged */
    MENU_ENUM_LABEL_VALUE_PORT_BT_PAIR,
    "- Pair with This Computer"
+   )
+MSG_HASH( /* Under a DualShock 3 that Windows' own driver cannot start: selecting it moves every DualShock 3 plugged in to Windows' WinUSB driver, after one administrator prompt */
+   MENU_ENUM_LABEL_VALUE_PORT_DS3_ENABLE,
+   "- Enable DualShock 3 Support"
+   )
+MSG_HASH( /* Under a DualShock 3 on WinUSB: selecting it gives every DualShock 3 plugged in back to the driver Windows chooses itself */
+   MENU_ENUM_LABEL_VALUE_PORT_DS3_RESTORE,
+   "- Restore Windows Driver"
+   )
+MSG_HASH( /* Under a controller: selecting it makes RetroArch stop reading this model of controller - for one another program also shows as a virtual controller, which would otherwise be read twice */
+   MENU_ENUM_LABEL_VALUE_PORT_IGNORE,
+   "- Ignore This Controller"
+   )
+MSG_HASH( /* A controller model the user chose to ignore, as its USB vendor and product IDs in hexadecimal; selecting it reads it again */
+   MENU_ENUM_LABEL_VALUE_INPUT_IGNORED_DEVICE,
+   "Ignored Controller %04X:%04X (select to use it again)"
+   )
+MSG_HASH( /* Shown while a Wii U GameCube adapter is plugged in that Windows' own driver cannot run: selecting it moves the adapter to Windows' WinUSB driver, after one administrator prompt */
+   MENU_ENUM_LABEL_VALUE_INPUT_GCA_ENABLE,
+   "Enable Wii U GameCube Adapter"
+   )
+MSG_HASH( /* Shown while an original Xbox controller is plugged in, which no driver of Windows' runs: selecting it moves the controller to Windows' WinUSB driver, after one administrator prompt */
+   MENU_ENUM_LABEL_VALUE_INPUT_XID_ENABLE,
+   "Enable Original Xbox Controller"
    )
 MSG_HASH(
    MENU_ENUM_LABEL_VALUE_CHEAT_SETTINGS,
@@ -32250,6 +32808,34 @@ MSG_HASH(
 MSG_HASH(
    MSG_PLAYLIST_MANAGER_REFRESH_DAT_FILE_TOO_LARGE,
    "Refresh failed - arcade DAT file too large (insufficient memory): "
+   )
+MSG_HASH(
+   MSG_PLAYLIST_MANAGER_REFRESH_ALL_DONE,
+   "Playlists refreshed: %u, skipped: %u, failed: %u"
+   )
+MSG_HASH(
+   MSG_SCAN_SMB_NO_SERVER,
+   "SMB server address not configured"
+   )
+MSG_HASH(
+   MSG_SCAN_SMB_SHARE_DIFFERS,
+   "share differs from the SMB share setting"
+   )
+MSG_HASH(
+   MSG_SCAN_SMB_CANNOT_RESOLVE,
+   "cannot resolve the SMB server name"
+   )
+MSG_HASH(
+   MSG_SCAN_SMB_CANNOT_CONNECT,
+   "cannot connect to the SMB server"
+   )
+MSG_HASH(
+   MSG_SCAN_SMB_LOGIN_FAILED,
+   "SMB login failed"
+   )
+MSG_HASH(
+   MSG_SCAN_SMB_NO_SHARE,
+   "SMB share not found or access denied"
    )
 MSG_HASH(
    MSG_ADDED_TO_FAVORITES,
@@ -33231,6 +33817,82 @@ MSG_HASH(
    MSG_INPUT_BT_PAIR_FAILED,
    "Port %u's controller could not be paired with this computer."
    )
+MSG_HASH( /* %u is the other port on the same controller */
+   MSG_INPUT_DEVICE_INDEX_SHARED,
+   "used by Port %u"
+   )
+MSG_HASH(
+   MSG_INPUT_DS3_ASKING,
+   "Changing the DualShock 3 driver: allow it in the Windows prompt."
+   )
+MSG_HASH(
+   MSG_INPUT_DS3_ENABLED,
+   "DualShock 3 support enabled. The controller reconnects by itself."
+   )
+MSG_HASH( /* %u is the controller's number, then its USB vendor and product IDs */
+   MSG_INPUT_DEVICE_IGNORED,
+   "Controller %u (%04X:%04X) is ignored and no longer read."
+   )
+MSG_HASH( /* the controller's USB vendor and product IDs */
+   MSG_INPUT_DEVICE_UNIGNORED,
+   "Controller %04X:%04X is read again."
+   )
+MSG_HASH(
+   MSG_INPUT_DS3_RESTORED,
+   "DualShock 3 given back to the Windows driver."
+   )
+MSG_HASH(
+   MSG_INPUT_DS3_NOT_CHANGED,
+   "The DualShock 3 driver could not be changed."
+   )
+MSG_HASH(
+   MSG_INPUT_DS3_DECLINED,
+   "The DualShock 3 driver was not changed: administrator rights were not given."
+   )
+MSG_HASH( /* %s is the controller's name, %u its port */
+   MSG_INPUT_DS3_NEEDS_ENABLING,
+   "%s (port %u) needs enabling: Information > Input Information > Enable DualShock 3 Support."
+   )
+MSG_HASH(
+   MSG_INPUT_GCA_ASKING,
+   "Changing the GameCube adapter's driver: allow it in the Windows prompt."
+   )
+MSG_HASH(
+   MSG_INPUT_GCA_ENABLED,
+   "GameCube adapter enabled. It reconnects by itself."
+   )
+MSG_HASH(
+   MSG_INPUT_GCA_NOT_CHANGED,
+   "The GameCube adapter's driver could not be changed."
+   )
+MSG_HASH(
+   MSG_INPUT_GCA_DECLINED,
+   "The GameCube adapter's driver was not changed: administrator rights were not given."
+   )
+MSG_HASH(
+   MSG_INPUT_GCA_NEEDS_ENABLING,
+   "Wii U GameCube adapter found, which Windows' own driver cannot run: Information > Input Information > Enable Wii U GameCube Adapter."
+   )
+MSG_HASH(
+   MSG_INPUT_XID_ASKING,
+   "Changing the original Xbox controller's driver: allow it in the Windows prompt."
+   )
+MSG_HASH(
+   MSG_INPUT_XID_ENABLED,
+   "Original Xbox controller enabled. It reconnects by itself."
+   )
+MSG_HASH(
+   MSG_INPUT_XID_NOT_CHANGED,
+   "The original Xbox controller's driver could not be changed."
+   )
+MSG_HASH(
+   MSG_INPUT_XID_DECLINED,
+   "The original Xbox controller's driver was not changed: administrator rights were not given."
+   )
+MSG_HASH(
+   MSG_INPUT_XID_NEEDS_ENABLING,
+   "Original Xbox controller found, which Windows has no driver for: Information > Input Information > Enable Original Xbox Controller."
+   )
 MSG_HASH(
    MSG_INPUT_COMBO_SET_BUTTONS,
    "Set Buttons"
@@ -33250,6 +33912,14 @@ MSG_HASH(
 MSG_HASH(
    MSG_INPUT_COMBO_HOLD_FOR,
    "Hold For"
+   )
+MSG_HASH(
+   MSG_INPUT_COMBO_PRESS_DEPTH,
+   "Press Depth"
+   )
+MSG_HASH(
+   MSG_INPUT_COMBO_DEPTH_PERCENT,
+   "%u%% Pressed In"
    )
 MSG_HASH(
    MSG_INPUT_COMBO_ROW_SUBLABEL,
@@ -33354,6 +34024,10 @@ MSG_HASH(
 MSG_HASH(
    MSG_SENDING_COMMAND,
    "Sending command"
+   )
+MSG_HASH( /* %s is the address and %u the port the MCP server was set to listen on */
+   MSG_MCP_SERVER_NOT_LISTENING,
+   "MCP server could not listen on %s:%u. Is another RetroArch running?"
    )
 MSG_HASH(
    MSG_SEVERAL_PATCHES_ARE_EXPLICITLY_DEFINED,
@@ -33480,6 +34154,10 @@ MSG_HASH(
    "Press again to reset..."
    )
 MSG_HASH(
+   MSG_FIRST_RUN_DOWNLOAD_PROMPT,
+   "Some of RetroArch's downloadable files (menu assets, controller profiles, core info, databases) are missing.\n\nDownload them now? This needs an internet connection.\n\nThey can be updated later from the Online Updater."
+   )
+MSG_HASH(
    MSG_TO,
    "to"
    )
@@ -33564,6 +34242,18 @@ MSG_HASH(
    "%s and keyboard assigned to core port %u"
    )
 MSG_HASH(
+   MSG_INPUT_PLAYS_AS_FULL,
+   "Controller list full: set a disconnected controller with a player and no own hotkeys to Auto"
+   )
+MSG_HASH(
+   MSG_INPUT_PLAYS_AS_OWN_BIND,
+   " · %s: %s"
+   )
+MSG_HASH(
+   MSG_INPUT_BIND_LISTENING_PLAYER,
+   "Listening to Player %u's controllers"
+   )
+MSG_HASH(
    MSG_DEVICE_DISCONNECTED_FROM_PORT_NR,
    "%s disconnected from port %u"
    )
@@ -33578,6 +34268,26 @@ MSG_HASH(
 MSG_HASH(
    MSG_BLUETOOTH_SCAN_COMPLETE,
    "Bluetooth scan complete."
+   )
+MSG_HASH(
+   MSG_BLUETOOTH_ADAPTER_GENERIC_DRIVER,
+   "This computer's Bluetooth adapter runs on Windows' generic driver, which often finds no devices. Install the Bluetooth driver from the computer's or motherboard's maker."
+   )
+MSG_HASH(
+   MSG_BLUETOOTH_PAIRING,
+   "Pairing \"%s\"..."
+   )
+MSG_HASH(
+   MSG_BLUETOOTH_PAIRED,
+   "\"%s\" paired."
+   )
+MSG_HASH(
+   MSG_BLUETOOTH_PAIRING_FAILED,
+   "\"%s\" could not be paired."
+   )
+MSG_HASH(
+   MSG_BLUETOOTH_PAIRING_FAILED_WII,
+   "\"%s\" could not be paired. Press its sync button, then select it again while its lights blink."
    )
 MSG_HASH(
    MSG_BLUETOOTH_PAIRING_REMOVED,
@@ -34028,6 +34738,42 @@ MSG_HASH(
    "Content Rate"
    )
 MSG_HASH(
+   MSG_VIDEO_DRIVER_PACING_ON,
+   "On"
+   )
+MSG_HASH(
+   MSG_VIDEO_DRIVER_PACING_BOOST,
+   "On + Boost"
+   )
+MSG_HASH(
+   MSG_VULKAN_CUSTOM_DRIVER_FAILED,
+   "Custom Vulkan driver failed to start. Using the system driver."
+   )
+MSG_HASH(
+   MSG_VULKAN_CUSTOM_DRIVER_CRASHED,
+   "Custom Vulkan driver crashed before and is off for this core. Pick it again to retry."
+   )
+MSG_HASH(
+   MSG_VULKAN_CUSTOM_DRIVER_INVALID,
+   "Custom Vulkan driver package is not usable. Using the system driver."
+   )
+MSG_HASH(
+   MSG_VULKAN_CUSTOM_DRIVER_UNSUPPORTED,
+   "Custom Vulkan drivers need an Adreno GPU and Android 9. Using the system driver."
+   )
+MSG_HASH(
+   MSG_VULKAN_CUSTOM_DRIVER_RESTART,
+   "Restart RetroArch to change the Vulkan driver."
+   )
+MSG_HASH(
+   MSG_VULKAN_CUSTOM_DRIVER_SAFE_MODE,
+   "Started with the system Vulkan driver."
+   )
+MSG_HASH(
+   MSG_VULKAN_CUSTOM_DRIVER_UNTRUSTED,
+   "Custom Vulkan driver was not picked in the menu or has changed. Pick it again to use it."
+   )
+MSG_HASH(
    MSG_RESAMPLER_QUALITY_LOWEST,
    "Lowest"
    )
@@ -34144,6 +34890,10 @@ MSG_HASH(
    "Scan complete: "
    )
 MSG_HASH(
+   MSG_MANUAL_CONTENT_SCAN_ALREADY_RUNNING,
+   "A content scan is already running."
+   )
+MSG_HASH(
    MSG_CORE_BACKUP_SCANNING_CORE,
    "Scanning core: "
    )
@@ -34208,6 +34958,10 @@ MSG_HASH(
    "Core restoration disabled - core is locked: "
    )
 MSG_HASH(
+   MSG_CORE_BACKUP_IN_PROGRESS,
+   "A backup or restore of this core is already running: "
+   )
+MSG_HASH(
    MSG_CORE_INSTALLATION_DISABLED,
    "Core installation disabled - core is locked: "
    )
@@ -34261,7 +35015,7 @@ MSG_HASH(
    )
 MSG_HASH(
    MSG_FAILED_TO_ENTER_GAMEMODE_LINUX,
-   "Failed to enter GameMode - ensure GameMode daemon is installed/running"
+   "Failed to enter Game Mode"
    )
 MSG_HASH(
    MSG_VRR_RUNLOOP_ENABLED,
@@ -34306,6 +35060,54 @@ MSG_HASH(
 MSG_HASH(
    MSG_OPENXR_LASER_POINTER,
    "Laser Pointer: %s"
+   )
+MSG_HASH(
+   MSG_OPENXR_HEADSET_VIEW,
+   "Headset View: %s"
+   )
+MSG_HASH(
+   MSG_OPENXR_HEADSET_VIEW_IMMERSIVE,
+   "Immersive"
+   )
+MSG_HASH(
+   MSG_OPENXR_HEADSET_VIEW_STEREOSCOPIC,
+   "Stereoscopic"
+   )
+MSG_HASH(
+   MSG_OPENXR_HEADSET_VIEW_FLAT,
+   "Flat"
+   )
+MSG_HASH(
+   MSG_OPENXR_EDIT_ON,
+   "Editing headset screens: grip grabs, the stick moves and resizes, the trigger tilts it with your hand, the other hand's stick turns and tilts it, the main button resets."
+   )
+MSG_HASH(
+   MSG_OPENXR_EDIT_OFF,
+   "Stopped editing headset screens."
+   )
+MSG_HASH(
+   MSG_OPENXR_EDIT_UNSAVED,
+   "Stopped editing headset screens. Changes are not saved yet."
+   )
+MSG_HASH(
+   MSG_OPENXR_EDIT_UNAVAILABLE,
+   "Edit Screens is unavailable: the headset's controllers cannot be used for it."
+   )
+MSG_HASH(
+   MSG_OPENXR_EDIT_NO_CONTENT,
+   "Edit Screens needs content running: load content first."
+   )
+MSG_HASH(
+   MSG_OPENXR_EDIT_TAG_LASER,
+   "Laser"
+   )
+MSG_HASH(
+   MSG_OPENXR_EDIT_TAG_SCREEN,
+   "Screen %u"
+   )
+MSG_HASH(
+   MSG_OPENXR_EDIT_TAG_MENU,
+   "Menu"
    )
 
 
@@ -35246,11 +36048,11 @@ MSG_HASH(MENU_ENUM_LABEL_VALUE_##T, us)
 #undef SETTINGS_DEF_STRINGS_PASS
 MSG_HASH(
    MENU_ENUM_SUBLABEL_GAMEMODE_ENABLE_LINUX,
-   "Can improve performance, reduce latency and fix audio crackling issues. You need https://github.com/FeralInteractive/gamemode for this to work."
+   "Raises RetroArch's disk access priority and holds the system's performance power profile (through power-profiles-daemon or tuned-ppd), which can improve performance, reduce latency and fix audio crackling. The performance profile only applies when plugged in. The previous profile is restored when Game Mode is turned off or RetroArch exits."
    )
 MSG_HASH(
    MENU_ENUM_LABEL_HELP_GAMEMODE_ENABLE,
-   "Enabling Linux GameMode can improve latency, fix audio crackling issues and maximize overall performance by automatically configuring your CPU and GPU for best performance.\nThe GameMode software needs to be installed for this to work. See https://github.com/FeralInteractive/gamemode for information on how to install GameMode."
+   "Game Mode raises disk access priority and requests the performance power profile through power-profiles-daemon or tuned-ppd. This can reduce latency, fix audio crackling and improve performance. The profile is held only while plugged in: unplugging releases it, and plugging back in restores it.\nNo extra software is needed on desktop distributions. The hold is released when Game Mode is turned off or RetroArch exits, including after a crash."
    )
 MSG_HASH(
    MENU_ENUM_LABEL_VALUE_INPUT_META_RESTART_KEY,
@@ -37710,7 +38512,7 @@ MSG_HASH(
    )
 MSG_HASH(
    MENU_ENUM_SUBLABEL_NFS_CLIENT_PORT,
-   "Port of the NFS service. 0 asks the server's portmapper."
+   "Port of the NFS service. 0 asks the server's portmapper on version 3 and means 2049 on version 4."
    )
 MSG_HASH(
    MENU_ENUM_LABEL_VALUE_NFS_CLIENT_MOUNT_PORT,
@@ -37718,7 +38520,7 @@ MSG_HASH(
    )
 MSG_HASH(
    MENU_ENUM_SUBLABEL_NFS_CLIENT_MOUNT_PORT,
-   "Port of the MOUNT service. 0 asks the server's portmapper."
+   "Port of the MOUNT service. 0 asks the server's portmapper. Version 4 does not use it."
    )
 MSG_HASH(
    MENU_ENUM_LABEL_VALUE_NFS_CLIENT_VERSION,

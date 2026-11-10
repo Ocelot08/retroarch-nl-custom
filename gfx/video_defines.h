@@ -436,7 +436,17 @@ enum display_flags
     * itself: the views are laid out flat, whatever the stereo mode. */
    GFX_CTX_FLAGS_VIDEO_VIEWS_OWN_EYES,
    /* Set while such a driver shows both eyes. */
-   GFX_CTX_FLAGS_VIDEO_VIEWS_STEREO
+   GFX_CTX_FLAGS_VIDEO_VIEWS_STEREO,
+   /* This context cannot give a hardware core a context of its own
+    * that shares objects with the driver's: the platform has one GL
+    * context per process (the Switch's nvservices), or the share
+    * context could not be created. The threaded wrapper's ring then
+    * hands the driver's one context between the two threads instead
+    * of giving the core a shared one. */
+   GFX_CTX_FLAGS_NO_SHARED_CONTEXT,
+   /* Set by a video driver that presents secondary screens in windows
+    * of their own through its context's gfx_ctx_window_driver_t. */
+   GFX_CTX_FLAGS_VIDEO_WINDOWS
 };
 
 enum shader_uniform_type
@@ -500,6 +510,13 @@ enum font_atlas_format
 struct font_atlas
 {
    uint8_t *buffer; /* Coverage samples; layout per 'format'. */
+   /* Where 'buffer' is kept, set by font_atlas_place() for a consumer
+    * that samples the atlas in place - its texture, say: storage()
+    * returns @size bytes or NULL, storage_free() lets go of a buffer the
+    * atlas has moved out of. NULL: the heap. */
+   void *(*storage)(void *user, size_t size);
+   void (*storage_free)(void *user, void *buffer);
+   void *storage_user;
    unsigned width;
    unsigned height;
    /* Dirty region in pixels, covering every glyph cell updated since
@@ -524,6 +541,13 @@ struct font_atlas
     * keeps the atlas at its first size. Cells only ever get added: a
     * glyph's offsets never change. */
    unsigned max_dims;
+   /* Set by the consumer whose GPU may still be drawing earlier frames
+    * from memory the CPU writes glyphs into - a texture sampled in
+    * place, or one the CPU copies cells into: how many frames before
+    * the current one may still be reading it. A cell looked up in any
+    * of them is not given to another codepoint. Zero, the default:
+    * only the current frame's cells are kept. */
+   unsigned inflight;
    enum font_atlas_format format;
    bool dirty;
 };
@@ -555,6 +579,9 @@ struct font_params
    float x;
    float y;
    float scale;
+   /* Glyph width over glyph height, for pixels that are not square.
+    * 0 is taken as 1. */
+   float x_scale;
    /* Drop shadow color multiplier. */
    float drop_mod;
    /* Drop shadow alpha */

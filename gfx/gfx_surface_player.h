@@ -40,6 +40,7 @@ RETRO_BEGIN_DECLS
 typedef struct gfx_surface_player_cbs
 {
    void *user;
+   void *feed_user;
    /* The surface for @num_slots slots of @dims in @pixfmt, made or
     * reused; NULL: asked again on a later frame. No slots in
     * IMAGE_PIXFMT_NV12: an imported surface (GFX_SURFACE_PLAYER_GPU). */
@@ -59,13 +60,16 @@ typedef struct gfx_surface_player
    void **surface;            /* the consumer's gfx_surface_t pointer */
    gfx_surface_player_cbs_t cb;
    enum image_type_enum type;
+   uint32_t hw_output_pixfmt;
    unsigned hw_slot;          /* the player's job a queued GPU frame is */
    bool rgba;
    bool threaded;             /* two slots, decoded on the worker */
+   bool hw_confirmed;         /* renderer accepted at least one GPU picture */
    bool hw_resent;            /* the frame in flight was sent again */
 } gfx_surface_player_t;
 
-/* Plays @stream (borrowed) into the surface *@surface names. */
+/* Plays @stream (borrowed) into the surface *@surface names. Main thread;
+ * snapshots the hardware-decode setting for this player's lifetime. */
 gfx_surface_player_t *gfx_surface_player_new(void *stream,
       enum image_type_enum type, int loop_count, void **surface,
       const gfx_surface_player_cbs_t *cb, unsigned flags);

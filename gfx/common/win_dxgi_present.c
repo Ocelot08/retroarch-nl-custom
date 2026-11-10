@@ -16,11 +16,14 @@ HANDLE ra_dxgi_bridge_resource(ra_dxgi_bridge_t *b, unsigned index)
 HANDLE ra_dxgi_bridge_ready_fence(ra_dxgi_bridge_t *b) { return NULL; }
 HANDLE ra_dxgi_bridge_done_fence(ra_dxgi_bridge_t *b) { return NULL; }
 int ra_dxgi_bridge_presentable(ra_dxgi_bridge_t *b) { return 0; }
+int ra_dxgi_bridge_wait_target(ra_dxgi_bridge_t *b, unsigned index)
+{ return 0; }
 int ra_dxgi_bridge_failed(ra_dxgi_bridge_t *b) { return 1; }
 void ra_dxgi_bridge_hdr_metadata(ra_dxgi_bridge_t *b, float peak) { }
 unsigned ra_dxgi_bridge_index(ra_dxgi_bridge_t *b, unsigned interval)
 { return 2; }
 int64_t ra_dxgi_bridge_present_time(ra_dxgi_bridge_t *b) { return 0; }
+void *ra_dxgi_bridge_device(ra_dxgi_bridge_t *b) { return NULL; }
 uint64_t ra_dxgi_bridge_last_use(ra_dxgi_bridge_t *b, unsigned index)
 { return 0; }
 int ra_dxgi_bridge_present(ra_dxgi_bridge_t *b, uint64_t ready,
@@ -48,7 +51,6 @@ static const GUID bridge_IDXGISwapChain3 = {0x94d99bdb, 0xf1f8, 0x4ab0, {0xb2, 0
 
 struct ra_dxgi_bridge
 {
-   HMODULE dxgi_dll, d3d_dll;
    IDXGIFactory2 *factory;
    ID3D12Device *device;
    ID3D12CommandQueue *queue;
@@ -71,6 +73,32 @@ struct ra_dxgi_bridge
 typedef HRESULT (WINAPI *create_factory_t)(REFIID, void **);
 typedef HRESULT (WINAPI *create_device_t)(IUnknown *, D3D_FEATURE_LEVEL,
       REFIID, void **);
+
+static HMODULE bridge_dxgi_dll;
+static HMODULE bridge_d3d_dll;
+
+/* The device and the queue swap chains are made on, kept for the
+ * life of the process as a game keeps its device: the display
+ * driver's layers (NVIDIA's frame generation, for one) hang their
+ * own objects for a swap chain off the device it was made on, and
+ * clean them up as the next chain is made - after the device they
+ * belong to was released with the last chain, that is a crash in
+ * CreateSwapChainForHwnd. A bridge takes its own references; these
+ * stay until a chain is wanted on another adapter, or the device
+ * is lost. */
+static ID3D12Device       *bridge_kept_device;
+static ID3D12CommandQueue *bridge_kept_queue;
+static unsigned char       bridge_kept_luid[8];
+
+static void bridge_kept_drop(void)
+{
+   if (bridge_kept_queue)
+      bridge_kept_queue->lpVtbl->Release(bridge_kept_queue);
+   if (bridge_kept_device)
+      bridge_kept_device->lpVtbl->Release(bridge_kept_device);
+   bridge_kept_queue  = NULL;
+   bridge_kept_device = NULL;
+}
 
 #define DROP(p) do { if (p) { (p)->lpVtbl->Release(p); (p) = NULL; } } while (0)
 #define CHECK(expr) do { if (FAILED(expr)) goto error; } while (0)
@@ -128,8 +156,6 @@ void ra_dxgi_bridge_destroy(ra_dxgi_bridge_t *b)
    if (b->done_handle) CloseHandle(b->done_handle);
    if (b->event) CloseHandle(b->event);
    if (b->latency) CloseHandle(b->latency);
-   if (b->d3d_dll) FreeLibrary(b->d3d_dll);
-   if (b->dxgi_dll) FreeLibrary(b->dxgi_dll);
    free(b);
 }
 
@@ -139,17 +165,25 @@ static int ra_dxgi_bridge_create_buffers(ra_dxgi_bridge_t *b,
    D3D12_HEAP_PROPERTIES heap;
    D3D12_RESOURCE_DESC resource_desc;
    unsigned i;
-   memset(&heap, 0, sizeof(heap));
-   heap.Type = D3D12_HEAP_TYPE_DEFAULT;
-   heap.CreationNodeMask = heap.VisibleNodeMask = 1;
-   memset(&resource_desc, 0, sizeof(resource_desc));
-   resource_desc.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
-   resource_desc.Width = width;
-   resource_desc.Height = height;
-   resource_desc.DepthOrArraySize = resource_desc.MipLevels = 1;
-   resource_desc.Format = (DXGI_FORMAT)format;
-   resource_desc.SampleDesc.Count = 1;
-   resource_desc.Flags = D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET;
+
+   heap.Type                          = D3D12_HEAP_TYPE_DEFAULT;
+   heap.CPUPageProperty               = D3D12_CPU_PAGE_PROPERTY_UNKNOWN;
+   heap.MemoryPoolPreference          = D3D12_MEMORY_POOL_UNKNOWN;
+   heap.CreationNodeMask              = 1;
+   heap.VisibleNodeMask               = 1;
+
+   resource_desc.Dimension            = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
+   resource_desc.Alignment            = 0;
+   resource_desc.Width                = width;
+   resource_desc.Height               = height;
+   resource_desc.DepthOrArraySize     = 1;
+   resource_desc.MipLevels            = 1;
+   resource_desc.Format               = (DXGI_FORMAT)format;
+   resource_desc.SampleDesc.Count     = 1;
+   resource_desc.SampleDesc.Quality   = 0;
+   resource_desc.Layout               = D3D12_TEXTURE_LAYOUT_UNKNOWN;
+   resource_desc.Flags                = D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET;
+
    for (i = 0; i < 2; i++)
    {
       D3D12_RESOURCE_BARRIER barriers[2];
@@ -173,16 +207,18 @@ static int ra_dxgi_bridge_create_buffers(ra_dxgi_bridge_t *b,
          CHECK(b->device->lpVtbl->CreateCommandList(b->device, 0,
                   D3D12_COMMAND_LIST_TYPE_DIRECT, b->allocators[i], NULL,
                   &bridge_ID3D12GraphicsCommandList, (void **)&b->lists[i]));
-      memset(barriers, 0, sizeof(barriers));
-      barriers[0].Type = barriers[1].Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
-      barriers[0].Transition.pResource = b->shared[i];
+      barriers[0].Type                   = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+      barriers[0].Flags                  = D3D12_RESOURCE_BARRIER_FLAG_NONE;
+      barriers[0].Transition.pResource   = b->shared[i];
       barriers[0].Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
       barriers[0].Transition.StateBefore = D3D12_RESOURCE_STATE_COMMON;
-      barriers[0].Transition.StateAfter = D3D12_RESOURCE_STATE_COPY_SOURCE;
-      barriers[1].Transition.pResource = b->buffers[i];
+      barriers[0].Transition.StateAfter  = D3D12_RESOURCE_STATE_COPY_SOURCE;
+      barriers[1].Type                   = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+      barriers[1].Flags                  = D3D12_RESOURCE_BARRIER_FLAG_NONE;
+      barriers[1].Transition.pResource   = b->buffers[i];
       barriers[1].Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
       barriers[1].Transition.StateBefore = D3D12_RESOURCE_STATE_PRESENT;
-      barriers[1].Transition.StateAfter = D3D12_RESOURCE_STATE_COPY_DEST;
+      barriers[1].Transition.StateAfter  = D3D12_RESOURCE_STATE_COPY_DEST;
       b->lists[i]->lpVtbl->ResourceBarrier(b->lists[i], 2, barriers);
       b->lists[i]->lpVtbl->CopyResource(b->lists[i], b->buffers[i], b->shared[i]);
       barriers[0].Transition.StateBefore = D3D12_RESOURCE_STATE_COPY_SOURCE;
@@ -246,14 +282,22 @@ ra_dxgi_bridge_t *ra_dxgi_bridge_create(HWND window, unsigned width,
    unsigned i;
    if (!window || !width || !height || !luid)
       return NULL;
+   /* The runtimes stay loaded for the life of the process: the
+    * display driver's layers under them (NVIDIA's frame generation,
+    * for one) keep process-wide state and do not survive an unload
+    * and reload between two swap chains. */
+   if (!bridge_dxgi_dll)
+      bridge_dxgi_dll = LoadLibraryA("dxgi.dll");
+   if (!bridge_d3d_dll)
+      bridge_d3d_dll  = LoadLibraryA("d3d12.dll");
+   if (!bridge_dxgi_dll || !bridge_d3d_dll)
+      return NULL;
+   create_factory = (create_factory_t)GetProcAddress(bridge_dxgi_dll, "CreateDXGIFactory1");
+   create_device  = (create_device_t)GetProcAddress(bridge_d3d_dll, "D3D12CreateDevice");
+   if (!create_factory || !create_device)
+      return NULL;
    b = (ra_dxgi_bridge_t *)calloc(1, sizeof(*b));
    if (!b) return NULL;
-   b->dxgi_dll = LoadLibraryA("dxgi.dll");
-   b->d3d_dll  = LoadLibraryA("d3d12.dll");
-   if (!b->dxgi_dll || !b->d3d_dll) goto error;
-   create_factory = (create_factory_t)GetProcAddress(b->dxgi_dll, "CreateDXGIFactory1");
-   create_device  = (create_device_t)GetProcAddress(b->d3d_dll, "D3D12CreateDevice");
-   if (!create_factory || !create_device) goto error;
    CHECK(create_factory(&bridge_IDXGIFactory2, (void **)&b->factory));
    if (SUCCEEDED(b->factory->lpVtbl->QueryInterface(b->factory,
                &bridge_IDXGIFactory5, (void **)&factory5)))
@@ -264,30 +308,56 @@ ra_dxgi_bridge_t *ra_dxgi_bridge_create(HWND window, unsigned width,
          b->tearing = FALSE;
       DROP(factory5);
    }
-   for (i = 0; ; i++)
+   if (     bridge_kept_device
+         && (   memcmp(bridge_kept_luid, luid, 8) != 0
+             || bridge_kept_device->lpVtbl->GetDeviceRemovedReason(
+                   bridge_kept_device) != S_OK))
+      bridge_kept_drop();
+   if (bridge_kept_device)
    {
-      DXGI_ADAPTER_DESC1 desc;
-      CHECK(b->factory->lpVtbl->EnumAdapters1(b->factory, i, &adapter));
-      CHECK(adapter->lpVtbl->GetDesc1(adapter, &desc));
-      if (memcmp(&desc.AdapterLuid, luid, 8) == 0) break;
-      DROP(adapter);
+      b->device = bridge_kept_device;
+      b->queue  = bridge_kept_queue;
+      b->device->lpVtbl->AddRef(b->device);
+      b->queue->lpVtbl->AddRef(b->queue);
    }
-   CHECK(create_device((IUnknown *)adapter, D3D_FEATURE_LEVEL_11_0,
-            &bridge_ID3D12Device, (void **)&b->device));
-   DROP(adapter);
-   memset(&queue_desc, 0, sizeof(queue_desc));
-   queue_desc.Type = D3D12_COMMAND_LIST_TYPE_DIRECT;
-   CHECK(b->device->lpVtbl->CreateCommandQueue(b->device, &queue_desc,
-            &bridge_ID3D12CommandQueue, (void **)&b->queue));
-   memset(&chain_desc, 0, sizeof(chain_desc));
-   chain_desc.Width = width;
-   chain_desc.Height = height;
-   chain_desc.Format = (DXGI_FORMAT)format;
-   chain_desc.SampleDesc.Count = 1;
-   chain_desc.BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT;
-   chain_desc.BufferCount = 2;
-   chain_desc.SwapEffect = DXGI_SWAP_EFFECT_FLIP_DISCARD;
-   chain_desc.Flags = DXGI_SWAP_CHAIN_FLAG_FRAME_LATENCY_WAITABLE_OBJECT;
+   else
+   {
+      for (i = 0; ; i++)
+      {
+         DXGI_ADAPTER_DESC1 desc;
+         CHECK(b->factory->lpVtbl->EnumAdapters1(b->factory, i, &adapter));
+         CHECK(adapter->lpVtbl->GetDesc1(adapter, &desc));
+         if (memcmp(&desc.AdapterLuid, luid, 8) == 0) break;
+         DROP(adapter);
+      }
+      CHECK(create_device((IUnknown *)adapter, D3D_FEATURE_LEVEL_11_0,
+               &bridge_ID3D12Device, (void **)&b->device));
+      DROP(adapter);
+      queue_desc.Type               = D3D12_COMMAND_LIST_TYPE_DIRECT;
+      queue_desc.Priority           = D3D12_COMMAND_QUEUE_PRIORITY_NORMAL;
+      queue_desc.Flags              = D3D12_COMMAND_QUEUE_FLAG_NONE;
+      queue_desc.NodeMask           = 0;
+      CHECK(b->device->lpVtbl->CreateCommandQueue(b->device, &queue_desc,
+               &bridge_ID3D12CommandQueue, (void **)&b->queue));
+      bridge_kept_device = b->device;
+      bridge_kept_queue  = b->queue;
+      memcpy(bridge_kept_luid, luid, 8);
+      b->device->lpVtbl->AddRef(b->device);
+      b->queue->lpVtbl->AddRef(b->queue);
+   }
+
+   chain_desc.Width              = width;
+   chain_desc.Height             = height;
+   chain_desc.Format             = (DXGI_FORMAT)format;
+   chain_desc.Stereo             = FALSE;
+   chain_desc.SampleDesc.Count   = 1;
+   chain_desc.SampleDesc.Quality = 0;
+   chain_desc.BufferUsage        = DXGI_USAGE_RENDER_TARGET_OUTPUT;
+   chain_desc.BufferCount        = 2;
+   chain_desc.Scaling            = DXGI_SCALING_STRETCH;
+   chain_desc.SwapEffect         = DXGI_SWAP_EFFECT_FLIP_DISCARD;
+   chain_desc.AlphaMode          = DXGI_ALPHA_MODE_UNSPECIFIED;
+   chain_desc.Flags              = DXGI_SWAP_CHAIN_FLAG_FRAME_LATENCY_WAITABLE_OBJECT;
    if (b->tearing)
       chain_desc.Flags |= DXGI_SWAP_CHAIN_FLAG_ALLOW_TEARING;
    b->chain_flags = chain_desc.Flags;
@@ -357,14 +427,52 @@ unsigned ra_dxgi_bridge_index(ra_dxgi_bridge_t *b, unsigned interval)
    b->current_index = b->chain->lpVtbl->GetCurrentBackBufferIndex(b->chain);
    return b->current_index;
 }
+/* Whether the window can be presented to at all: false only while it
+ * is occluded. A target the GPU has not finished with is not that - it
+ * is a window that is there and busy - and the runloop answers false
+ * here by sleeping a whole content frame as for a minimised window,
+ * which on a GPU-bound frame stacked a frame's sleep on every one and
+ * showed as "Pacing: NoWindow". The wait for a busy target is the
+ * producer's, at the target, in ra_dxgi_bridge_wait_target(). A failed
+ * bridge says presentable so its caller reaches the fallback. */
 int ra_dxgi_bridge_presentable(ra_dxgi_bridge_t *b)
 {
    HRESULT result;
-   if (!b->occluded || b->failed) return 1;
+   if (b->failed || !b->occluded) return 1;
    result = b->chain->lpVtbl->Present(b->chain, 0, DXGI_PRESENT_TEST);
    b->occluded = result == DXGI_STATUS_OCCLUDED;
    if (FAILED(result)) b->failed = 1;
-   return !b->occluded;
+   return b->failed || !b->occluded;
+}
+/* Holds the caller until the GPU has finished with the target index
+ * was last used for, as a swapchain's acquire does, so a producer that
+ * nothing else bounds - GL, which only queues a GPU-side wait - cannot
+ * run frames ahead of the copy into the swap chain. One fence read when
+ * the target is free, which is every frame the GPU keeps up with.
+ * Returns 0 when the frame is to be skipped (timeout, or failure,
+ * which is recorded for the fallback). */
+int ra_dxgi_bridge_wait_target(ra_dxgi_bridge_t *b, unsigned index)
+{
+   UINT64 completed;
+   DWORD wait;
+   if (b->failed || index >= 2) return 0;
+   completed = b->done->lpVtbl->GetCompletedValue(b->done);
+   if (completed == ~(UINT64)0)
+   {
+      b->failed = 1;
+      return 0;
+   }
+   if (completed >= b->last_use[index]) return 1;
+   if (FAILED(b->done->lpVtbl->SetEventOnCompletion(
+               b->done, b->last_use[index], b->event)))
+   {
+      b->failed = 1;
+      return 0;
+   }
+   wait = WaitForSingleObject(b->event, 1000);
+   if (wait == WAIT_OBJECT_0) return 1;
+   b->failed = wait == WAIT_FAILED;
+   return 0;
 }
 int ra_dxgi_bridge_failed(ra_dxgi_bridge_t *b) { return b->failed; }
 uint64_t ra_dxgi_bridge_last_use(ra_dxgi_bridge_t *b, unsigned index)
@@ -394,13 +502,22 @@ int ra_dxgi_bridge_present(ra_dxgi_bridge_t *b, uint64_t ready, unsigned interva
    return SUCCEEDED(hr);
 }
 
+void *ra_dxgi_bridge_device(ra_dxgi_bridge_t *b)
+{
+   return (b && !b->failed) ? (void *)b->device : NULL;
+}
+
 int64_t ra_dxgi_bridge_present_time(ra_dxgi_bridge_t *b)
 {
    DXGI_FRAME_STATISTICS stats;
    LARGE_INTEGER frequency, now;
    if (!b || b->failed || !b->present_count || b->present_submitted_qpc <= 0)
       return 0;
-   memset(&stats, 0, sizeof(stats));
+   stats.PresentCount         = 0;
+   stats.PresentRefreshCount  = 0;
+   stats.SyncRefreshCount     = 0;
+   stats.SyncQPCTime.QuadPart = 0;
+   stats.SyncGPUTime.QuadPart = 0;
    if (FAILED(b->chain->lpVtbl->GetFrameStatistics(b->chain, &stats))
          || stats.PresentCount != b->present_count
          || stats.PresentRefreshCount != stats.SyncRefreshCount
@@ -422,14 +539,18 @@ void ra_dxgi_bridge_hdr_metadata(ra_dxgi_bridge_t *b, float peak)
       return;
    if (peak <= 0.0f) peak = 1000.0f;
    if (peak > 65535.0f) peak = 65535.0f;
-   memset(&metadata, 0, sizeof(metadata));
-   metadata.RedPrimary[0] = 35400; metadata.RedPrimary[1] = 14600;
-   metadata.GreenPrimary[0] = 8500; metadata.GreenPrimary[1] = 39850;
-   metadata.BluePrimary[0] = 6550; metadata.BluePrimary[1] = 2300;
-   metadata.WhitePoint[0] = 15635; metadata.WhitePoint[1] = 16450;
-   metadata.MaxMasteringLuminance = (UINT)peak;
-   metadata.MinMasteringLuminance = 10;
-   metadata.MaxContentLightLevel = metadata.MaxFrameAverageLightLevel = (UINT16)peak;
+   metadata.RedPrimary[0]             = 35400;
+   metadata.RedPrimary[1]             = 14600;
+   metadata.GreenPrimary[0]           = 8500;
+   metadata.GreenPrimary[1]           = 39850;
+   metadata.BluePrimary[0]            = 6550;
+   metadata.BluePrimary[1]            = 2300;
+   metadata.WhitePoint[0]             = 15635;
+   metadata.WhitePoint[1]             = 16450;
+   metadata.MaxMasteringLuminance     = (UINT)peak;
+   metadata.MinMasteringLuminance     = 10;
+   metadata.MaxContentLightLevel      = (UINT16)peak;
+   metadata.MaxFrameAverageLightLevel = (UINT16)peak;
    chain->lpVtbl->SetHDRMetaData(chain, DXGI_HDR_METADATA_TYPE_HDR10,
          sizeof(metadata), &metadata);
    DROP(chain);

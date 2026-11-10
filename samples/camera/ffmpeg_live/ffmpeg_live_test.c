@@ -33,23 +33,157 @@ static retro_atomic_int_t eof_reads;
 static retro_atomic_int_t mixed_source;
 static retro_atomic_int_t audio_reads;
 static retro_atomic_int_t wrong_stream_packets;
+static retro_atomic_int_t duplicate_output;
+static retro_atomic_int_t accepted_packets;
+static retro_atomic_int_t decoded_outputs;
+static AVFrame *extra_frame;
+static retro_atomic_int_t blocked_read;
+static retro_atomic_int_t read_entered;
+static retro_atomic_int_t read_cancelled;
+static retro_atomic_int_t read_timed_out;
+static retro_atomic_int_t missing_interrupt;
+static retro_atomic_int_t fail_next_open;
+static retro_atomic_int_t removed_device;
+static retro_atomic_int_t removed_reads;
+static retro_atomic_int_t changing_size;
+static retro_atomic_int_t fail_stream_info;
+static retro_atomic_int_t null_decoder_calls;
+static retro_atomic_int_t scripted_read_error;
+static retro_atomic_int_t scripted_error_reads;
+static retro_atomic_int_t colour_source;
+/* Decoded frames past this many are relabelled BT.601: FFmpeg 8's concat
+ * converts every segment to the first one's colour space, so a lavfi
+ * graph can no longer change the label mid-stream by itself */
+static retro_atomic_int_t relabel_after;
+static retro_atomic_int_t relabel_seen;
+extern retro_atomic_int_t camera_read_errors;
+
+int __real_avformat_find_stream_info(AVFormatContext *ctx, AVDictionary **options);
+int __wrap_avformat_find_stream_info(AVFormatContext *ctx, AVDictionary **options)
+{
+   if (retro_atomic_exchange_int(&fail_stream_info, 0))
+      return AVERROR(EIO);
+   return __real_avformat_find_stream_info(ctx, options);
+}
+
+int __real_avcodec_receive_frame(AVCodecContext *ctx, AVFrame *frame);
+int __wrap_avcodec_receive_frame(AVCodecContext *ctx, AVFrame *frame)
+{
+   int ret;
+   if (retro_atomic_load_acquire_int(&duplicate_output) && extra_frame)
+   {
+      av_frame_move_ref(frame, extra_frame);
+      av_frame_free(&extra_frame);
+      retro_atomic_fetch_add_int(&decoded_outputs, 1);
+      return 0;
+   }
+   ret = __real_avcodec_receive_frame(ctx, frame);
+   if (ret == 0 && retro_atomic_load_acquire_int(&relabel_after)
+         && retro_atomic_fetch_add_int(&relabel_seen, 1)
+            >= retro_atomic_load_acquire_int(&relabel_after))
+      frame->colorspace = AVCOL_SPC_SMPTE170M;
+   if (ret == 0 && retro_atomic_load_acquire_int(&duplicate_output))
+   {
+      extra_frame = av_frame_clone(frame);
+      if (!extra_frame)
+         return AVERROR(ENOMEM);
+      retro_atomic_fetch_add_int(&decoded_outputs, 1);
+   }
+   return ret;
+}
+
+int __real_avformat_open_input(AVFormatContext **ctx, const char *url,
+      const AVInputFormat *input, AVDictionary **options);
+int __wrap_avformat_open_input(AVFormatContext **ctx, const char *url,
+      const AVInputFormat *input, AVDictionary **options)
+{
+   const char prefix[] = "regression-file:";
+   if (retro_atomic_load_acquire_int(&blocked_read))
+   {
+      if (!*ctx || !(*ctx)->interrupt_callback.callback)
+         retro_atomic_fetch_add_int(&missing_interrupt, 1);
+      else if ((*ctx)->interrupt_callback.callback((*ctx)->interrupt_callback.opaque))
+      {
+         avformat_free_context(*ctx);
+         *ctx = NULL;
+         return AVERROR_EXIT;
+      }
+      if (retro_atomic_exchange_int(&fail_next_open, 0))
+      {
+         avformat_free_context(*ctx);
+         *ctx = NULL;
+         return AVERROR(EINVAL);
+      }
+   }
+   if (strncmp(url, prefix, sizeof(prefix) - 1) == 0)
+      return __real_avformat_open_input(ctx, url + sizeof(prefix) - 1, NULL, options);
+   return __real_avformat_open_input(ctx, url, input, options);
+}
 
 int __real_avcodec_send_packet(AVCodecContext *ctx, const AVPacket *packet);
 int __wrap_avcodec_send_packet(AVCodecContext *ctx, const AVPacket *packet)
 {
+   int ret;
+   if (!ctx)
+   {
+      retro_atomic_fetch_add_int(&null_decoder_calls, 1);
+      return AVERROR(EINVAL);
+   }
+   if (retro_atomic_load_acquire_int(&duplicate_output) && extra_frame)
+      return AVERROR(EAGAIN);
    if (packet && retro_atomic_load_acquire_int(&mixed_source)
          && packet->stream_index != 1)
    {
       retro_atomic_fetch_add_int(&wrong_stream_packets, 1);
       return AVERROR_INVALIDDATA;
    }
-   return __real_avcodec_send_packet(ctx, packet);
+   ret = __real_avcodec_send_packet(ctx, packet);
+   if (ret == 0 && packet && retro_atomic_load_acquire_int(&duplicate_output))
+      retro_atomic_fetch_add_int(&accepted_packets, 1);
+   return ret;
 }
 
 int __real_av_read_frame(AVFormatContext *ctx, AVPacket *packet);
 int __wrap_av_read_frame(AVFormatContext *ctx, AVPacket *packet)
 {
-   int ret = __real_av_read_frame(ctx, packet);
+   int ret;
+   int error = retro_atomic_load_acquire_int(&scripted_read_error);
+   if (retro_atomic_load_acquire_int(&colour_source))
+      usleep(20000);
+   if (error)
+   {
+      /* Bound the unfixed retry loop and its log output. */
+      if (retro_atomic_fetch_add_int(&scripted_error_reads, 1) < 32)
+         return AVERROR(error);
+      return AVERROR_EOF;
+   }
+   if (retro_atomic_load_acquire_int(&changing_size))
+      usleep(50000);
+   if (retro_atomic_load_acquire_int(&removed_device))
+   {
+      /* Bound a broken worker to avoid flooding the regression log. */
+      if (retro_atomic_fetch_add_int(&removed_reads, 1) < 4)
+         return AVERROR(ENODEV);
+      return AVERROR_EOF;
+   }
+   if (retro_atomic_load_acquire_int(&blocked_read))
+   {
+      unsigned attempt;
+      retro_atomic_store_release_int(&read_entered, 1);
+      for (attempt = 0; attempt < 500; attempt++)
+      {
+         if (ctx->interrupt_callback.callback
+               && ctx->interrupt_callback.callback(ctx->interrupt_callback.opaque))
+         {
+            retro_atomic_store_release_int(&read_cancelled, 1);
+            return AVERROR_EXIT;
+         }
+         usleep(1000);
+      }
+      retro_atomic_store_release_int(&read_timed_out, 1);
+      return AVERROR(EIO);
+   }
+   ret = __real_av_read_frame(ctx, packet);
    if (ret == AVERROR_EOF)
       retro_atomic_fetch_add_int(&eof_reads, 1);
    if (ret >= 0 && retro_atomic_load_acquire_int(&mixed_source)
@@ -83,6 +217,9 @@ static int last_px = -1;          /* blue of the first pixel */
 static useconds_t cb_sleep_us;    /* a core slow to take its frame */
 static bool solid_red;
 static bool red_frame;
+static bool uniform_frame;
+static bool check_colour, colour_frame;
+static int expected_colour[3];
 
 static void frame_raw_cb(const uint32_t *buffer, unsigned width,
       unsigned height, size_t pitch)
@@ -90,6 +227,8 @@ static void frame_raw_cb(const uint32_t *buffer, unsigned width,
    unsigned x, y;
    uint32_t before = 0, after = 0;
    bool all_red = true;
+   bool all_same = true;
+   bool all_colour = true;
    frames_seen++;
    last_width  = width;
    last_height = height;
@@ -109,12 +248,23 @@ static void frame_raw_cb(const uint32_t *buffer, unsigned width,
       for (x = 0; x < width; x++)
       {
          uint32_t pixel = buffer[y * (pitch / sizeof(uint32_t)) + x];
+         all_same = all_same && pixel == buffer[0];
          after += pixel;
+         if (check_colour)
+         {
+            unsigned channel;
+            for (channel = 0; channel < 3; channel++)
+               if (abs((int)((pixel >> (channel * 8)) & 0xff)
+                        - expected_colour[channel]) > 2)
+                  all_colour = false;
+         }
          if (solid_red)
             all_red = all_red && ((pixel >> 16) & 0xff) >= 245
                && ((pixel >> 8) & 0xff) <= 5 && (pixel & 0xff) <= 5;
       }
    checksum += after;
+   uniform_frame = all_same;
+   colour_frame = all_colour;
    if (solid_red && all_red)
       red_frame = true;
    if (cb_sleep_us)
@@ -372,6 +522,253 @@ int main(void)
       CHECK(retro_atomic_load_acquire_int(&wrong_stream_packets) == 0,
             "non-video packets reached the video decoder");
       camera_ffmpeg.free(h);
+   }
+   current = "multiple outputs per packet";
+   h = camera_ffmpeg.init("color=c=black:size=32x16:rate=25,format=gray,geq=lum=N*16,trim=end_frame=3",
+         CAPS, VIDEO_SCALE_PACK(32, 16));
+   CHECK(h != NULL, "buffered source initialization failed");
+   if (h)
+   {
+      unsigned attempt;
+      retro_atomic_store_release_int(&duplicate_output, 1);
+      retro_atomic_store_release_int(&eof_reads, 0);
+      CHECK(camera_ffmpeg.start(h), "buffered source start failed");
+      for (attempt = 0; attempt < 100
+            && !retro_atomic_load_acquire_int(&eof_reads); attempt++)
+         usleep(20000);
+      camera_ffmpeg.stop(h);
+      retro_atomic_store_release_int(&duplicate_output, 0);
+      CHECK(retro_atomic_load_acquire_int(&accepted_packets) == 3,
+            "backpressure dropped an input packet");
+      CHECK(retro_atomic_load_acquire_int(&decoded_outputs) == 6,
+            "decoder outputs were not fully drained");
+      av_frame_free(&extra_frame);
+      camera_ffmpeg.free(h);
+   }
+   current = "delayed decoder output";
+   h = camera_ffmpeg.init("regression-file:decoder_delay.mkv", CAPS,
+         VIDEO_SCALE_PACK(32, 16));
+   CHECK(h != NULL, "delayed source initialization failed");
+   if (h)
+   {
+      unsigned attempt;
+      CHECK(camera_ffmpeg.start(h), "delayed source start failed");
+      last_px = -1;
+      for (attempt = 0; attempt < 100 && last_px < 108; attempt++)
+      {
+         camera_ffmpeg.poll(h, frame_raw_cb, frame_gl_cb, NULL);
+         usleep(20000);
+      }
+      CHECK(last_px >= 108 && last_px <= 116,
+            "delayed final frame is grey 112, got %d", last_px);
+      camera_ffmpeg.stop(h);
+      camera_ffmpeg.free(h);
+   }
+   current = "blocked capture read";
+   h = open_camera();
+   CHECK(h != NULL, "blocked camera initialization failed");
+   if (h)
+   {
+      unsigned cycle;
+      retro_atomic_store_release_int(&blocked_read, 1);
+      retro_atomic_store_release_int(&fail_next_open, 1);
+      for (cycle = 0; cycle < 2; cycle++)
+      {
+         unsigned attempt;
+         retro_atomic_store_release_int(&read_entered, 0);
+         retro_atomic_store_release_int(&read_cancelled, 0);
+         retro_atomic_store_release_int(&read_timed_out, 0);
+         CHECK(camera_ffmpeg.start(h), "blocked camera start/restart failed");
+         for (attempt = 0; attempt < 100
+               && !retro_atomic_load_acquire_int(&read_entered); attempt++)
+            usleep(1000);
+         CHECK(retro_atomic_load_acquire_int(&read_entered), "worker did not enter read");
+         camera_ffmpeg.stop(h);
+         CHECK(retro_atomic_load_acquire_int(&read_cancelled),
+               "stop did not interrupt capture read");
+         CHECK(!retro_atomic_load_acquire_int(&read_timed_out),
+               "capture read needed the fixture timeout");
+      }
+      CHECK(!retro_atomic_load_acquire_int(&missing_interrupt),
+            "input open/retry lacked interrupt callback");
+      camera_ffmpeg.free(h);
+      retro_atomic_store_release_int(&blocked_read, 0);
+   }
+   current = "removed capture device";
+   h = open_camera();
+   CHECK(h != NULL, "removed camera initialization failed");
+   if (h)
+   {
+      unsigned attempt;
+      retro_atomic_store_release_int(&removed_device, 1);
+      CHECK(camera_ffmpeg.start(h), "removed camera start failed");
+      for (attempt = 0; attempt < 100
+            && !retro_atomic_load_acquire_int(&removed_reads); attempt++)
+         usleep(1000);
+      usleep(20000);
+      camera_ffmpeg.stop(h);
+      CHECK(retro_atomic_load_acquire_int(&removed_reads) == 1,
+            "removed device was read %d times",
+            retro_atomic_load_acquire_int(&removed_reads));
+      retro_atomic_store_release_int(&removed_device, 0);
+      CHECK(camera_ffmpeg.start(h), "camera restart after removal failed");
+      last_px = -1;
+      for (attempt = 0; attempt < 100 && last_px < 0; attempt++)
+      {
+         camera_ffmpeg.poll(h, frame_raw_cb, frame_gl_cb, NULL);
+         usleep(1000);
+      }
+      CHECK(last_px >= 0, "camera restart produced no frame");
+      camera_ffmpeg.stop(h);
+      camera_ffmpeg.free(h);
+   }
+   current = "changing capture dimensions";
+   h = camera_ffmpeg.init("regression-file:decoder_resize.h264",
+         CAPS, VIDEO_SCALE_PACK(17, 9));
+   CHECK(h != NULL, "changing source initialization failed");
+   if (h)
+   {
+      unsigned attempt;
+      bool small_seen = false, large_seen = false;
+      retro_atomic_store_release_int(&changing_size, 1);
+      CHECK(camera_ffmpeg.start(h), "changing source start failed");
+      for (attempt = 0; attempt < 100 && !(small_seen && large_seen); attempt++)
+      {
+         camera_ffmpeg.poll(h, frame_raw_cb, frame_gl_cb, NULL);
+         small_seen = small_seen || (uniform_frame && last_px >= 28 && last_px <= 36);
+         large_seen = large_seen || (uniform_frame && last_px >= 108 && last_px <= 116);
+         usleep(10000);
+      }
+      CHECK(small_seen && large_seen, "resolution change lost frames (%d/%d)",
+            small_seen, large_seen);
+      CHECK(last_width == 17 && last_height == 9, "output dimensions changed");
+      camera_ffmpeg.stop(h);
+      camera_ffmpeg.free(h);
+      retro_atomic_store_release_int(&changing_size, 0);
+   }
+   current = "failed stream discovery";
+   h = open_camera();
+   CHECK(h != NULL, "failure source initialization failed");
+   if (h)
+   {
+      unsigned attempt;
+      retro_atomic_store_release_int(&fail_stream_info, 1);
+      CHECK(!camera_ffmpeg.start(h), "failed stream discovery reported success");
+      CHECK(!retro_atomic_load_acquire_int(&null_decoder_calls),
+            "cleanup called decoder API without a decoder");
+      CHECK(camera_ffmpeg.start(h), "restart after discovery failure failed");
+      checksum = 0;
+      for (attempt = 0; attempt < 100 && !checksum; attempt++)
+      {
+         camera_ffmpeg.poll(h, frame_raw_cb, frame_gl_cb, NULL);
+         usleep(1000);
+      }
+      CHECK(checksum != 0, "restart produced no decoded pixels");
+      camera_ffmpeg.stop(h);
+      camera_ffmpeg.free(h);
+   }
+   current = "capture read errors";
+   {
+      const int errors[] = { EAGAIN, EINTR, EIO, EINVAL };
+      unsigned lane;
+      for (lane = 0; lane < sizeof(errors) / sizeof(errors[0]); lane++)
+      {
+         unsigned attempt, polls;
+         bool transient = errors[lane] == EAGAIN || errors[lane] == EINTR;
+         h = open_camera();
+         CHECK(h != NULL, "error source initialization failed");
+         if (!h)
+            continue;
+         retro_atomic_store_release_int(&scripted_error_reads, 0);
+         retro_atomic_store_release_int(&camera_read_errors, 0);
+         retro_atomic_store_release_int(&scripted_read_error, errors[lane]);
+         CHECK(camera_ffmpeg.start(h), "error source start failed");
+         for (attempt = 0; attempt < 100
+               && !retro_atomic_load_acquire_int(&scripted_error_reads); attempt++)
+            usleep(1000);
+         usleep(20000);
+         CHECK(retro_atomic_load_acquire_int(&scripted_error_reads) == 1,
+               "idle error source made %d reads (errno %d)",
+               retro_atomic_load_acquire_int(&scripted_error_reads), errors[lane]);
+         for (polls = 0; polls < 10; polls++)
+         {
+            camera_ffmpeg.poll(h, frame_raw_cb, frame_gl_cb, NULL);
+            usleep(1000);
+         }
+         CHECK(retro_atomic_load_acquire_int(&scripted_error_reads) <= (transient ? 11 : 1),
+               "read errors exceeded frontend retry requests (errno %d)", errors[lane]);
+         CHECK(retro_atomic_load_acquire_int(&camera_read_errors) == (transient ? 0 : 1),
+               "wrong read-error log count %d (errno %d)",
+               retro_atomic_load_acquire_int(&camera_read_errors), errors[lane]);
+         if (transient && errors[lane] == EAGAIN)
+         {
+            /* Stop must wake a worker parked for unavailable input. */
+            camera_ffmpeg.stop(h);
+            retro_atomic_store_release_int(&scripted_read_error, 0);
+            CHECK(camera_ffmpeg.start(h), "restart after parked stop failed");
+         }
+         else
+         {
+            if (!transient)
+               camera_ffmpeg.stop(h);
+            retro_atomic_store_release_int(&scripted_read_error, 0);
+            if (!transient)
+               CHECK(camera_ffmpeg.start(h), "restart after terminal error failed");
+         }
+         checksum = 0;
+         for (attempt = 0; attempt < 100 && !checksum; attempt++)
+         {
+            camera_ffmpeg.poll(h, frame_raw_cb, frame_gl_cb, NULL);
+            usleep(1000);
+         }
+         CHECK(checksum != 0, "capture did not recover after errno %d", errors[lane]);
+         camera_ffmpeg.stop(h);
+         camera_ffmpeg.free(h);
+      }
+   }
+   current = "capture colour metadata";
+   {
+      const char *sources[] = {
+         "nullsrc=s=32x16:r=25,format=yuv420p,geq=lum=16:cb=128:cr=128,setparams=range=full,trim=end_frame=3[a];nullsrc=s=32x16:r=25,format=yuv420p,geq=lum=16:cb=128:cr=128,setparams=range=limited,trim=end_frame=3[b];[a][b]concat=n=2:v=1:a=0",
+         "nullsrc=s=32x16:r=25,format=yuv420p,geq=lum=100:cb=90:cr=170,setparams=range=full:colorspace=bt709,trim=end_frame=6",
+         "nullsrc=s=32x16:r=25,format=gray,geq=lum=16,trim=end_frame=3[a];nullsrc=s=32x16:r=25,format=gray,geq=lum=48,trim=end_frame=3[b];[a][b]concat=n=2:v=1:a=0"
+      };
+      /* Full-range BT.709 and BT.601 YCbCr equations, rounded to bytes. */
+      const int colours[3][2][3] = { { {16, 16, 16}, {0, 0, 0} },
+         { {29, 87, 166}, {33, 83, 159} }, { {16, 16, 16}, {48, 48, 48} } };
+      unsigned lane;
+      for (lane = 0; lane < sizeof(sources) / sizeof(sources[0]); lane++)
+      {
+         unsigned attempt, stage = 0;
+         int initial_eof = retro_atomic_load_acquire_int(&eof_reads);
+         h = camera_ffmpeg.init(sources[lane], CAPS, VIDEO_SCALE_PACK(17, 9));
+         CHECK(h != NULL, "colour source initialization failed");
+         if (!h)
+            continue;
+         retro_atomic_store_release_int(&colour_source, 1);
+         retro_atomic_store_release_int(&relabel_seen, 0);
+         retro_atomic_store_release_int(&relabel_after, lane == 1 ? 3 : 0);
+         CHECK(camera_ffmpeg.start(h), "colour source start failed");
+         check_colour = true;
+         for (attempt = 0; attempt < 100 && stage < 2; attempt++)
+         {
+            memcpy(expected_colour, colours[lane][stage], sizeof(expected_colour));
+            colour_frame = false;
+            camera_ffmpeg.poll(h, frame_raw_cb, frame_gl_cb, NULL);
+            if (colour_frame)
+               stage++;
+            usleep(10000);
+         }
+         CHECK(stage == 2, "colour metadata transition %u reached stage %u", lane, stage);
+         check_colour = false;
+         for (attempt = 0; attempt < 100
+               && retro_atomic_load_acquire_int(&eof_reads) == initial_eof; attempt++)
+            usleep(1000);
+         camera_ffmpeg.stop(h);
+         camera_ffmpeg.free(h);
+         retro_atomic_store_release_int(&colour_source, 0);
+         retro_atomic_store_release_int(&relabel_after, 0);
+      }
    }
    current = "direct output";
    printf("   %u frame(s) through the driver in all\n", frames_seen);

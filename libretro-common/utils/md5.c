@@ -40,6 +40,13 @@
 #include <stdint.h>
 #include <string.h>
 
+/* Hidden, so callers of libcrypto's MD5_* can't bind to this copy. */
+#if defined(__GNUC__) && __GNUC__ >= 4 && !defined(__DJGPP__) \
+   && (defined(__ELF__) || defined(__APPLE__))
+#pragma GCC visibility push(hidden)
+#define MD5_VISIBILITY_PUSHED
+#endif
+
 /*
  * The basic MD5 functions.
  *
@@ -70,8 +77,14 @@
  * doesn't work.
  */
 #if defined(__i386__) || defined(__x86_64__) || defined(__vax__)
+static INLINE uint32_t md5_load_le(const unsigned char *p)
+{
+   return (uint32_t)p[0] | ((uint32_t)p[1] << 8) |
+      ((uint32_t)p[2] << 16) | ((uint32_t)p[3] << 24);
+}
+
 #define MD5_SET(n) \
-	(*(uint32_t*)&ptr[(n) * 4])
+	md5_load_le(ptr + (n) * 4)
 #define MD5_GET(n) \
 	MD5_SET(n)
 #else
@@ -288,3 +301,8 @@ void MD5_Final(unsigned char *result, MD5_CTX *ctx)
 
 	memset(ctx, 0, sizeof(*ctx));
 }
+
+#ifdef MD5_VISIBILITY_PUSHED
+#pragma GCC visibility pop
+#undef MD5_VISIBILITY_PUSHED
+#endif

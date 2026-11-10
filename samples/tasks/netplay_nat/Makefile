@@ -26,6 +26,7 @@ SOURCES := nat_task_serialisation_test.c \
            $(REPO_ROOT)/tasks/task_netplay_nat_traversal.c \
            $(LIBRETRO_COMM_DIR)/queues/task_queue.c \
            $(LIBRETRO_COMM_DIR)/rthreads/rthreads.c \
+           $(LIBRETRO_COMM_DIR)/rthreads/retro_eventcount.c \
            $(LIBRETRO_COMM_DIR)/compat/compat_strl.c \
            $(LIBRETRO_COMM_DIR)/string/stdstring.c \
            $(LIBRETRO_COMM_DIR)/encodings/encoding_utf.c \
@@ -39,7 +40,8 @@ DEFINES := -DHAVE_NETWORKING -DHAVE_NETPLAY -DHAVE_THREADS
 
 CFLAGS  += -Wall -std=gnu99 -g1 $(DEFINES) \
            -I$(LIBRETRO_COMM_DIR)/include -I$(REPO_ROOT)
-LDFLAGS += -lpthread -lm
+# --wrap=task_queue_park so the threaded lane can count the task's parks.
+LDFLAGS += -Wl,--wrap=task_queue_park -lpthread -lm
 
 # The samples workflow passes SANITIZER=address,undefined; honour it.
 ifneq ($(SANITIZER),)

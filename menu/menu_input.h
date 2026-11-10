@@ -154,9 +154,10 @@ struct menu_bind_state_port
 {
    int16_t axes[MENU_MAX_AXES];
    uint16_t hats[MENU_MAX_HATS];
-   bool mouse_buttons[MENU_MAX_MBUTTONS];
-   bool buttons[MENU_MAX_BUTTONS];
-   bool keys[RETROK_LAST];
+   /* bits */
+   uint32_t mouse_buttons;
+   input_bits_t buttons;
+   uint32_t keys[(RETROK_LAST + 31) / 32];
 };
 
 struct menu_bind_axis_state
@@ -185,7 +186,8 @@ struct menu_bind_state
    unsigned out_id;
    struct retro_keybind buffer;
 
-   struct menu_bind_state_port state[MAX_USERS];
+   /* this frame's and the last, in turn: [now] is this frame's */
+   struct menu_bind_state_port state[2][MAX_USERS];
    struct menu_bind_axis_state axis_state[MAX_USERS];
 
    unsigned begin;
@@ -193,8 +195,16 @@ struct menu_bind_state
    unsigned order;
    unsigned user;
    unsigned port;
+   /* a hotkey's: the sharing controllers' slots listened to as well,
+    * as bits, and the slot the press came from */
+   uint32_t listen;
+   unsigned from;
+
+   unsigned now;
 
    bool skip;
+   /* the press was a key's or a mouse button's, not the pad's */
+   bool from_keys;
 };
 
 enum menu_inp_ptr_hwst_flags
@@ -259,13 +269,21 @@ enum menu_input_dialog_kb_text_type
    MENU_INPUT_DIALOG_KB_TYPE_NUMBER
 };
 
+enum menu_input_dialog_type
+{
+   MENU_INPUT_DIALOG_TYPE_NEW = 0,
+   MENU_INPUT_DIALOG_TYPE_EDIT
+};
+
 typedef struct menu_input_ctx_line
 {
    const char *label;
    const char *label_setting;
+   const char *initial_text;
    unsigned type;
    unsigned idx;
    enum menu_input_dialog_kb_text_type text_type;
+   enum menu_input_dialog_type dialog_type;
    input_keyboard_line_complete_t cb;
 } menu_input_ctx_line_t;
 

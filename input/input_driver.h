@@ -38,6 +38,7 @@
 #include "input_defines.h"
 #include "../gfx/video_defines.h"
 #include "input_types.h"
+#include "input_sensor_snap.h"
 #ifdef HAVE_OVERLAY
 #include "input_overlay.h"
 #endif
@@ -229,6 +230,17 @@ struct bsv_input_data
 };
 typedef struct bsv_input_data bsv_input_data_t;
 
+#define BSV_MOVIE_MAX_INPUT_EVENTS 512
+
+enum bsv_netplay_flags
+{
+   BSV_NETPLAY_FLAG_ACTIVE    = (1 << 0),
+   BSV_NETPLAY_FLAG_ARMED     = (1 << 1),
+   BSV_NETPLAY_FLAG_COMMITTED = (1 << 2)
+};
+
+#define BSV_MOVIE_IS_NETPLAY(m) (((m)->netplay_flags & BSV_NETPLAY_FLAG_ACTIVE) != 0)
+
 struct bsv_movie
 {
    intfstream_t *file;
@@ -246,13 +258,20 @@ struct bsv_movie
    uint8_t key_event_count;
    uint16_t input_event_count;
    bsv_key_data_t key_events[128];
-   bsv_input_data_t input_events[512];
+   bsv_input_data_t input_events[BSV_MOVIE_MAX_INPUT_EVENTS];
 
    /* Rewind state */
    bool playback;
    bool first_rewind;
    bool did_rewind;
    bool checkpoint_ready;
+
+   /* Netplay stages frames until their inputs have been confirmed. */
+   const char *netplay_error;
+   size_t netplay_next_ptr;
+   uint32_t netplay_start_frame;
+   uint32_t netplay_next_frame;
+   uint8_t netplay_flags; /* enum bsv_netplay_flags */
 
 #ifdef HAVE_STATESTREAM
    /* Block index and superblock index for incremental checkpoints */
@@ -267,6 +286,11 @@ struct bsv_movie
 
    uint8_t *last_save, *cur_save;
    size_t last_save_size, cur_save_size;
+
+   /* A checkpoint's encoding [0] and compression [1] buffers, kept from
+    * one checkpoint to the next: see bsv_movie_scratch() */
+   uint8_t *ckpt_scratch[2];
+   size_t ckpt_scratch_cap[2];
 
    bool cur_save_valid;
 };
@@ -309,7 +333,12 @@ struct input_keyboard_line
    size_t size;
    size_t capacity;  /* Allocated size of buffer (excluding NUL) */
    bool enabled;
+   bool select_all;
+   bool fixed;       /* a native keyboard owns the buffer: it cannot move */
 };
+
+/* The buffer a native (Android, iOS) keyboard puts under the line */
+#define INPUT_NATIVE_KEYBOARD_BUFFER_SIZE 512
 
 struct rarch_joypad_info
 {
@@ -388,15 +417,6 @@ typedef struct input_remote_state
    /* Left X, Left Y, Right X, Right Y */
    int16_t analog[4][MAX_USERS];
 } input_remote_state_t;
-
-typedef struct input_list_element_t
-{
-   int16_t *state;
-   unsigned port;
-   unsigned device;
-   unsigned index;
-   unsigned int state_size;
-} input_list_element;
 
 /**
  * Organizes the functions and data structures of each driver that are accessed
@@ -544,10 +564,10 @@ struct input_driver
     * the video driver is restarted: nothing it holds belongs to the video
     * driver, its window or its thread, and it needs no restart to notice
     * anything a restart used to make it notice. The joypad driver in use
-    * is its to answer for as well, since the two are kept or restarted
-    * together. NULL, which every driver that does not name it has, means
-    * no: the driver is freed with the video driver
-    * and started again, as it always was. See
+    * is kept or restarted with it, and answers for itself
+    * (rarch_joypad_driver::survives_video). NULL, which every driver
+    * that does not name it has, means no: the driver is freed with the
+    * video driver and started again, as it always was. See
     * input_driver_keep_for_video_restart().
     *
     * @param data  The input state struct
@@ -599,6 +619,34 @@ struct input_driver
    unsigned (*bind_mouse_buttons)(void *data, unsigned port);
 };
 
+/* A pad's state as a joypad driver keeps it, for a driver whose state
+ * changes only in its own poll: lent to the readers between two polls
+ * in place of a copy (input_driver.c, the snapshot bridge). What each
+ * field holds is what button(), axis() and get_buttons() answer. */
+/* sensor sub-devices a core may address (RETRO_SENSOR_SUBDEVICE),
+ * after the controller itself */
+#define INPUT_SENSOR_SUBDEVICES 4
+#define INPUT_PAD_VIEW_AXES 16
+#define INPUT_PAD_VIEW_HATS 4
+#define INPUT_PAD_VIEW_TOUCHES 2
+/* touch_down's bit for the touchpad pressed in, beside its fingers' */
+#define INPUT_PAD_TOUCH_PRESS 0x80
+
+typedef struct input_pad_view
+{
+   input_bits_t buttons;
+   /* each axis signed, as axis() gives its two directions */
+   int16_t      axes[INPUT_PAD_VIEW_AXES];
+   /* four bits a hat, from bit 0: up, down, left, right */
+   uint16_t     hats;
+   /* A touchpad's fingers where the pointer device puts a place: x in
+    * the low half of each word, y in the high, -0x7fff to 0x7fff across
+    * the pad. Bit n of touch_down is finger n on it. */
+   uint32_t     touch[INPUT_PAD_VIEW_TOUCHES];
+   uint8_t      touch_down;
+   bool         touchpad;   /* the pad has one */
+} input_pad_view_t;
+
 struct rarch_joypad_driver
 {
    void *(*init)(void *data);
@@ -631,6 +679,27 @@ struct rarch_joypad_driver
     * byte first. NULL, or false, where the pad has none. */
    bool (*get_bt_host)(unsigned pad, uint8_t *addr);
    bool (*set_bt_host)(unsigned pad, const uint8_t *addr);
+
+   /* Whether the driver, as it runs now, can be left running with the
+    * input driver across a video driver restart: it holds nothing of
+    * the video driver's. NULL means no, and both are restarted. */
+   bool (*survives_video)(void);
+
+   /* The player pad @pad's lights are to show, from 1; 0 for none, no
+    * port reading it. Told by the frontend now and then, whether or not
+    * it changed; the driver acts on a change. NULL where the driver
+    * lights nothing, or lights by its own lights. */
+   void (*set_player)(unsigned pad, unsigned player);
+
+   /* Pad @pad's state, unchanged until the driver's next poll; NULL
+    * where the driver cannot say that, which then gets copied. Asked
+    * once a poll per pad read. */
+   const input_pad_view_t *(*view)(unsigned pad);
+
+   /* Pad @pad's touchpad now, into @view's touch and touch_down; false
+    * where it has none. For a driver without view(), whose pads are
+    * copied; NULL where the driver reads no touchpad. */
+   bool (*get_touchpad)(unsigned pad, input_pad_view_t *view);
 };
 
 /**
@@ -798,6 +867,8 @@ typedef struct
 
    /* primitives */
    bool analog_requested[MAX_USERS];
+   /* the core reads the port's controller touchpad itself */
+   bool touchpad_requested[MAX_USERS];
 
    /* Per-port joypad state bitmask cache.
     * Populated lazily on the first JOYPAD query for each mapped_port
@@ -830,6 +901,13 @@ typedef struct
    uint32_t core_hold_gun[MAX_USERS];
    uint8_t  core_hold_pointer[MAX_USERS];
    bool core_hold_armed;
+   /* the enabler's game buttons are withheld or forced (Tap Delay) */
+   bool enabler_tap_active;
+   /* Tap Delay's idle_mask is set */
+   bool enabler_tap_idle;
+   /* Any of the three above: the one byte the core's read tests. Set
+    * with them by input_core_read_gate_set(). */
+   bool core_read_gate;
    /* any of cmd_buttons or cmd_analog is held */
    bool cmd_input;
    /* The same for what the run loop and the menu see - the RetroPad
@@ -944,12 +1022,9 @@ typedef struct
     * demand check on the main thread: atomic with release/acquire,
     * not a plain bool. */
    retro_atomic_int_t shader_uses_sensors;
-   /* Seqlock publication of the sensor caches below - poll computes
-    * the caches, then publishes gyro, accelerometer and rest (nine
-    * floats as bits) here for the shader backends' per-frame reads
-    * from the video thread. */
-   retro_atomic_int_t sensor_snap_seq;
-   retro_atomic_int_t sensor_snap_bits[9];
+   /* The sensor caches below, as the shader backends read them each
+    * frame from the video thread (input_sensor_snap.h). */
+   input_sensor_snap_t sensor_snap;
    bool frontend_sensors_enabled;
    /* The snapshot shaders read holds noughts and no shader reads
     * sensors: the poll has nothing to publish. The poll's own. */
@@ -959,9 +1034,13 @@ typedef struct
    bool platform_menu_button;
    unsigned core_accel_rate; /* >0 means core wants accel at this rate */
    unsigned core_gyro_rate;  /* >0 means core wants gyro at this rate */
+   /* the sub-devices' sensors the core has enabled: bit 2(i-1) the
+    * accelerometer of sub-device i, bit 2(i-1)+1 its gyroscope */
+   uint8_t core_sub_sensors;
    /* First-press port assignment, see input_first_press_apply():
     * buttons seen released on a user with no core port, the users to
-    * map at the next frame boundary, and whether any of it is live. */
+    * map (or a change in who shares a player, to announce) at the
+    * next frame boundary, and whether any of it is live. */
    uint32_t first_press_released[MAX_USERS];
    uint32_t first_press_pending;
    /* users whose core port a press gave them, not the user */
@@ -1170,6 +1249,11 @@ bool input_bluetooth_host_address(uint8_t *addr, char *name, size_t len);
 
 /* The Bluetooth address a controller connects to, read and set where
  * its driver can (see input_device_driver_t's get_bt_host). */
+/* A device number for a pad of a source beside the joypad driver
+ * (input_device_pool.h), or -1; and giving it back. */
+int input_driver_device_claim(unsigned source, unsigned slot);
+void input_driver_device_release(unsigned source, unsigned slot);
+
 bool input_driver_get_bt_host(unsigned pad, uint8_t *addr);
 bool input_driver_set_bt_host(unsigned pad, const uint8_t *addr);
 bool input_config_get_android_disconnect_workaround(void);
@@ -1193,6 +1277,10 @@ void input_driver_command_release(unsigned port);
 /* The buttons a command holds for a port, one bit each, and the four
  * axes into analog. */
 uint16_t input_driver_command_held(unsigned port, int16_t *analog);
+
+/* Whether a replay is being recorded: what a state restored outside
+ * the replay's own data would break. */
+bool input_driver_replay_recording(void);
 void input_driver_set_native_keyboard_shown(bool shown);
 bool input_driver_native_keyboard_shown(void);
 bool input_driver_keyboard_mapping_blocked(void);
@@ -1211,7 +1299,7 @@ enum input_text_type
 };
 const char **input_driver_text_entry_open(void *userdata,
       input_keyboard_line_complete_t cb,
-      const char *label, enum input_text_type type);
+      const char *label, enum input_text_type type, const char *initial_text);
 /* The open line's label and type, for a platform's keyboard that shows
  * them; whether a line is open is input_driver_keyboard_line_enabled(). */
 const char *input_driver_text_entry_label(void);
@@ -1279,8 +1367,9 @@ void input_driver_set_nonblocking(bool on);
 
 /* What a platform asks of the frontend through its input driver: the
  * home or power button, a panic combination, the system closing the
- * app, its window going away and coming back. The driver says what
- * happened; the frontend decides what is done. */
+ * app, its window going away and coming back, the content paused and
+ * resumed. The driver says what happened; the frontend decides what is
+ * done. */
 enum input_platform_request
 {
    INPUT_PLATFORM_QUIT = 0,        /* quit as the Quit hotkey does */
@@ -1288,6 +1377,8 @@ enum input_platform_request
    INPUT_PLATFORM_MENU_TOGGLE,     /* the platform's menu gesture */
    INPUT_PLATFORM_REINIT_VIDEO,    /* the window's surface was lost */
    INPUT_PLATFORM_FOCUS_LOST,      /* game focus off, mouse let go */
+   INPUT_PLATFORM_PAUSE,           /* pause the content */
+   INPUT_PLATFORM_UNPAUSE,         /* resume it */
    INPUT_PLATFORM_REQUEST_LAST
 };
 void input_driver_platform_request(enum input_platform_request req);
@@ -1308,6 +1399,7 @@ void input_driver_keyboard_line_append(const char *utf8, size_t len);
  * NULL, and where the cursor stands in them. And whether the text box
  * has the focus, and not the on-screen keyboard. */
 const char *input_driver_keyboard_line_view(size_t *cursor);
+bool input_driver_keyboard_line_selected(void);
 bool input_driver_keyboard_textbox_focus(void);
 void input_driver_keyboard_line_end(void);
 bool input_driver_pointer_input_blocked(void);
@@ -1328,8 +1420,9 @@ void input_driver_set_platform_menu_button(bool held);
  *
  * input_driver_device_state(): a mouse, a pointer or a key; no binds
  * go to the driver.
- * input_driver_bind_capture_state(): the same with the frontend's
- * binds and the pad @joy_idx, as the capture of a bind reads them. */
+ * input_driver_bind_capture_state(): what the capture of a bind reads.
+ * A mouse comes from the pointer frame first; where no frame holds it,
+ * the driver is asked with the frontend's binds and the pad @joy_idx. */
 bool input_driver_has_device_state(void);
 
 /* A device's position in one call, packed with VIDEO_POS_PACK: the X and Y of a mouse
@@ -1342,6 +1435,9 @@ int16_t input_driver_device_state(unsigned port,
       unsigned device, unsigned idx, unsigned id);
 int16_t input_driver_bind_capture_state(unsigned joy_idx, unsigned port,
       unsigned device, unsigned idx, unsigned id);
+/* Every key down, a bit per key in @down, which the caller has cleared
+ * and holds RETROK_LAST bits. */
+void input_driver_bind_capture_keys(unsigned joy_idx, uint32_t *down);
 
 /* Port 0's mouse and first touch, read from the driver once per poll,
  * so every reader in a frame sees one state and a wheel notch once. */
@@ -1416,13 +1512,65 @@ enum input_pointers_flags
    INPUT_POINTERS_GUN_BUTTONS_BOUND = (1 << 6),
    /* ... and one bound to a mouse button reads the one mouse at every
     * port, whatever each port's Mouse Index */
-   INPUT_POINTERS_GUN_BUTTONS_EVERY_PORT = (1 << 7)
+   INPUT_POINTERS_GUN_BUTTONS_EVERY_PORT = (1 << 7),
+   /* A touch is pressed only inside what it is read against: as
+    * RETRO_DEVICE_POINTER or RARCH_DEVICE_POINTER_SECOND the viewport
+    * or its window's screens, as RARCH_DEVICE_POINTER_SCREEN the
+    * screen. Android reports no touch outside them. */
+   INPUT_POINTERS_PRESSED_INSIDE = (1 << 8),
+   /* Touches in a screen's own window are a second list,
+    * RARCH_DEVICE_POINTER_SECOND, in the order published, which the
+    * frontend reads after the main one; RETRO_DEVICE_POINTER,
+    * RARCH_DEVICE_POINTER_SCREEN and the lightgun have the main
+    * window's alone. Android's second display. */
+   INPUT_POINTERS_WINDOWS_SECOND = (1 << 9),
+   /* The driver answers the mouse itself, as RETRO_DEVICE_MOUSE and
+    * RARCH_DEVICE_MOUSE_SCREEN, and the lightgun's X and Y and, aimed
+    * by the mouse (no GUN_AT_TOUCH), its SCREEN_X and SCREEN_Y; the
+    * published mouse is for binds to its buttons. Android: its motion
+    * and wheel go with each read. */
+   INPUT_POINTERS_MOUSE_BY_DRIVER = (1 << 10),
+   /* A touch index is a slot that keeps its place when its finger
+    * lifts: an index with no touch reads 0 and no mouse stands for
+    * one; IS_OFFSCREEN is the touch's place in the viewport, read
+    * either way; the lightgun read at index n has touch n's
+    * IS_OFFSCREEN whatever aims it and, with GUN_AT_TOUCH, its aim.
+    * Android's. */
+   INPUT_POINTERS_TOUCH_SLOTS = (1 << 11),
+   /* A pointer id the frontend does not hold - Android's
+    * RARCH_DEVICE_ID_POINTER_BACK - is the driver's to answer; without
+    * this it reads 0 */
+   INPUT_POINTERS_POINTER_IDS_BY_DRIVER = (1 << 12)
 };
 
 /* From the driver's poll. @count devices, at most MAX_USERS.
  * @flags: enum input_pointers_flags. */
 void input_driver_publish_pointers(const input_pointer_frame_t *frames,
       unsigned count, unsigned flags);
+
+/* The frontend's own MAX_USERS frames: a driver with several mice
+ * writes them at its poll and publishes them, and nothing is copied. */
+input_pointer_frame_t *input_driver_pointers_lend(void);
+
+/* The window a device or a touch is in: 0 the main window, else a
+ * screen's own, with the generation it was made with. */
+typedef struct input_video_window
+{
+   unsigned window;
+   unsigned generation;
+} input_video_window_t;
+
+#ifdef HAVE_VIDEO_WINDOWS
+/* input_driver_publish_pointers() with each device's window. Its place
+ * is in that window, through the layout the window last published; a
+ * screen's window has no place on the main window's screen, and one
+ * that is gone places it off-screen. Motion and buttons are as they
+ * were. NULL @windows: all in the main window. */
+void input_driver_publish_window_pointers(
+      const input_pointer_frame_t *frames,
+      const input_video_window_t *windows,
+      unsigned count, unsigned flags);
+#endif
 
 /* The viewport as of this poll: asked of the video driver the first
  * time it is wanted after a poll, and that answer given until the
@@ -1444,13 +1592,41 @@ bool input_driver_poll_viewport(struct video_viewport *vp);
 unsigned input_driver_pointer_read_as(unsigned i);
 
 /* A driver with a touchscreen, with the mice, in its poll. For each of
- * @count places, at most 16: where the contact is in the window, as
+ * @count places, at most 32: where the contact is in the window, as
  * VIDEO_POS_PACK; a bit in @present if there is a contact there at
  * all; a bit in @down if it is pressed. The three are separate: a
  * contact at 0,0 is a contact, and one that has lifted may keep its
  * place (@present without @down). */
+/* Each touch's contact, as the touchscreen reports it, for touch @i
+ * of the driver's pointer: @contacts as OVERLAY_CONTACT_PACK(major,
+ * minor) in pixels, @angles its orientation in ten-thousandths of a
+ * radian, 0 upright and positive clockwise. From the driver's poll;
+ * none is had again until the next. For the overlay's D-pad and face
+ * buttons (input/common/overlay_contact.h). */
+/* @contacts and @angles are read where they are, and stay the driver's:
+ * they must last until its next poll. */
+void input_driver_publish_touch_contacts(const uint32_t *contacts,
+      const int16_t *angles, unsigned count);
+/* The frontend's own INPUT_TOUCHES_MAX places: a driver writes them at
+ * its poll and publishes them, and nothing is copied. */
+uint32_t *input_driver_touches_lend(void);
 void input_driver_publish_touches(const uint32_t *pos, unsigned count,
       unsigned present, unsigned down);
+
+#ifdef HAVE_VIDEO_WINDOWS
+/* The same with each place's window, as for the devices. */
+void input_driver_publish_window_touches(const uint32_t *pos,
+      const input_video_window_t *windows, unsigned count,
+      unsigned present, unsigned down);
+
+/* Touch @idx of those published in window @window (not 0) at this
+ * poll: its place over that window's whole client area, as
+ * RARCH_DEVICE_POINTER_SCREEN places one over the main window's, and
+ * whether it is down. False when there is no such touch, or the window
+ * has not shown (video_driver_window_shown()). App thread. */
+bool input_driver_window_touch(unsigned window, unsigned idx,
+      uint32_t *screen_pos, bool *down);
+#endif
 
 typedef struct input_pointer_view
 {
@@ -1467,7 +1643,7 @@ const input_pointer_view_t *input_driver_pointer_view(void);
  * down, @axes with each axis's position, @hats with the directions
  * held OR-ed in. @poll polls the joypad drivers first. */
 void input_driver_capture_pad(unsigned pad, bool poll,
-      bool *buttons, unsigned num_buttons,
+      input_bits_t *buttons, unsigned num_buttons,
       int16_t *axes, unsigned num_axes,
       uint16_t *hats, unsigned num_hats);
 
@@ -1679,6 +1855,21 @@ const char* config_get_hid_driver_options(void);
  **/
 const hid_driver_t *input_hid_init_first(void);
 
+/* The device number a HID driver's pad in @slot is known by: the slot
+ * itself where the HID driver is the joypad driver's, a number from
+ * the shared pool where it is a source beside it; -1 when there is
+ * none. Released when the pad goes. */
+int input_driver_hid_claim(const void *hid_data, unsigned slot,
+      const char *name, uint16_t vid, uint16_t pid);
+int input_driver_hid_number(const void *hid_data, unsigned slot);
+void input_driver_hid_release(const void *hid_data, unsigned slot);
+/* Whether the HID driver runs beside another joypad driver, which sees
+ * every pad Windows' own HID driver has: it takes only the pads nothing
+ * else can reach. */
+bool input_driver_hid_beside(const void *hid_data);
+/* A test's source beside the joypad driver, in place of the platform's. */
+void input_driver_beside_override(const hid_driver_t *drv);
+
 /**
  * Get a pointer to the HID driver data structure
  *
@@ -1856,17 +2047,126 @@ unsigned input_config_get_device_count(void);
 /**
  * input_config_sanitize_joypad_indices:
  *
- * Restores the invariant that settings->uints.input_joypad_index[]
- * is a permutation of [0, MAX_USERS): every player maps to a distinct
- * pad index, and every entry is in range.
- *
- * Entries are examined in ascending player order and the first
- * claimant of an index keeps it, so repairing a duplicate never takes
- * a pad away from a lower numbered player.
+ * Puts a player whose pad index is out of range on an index no player
+ * holds. Players sharing an index are left as they are.
  *
  * Returns true if the mapping had to be corrected.
  **/
 bool input_config_sanitize_joypad_indices(void);
+
+/* A port whose pad index a lower port also holds follows that port:
+ * @leader gets, for each of the MAX_USERS ports, the lowest port on
+ * its index. Code that moves controllers between ports moves only the
+ * leaders and then calls input_config_follow_shared_ports(). Returns
+ * how many ports follow another. */
+unsigned input_config_shared_ports(uint8_t *leader);
+void input_config_follow_shared_ports(const uint8_t *leader);
+
+/* Whether @s, a device as reservations and Plays As name one, starts
+ * with a hex "vid:pid" and then a space or its end: then @vid, @pid
+ * and, where not NULL, @name (what follows the space) are set. */
+bool input_config_parse_vid_pid(const char *s, unsigned long *vid,
+      unsigned long *pid, const char **name);
+
+/* Plays As: a controller's own player. MAX_USERS entries, each naming
+ * a controller as a reservation does ("vid:pid name") with its player,
+ * 0 for Auto; a connected controller takes the first entry naming it
+ * that no other has taken. Main thread. */
+/* The entry the controller in @slot took, or -1. */
+int input_config_plays_as_entry(unsigned slot);
+/* The controller in @slot's player: 0 Auto, else 1 and up. */
+unsigned input_config_plays_as_player(unsigned slot);
+/* Gives the controller in @slot player @player (0 Auto), taking an
+ * entry for it if it has none. False, with nothing changed, when it
+ * needs one and every entry is taken. */
+bool input_config_plays_as_set(unsigned slot, unsigned player);
+/* Entry @e's controller name, or NULL for a free entry; its player;
+ * whether a connected controller has taken it; and its player set. */
+const char *input_config_plays_as_entry_name(unsigned e);
+unsigned input_config_plays_as_entry_player(unsigned e);
+bool input_config_plays_as_entry_taken(unsigned e);
+void input_config_plays_as_set_entry(unsigned e, unsigned player);
+/* Whether any entry gives a player, within Max Users or past it, or a
+ * headset controller is connected on Auto (player 1). */
+bool input_config_plays_as_active(void);
+/* Whether any entry gives a player within Max Users, or a headset
+ * controller is connected on Auto (player 1). */
+bool input_config_plays_as_any_player(void);
+/* The player of a controller called @name, which has no vid:pid: the
+ * first entry naming it, on Auto 1 for the headset's, else 0. */
+unsigned input_config_plays_as_named(const char *name);
+/* Moves on whenever an entry's controller or player may have: a cache
+ * of input_config_plays_as_named() looks again when it does. */
+unsigned input_config_plays_as_generation(void);
+/* The controller in @slot takes its port: true when it was placed,
+ * false for one the reservations place. Only a connect (@connect)
+ * takes an entry, and one reported again keeps the entry it holds, so
+ * a controller holding one never moves onto an unplugged twin's. */
+bool input_config_plays_as_place(unsigned slot, bool connect);
+/* Max Users has changed: @again gets, for each of the MAX_USERS slots,
+ * whether its controller is placed again - one with no port below Max
+ * Users now, one whose player was above Max Users when controllers
+ * were last placed and is within it now, and the headset's. */
+void input_config_plays_as_max_users_changed(uint8_t *again);
+/* Into @players, by slot, each controller's player as it plays now, 0
+ * for none: taken before a config reload, for
+ * input_config_plays_as_reread(). */
+void input_config_plays_as_players(uint8_t *players);
+/* The entries and the ports were read again: @again gets, for each of
+ * the MAX_USERS slots, whether its controller is placed again - all of
+ * them where the reload read the configured ports over the moves, else
+ * those whose player is not @before's and, where Max Users changed,
+ * those with no port below it and the headset's; none with no player
+ * in effect either side, or while the joypad driver reports them after
+ * a restart. */
+void input_config_plays_as_reread(const uint8_t *before, uint8_t *again);
+/* The controller in @slot is gone. Its entry stays its own for the
+ * session, until a connect takes it. */
+void input_config_plays_as_release(unsigned slot);
+/* The user whose player user @user's controller plays as: the one it
+ * shares, else @user (also with no controller). */
+unsigned input_config_user_player(unsigned user);
+/* Where a controller plays, as the menu's rows show it. */
+enum input_plays_as_where
+{
+   INPUT_PLAYS_AS_GONE = 0,
+   INPUT_PLAYS_AS_NO_PORT,
+   INPUT_PLAYS_AS_ABOVE_MAX_USERS,
+   INPUT_PLAYS_AS_SHARING,
+   INPUT_PLAYS_AS_OWN_PORT
+};
+/* Where the controller in @slot plays: into @player the player it
+ * feeds, into @port the port its binds are on, both from 1, 0 for
+ * none. */
+enum input_plays_as_where input_config_plays_as_where(unsigned slot,
+      unsigned *player, unsigned *port);
+/* The lowest user below Max Users reading @slot, or MAX_USERS. */
+unsigned input_config_slot_user(unsigned slot);
+/* The controller in @slot's own button and axis for hotkey @id,
+ * NO_BTN and AXIS_NONE where it has none; set, taking an entry for it
+ * at its player if it has none (false when none is free); and hotkey
+ * @id taken from every entry. */
+void input_config_plays_as_hotkey(unsigned slot, unsigned id,
+      uint16_t *joykey, uint32_t *joyaxis);
+bool input_config_plays_as_set_hotkey(unsigned slot, unsigned id,
+      uint16_t joykey, uint32_t joyaxis);
+void input_config_plays_as_clear_hotkey(unsigned id);
+/* Hotkey @id's own buttons on the connected controllers that have one,
+ * each as MSG_INPUT_PLAYS_AS_OWN_BIND, into @s; the length written. */
+size_t input_config_plays_as_hotkey_string(unsigned id, char *s,
+      size_t len);
+/* The slots of the controllers that fire the hotkeys (on the hotkey
+ * port's core port), but user 1's own, as bits: a hotkey being bound
+ * listens to these too. */
+uint32_t input_config_hotkey_listen_slots(void);
+/* The user the hotkeys are read on: user 1, or with Hotkeys Follow
+ * Player 1 the first user on core port 1. */
+unsigned input_config_hotkey_user(void);
+/* Whether a pad's press binding hotkey @id is kept as the own bind of
+ * the controller in @slot: it has one for @id already, or it fires
+ * the hotkeys as neither user 1's pad nor the hotkey user's. False for
+ * any id that is not a hotkey. */
+bool input_config_hotkey_bind_own(unsigned slot, unsigned id);
 
 unsigned *input_config_get_device_ptr(unsigned port);
 
@@ -1953,11 +2253,18 @@ size_t input_config_get_device_name_size(unsigned port);
 
 unsigned input_driver_lightgun_id_convert(unsigned id);
 
-#ifdef HAVE_OPENXR
 /* The ports that read slot @a read slot @b, and the other way round,
  * for this run only: the config file keeps what the user set. */
 void input_driver_exchange_ports(unsigned a, unsigned b);
-#endif
+/* Whether the ports are as runtime moves left them; and, written
+ * directly since (a reserved device's placement), that they still are,
+ * so the config file keeps what the user set. */
+bool input_driver_ports_runtime(void);
+void input_driver_ports_runtime_moved(void);
+/* The menu gave @port another controller over runtime moves: the
+ * config file keeps it, the moves stay runtime, and no driver restart
+ * is owed for it. */
+void input_driver_ports_user_set(unsigned port);
 
 bool input_driver_pointer_is_offscreen(int16_t x, int16_t y);
 
@@ -2062,6 +2369,15 @@ size_t input_config_get_bind_string_joykey(
       char *s, const char *prefix,
       const struct retro_keybind *bind,
       const struct input_bind_label *label, size_t len);
+
+/* A bind's button and axis as the config file has them: "8", "h0up";
+ * "+1", "-2"; "nul" for none. Read into @joykey or @joyaxis (false,
+ * nothing changed, for an "h" with no hat number or direction, or an
+ * axis with no sign, or a sign alone), or written into @s. */
+bool input_config_parse_joykey(const char *s, uint16_t *joykey);
+bool input_config_parse_joyaxis(const char *s, uint32_t *joyaxis);
+void input_config_format_joykey(char *s, size_t len, uint16_t joykey);
+void input_config_format_joyaxis(char *s, size_t len, uint32_t joyaxis);
 
 bool input_key_pressed(int key, bool keyboard_pressed);
 
@@ -2233,6 +2549,14 @@ void bsv_movie_frame_rewind(input_driver_state_t *input_st);
 /* The replay is over: said by the code that reads it, which is handed
  * the replay and not the input state. */
 void bsv_movie_set_end(void);
+#ifdef HAVE_NETWORKING
+bsv_movie_t *input_driver_netplay_bsv_recording(void);
+void input_driver_netplay_bsv_stop(const char *reason, bool checkpoint_failed);
+bool input_driver_netplay_bsv_take_checkpoint(void);
+bool input_driver_netplay_bsv_next_frame(const void *state, size_t size,
+      bool forced);
+bool input_driver_bsv_stop_recording(void);
+#endif
 /* @checkpoint_interval and @checkpoint_deserialize are the two replay
  * settings, handed over by the run loop, which has them. */
 void bsv_movie_next_frame(input_driver_state_t *input_st,
@@ -2439,9 +2763,46 @@ size_t input_entry_target(unsigned number, char *s, size_t len);
  * second (0: at once); and set. */
 unsigned input_entry_hold(unsigned number);
 bool input_entry_set_hold(unsigned number, unsigned tenths);
+unsigned input_entry_depth(unsigned number);
+bool input_entry_set_depth(unsigned number, unsigned percent);
 size_t input_entry_spec(unsigned number, char *s, size_t len);
 /* The entries and macros written into a configuration to be saved. */
 void input_entries_write(void *conf);
+
+/* input_plays_as_device_N, input_plays_as_player_N and the entries'
+ * own hotkeys, input_plays_as_<hotkey>_btn_N and _axis_N, N from 1:
+ * the file's entries in place of the ones there are, and the ones
+ * there are written, keys an entry has no value for taken out. */
+void input_plays_as_read(void *conf);
+void input_plays_as_write(void *conf);
+/* A later file's entries over the ones there are, by controller, not
+ * by number: the file gives a controller it names all its entries, in
+ * its order, an Auto one with no hotkeys of its own taking it back to
+ * Auto; one it does not name keeps its own. */
+void input_plays_as_merge(void *conf);
+/* After the reload of the config and its overrides: a controller keeps
+ * or takes an entry it did not hold before the reload only where the
+ * reload added it for its model, so never an unplugged twin's. */
+void input_plays_as_hand_out(void);
+/* A copy of the entries and the claims on them, put back after a load
+ * made only to compare against, as the binds' copy is. NULL if there
+ * is no memory for it. */
+typedef struct input_plays_as_copy input_plays_as_copy_t;
+input_plays_as_copy_t *input_plays_as_copy_new(void);
+void input_plays_as_copy_restore(const input_plays_as_copy_t *copy);
+void input_plays_as_copy_free(input_plays_as_copy_t *copy);
+/* Into the override @conf, against the entries there are (the main
+ * config's, between the load made to compare against and the
+ * restore): all of each controller's entries in @copy where they
+ * differ, and Auto for one with entries there and none in @copy. */
+void input_plays_as_write_changed(void *conf,
+      const input_plays_as_copy_t *copy);
+
+/* The Plays As entries laid out as input_plays_as_write() writes them:
+ * each model's in start order at its own entries' places, with an Auto
+ * entry for an Auto pad ahead of another of its model. Called once the
+ * main configuration is saved, so reading it again gives each its own. */
+void input_plays_as_lay_out(void);
 
 /* Macros: buttons of the RetroPad pressed for a user a step at a time,
  * a step lasting a number of the core's frames; read from the

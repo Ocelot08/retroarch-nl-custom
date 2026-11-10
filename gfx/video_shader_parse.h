@@ -19,7 +19,10 @@
 
 #include <stdint.h>
 #include <stddef.h>
+#include <string.h>
 #include <boolean.h>
+#include <retro_atomic.h>
+#include <retro_inline.h>
 #include <retro_common_api.h>
 #include <retro_miscellaneous.h>
 #include <file/config_file.h>
@@ -124,10 +127,26 @@ struct gfx_fbo_scale
    uint8_t flags;
 };
 
+/* Whether @s, a pass's scale, is the viewport at 1.0 with no render
+ * target format of its own: as the last pass, such a pass draws the
+ * same image straight into the backbuffer as through a target of its
+ * own copied there. */
+#define GFX_FBO_SCALE_IS_VIEWPORT(s) ( \
+         ((s)->flags & (FBO_SCALE_FLAG_VALID | FBO_SCALE_FLAG_FP_FBO \
+            | FBO_SCALE_FLAG_SRGB_FBO | FBO_SCALE_FLAG_RGB10_FBO)) \
+            == FBO_SCALE_FLAG_VALID \
+      && (s)->type_x  == RARCH_SCALE_VIEWPORT \
+      && (s)->type_y  == RARCH_SCALE_VIEWPORT \
+      && (s)->scale_x == 1.0f \
+      && (s)->scale_y == 1.0f)
+
 struct video_shader_parameter
 {
    int pass;
-   float current;
+   /* The value it runs at: the float's bits, set by the frontend while
+    * the video thread reads it each frame. Through
+    * video_shader_param_get() and video_shader_param_set() only. */
+   retro_atomic_int_t current_bits;
    float minimum;
    float initial;
    float maximum;
@@ -135,6 +154,24 @@ struct video_shader_parameter
    char id[64];
    char desc[64];
 };
+
+static INLINE float video_shader_param_get(
+      const struct video_shader_parameter *p)
+{
+   int   bits = retro_atomic_load_relaxed_int(
+         (retro_atomic_int_t*)&p->current_bits);
+   float v;
+   memcpy(&v, &bits, sizeof(v));
+   return v;
+}
+
+static INLINE void video_shader_param_set(
+      struct video_shader_parameter *p, float v)
+{
+   int bits;
+   memcpy(&bits, &v, sizeof(bits));
+   retro_atomic_store_relaxed_int(&p->current_bits, bits);
+}
 
 struct rarch_dir_shader_list
 {
@@ -212,7 +249,29 @@ struct video_shader
    int64_t  param_src_size[GFX_MAX_SHADERS];
    uint32_t param_src_hash[GFX_MAX_SHADERS];
    unsigned param_src_count;
+   /* 0: legacy; 1/2/3: explicit SDR/PQ/scRGB final-pass encoding. */
+   unsigned hdr_mode;
+   /* The size slang's first pass is told its source has, packed as
+    * VIDEO_SCALE_PACK, or 0 for the real one. Taken from the settings
+    * when the preset is loaded. */
+   unsigned sim_source_dims;
 };
+
+static INLINE int video_shader_get_hdr_mode(const struct video_shader *shader)
+{
+   return shader && shader->passes && shader->hdr_mode
+      ? (int)shader->hdr_mode - 1 : -1;
+}
+
+static INLINE bool video_shader_hdr_output_compatible(
+      const struct video_shader *shader, unsigned active_hdr_mode)
+{
+   int mode = video_shader_get_hdr_mode(shader);
+   return mode <= 0 || (unsigned)mode == active_hdr_mode;
+}
+
+bool video_shader_check_hdr_output(
+      const struct video_shader *shader, unsigned output_mode);
 
 /**
  * video_shader_resolve_parameters:
@@ -385,7 +444,9 @@ bool video_shader_source_ident_is_slang(const char *ident);
 enum video_shader_cache_kind
 {
    VIDEO_SHADER_CACHE_SPIRV = 0,
-   VIDEO_SHADER_CACHE_ORBIS_BINARY
+   VIDEO_SHADER_CACHE_ORBIS_BINARY,
+   /* The Vulkan driver's VkPipelineCache blob, one entry per GPU */
+   VIDEO_SHADER_CACHE_VULKAN_PIPELINE
 };
 
 /* A cache entry's bytes, read-only, until video_shader_cache_unmap() */

@@ -48,15 +48,21 @@ typedef struct openxr_runtime
    PFN_xrDestroyInstance DestroyInstance;
    PFN_xrEnumerateDisplayRefreshRatesFB EnumerateDisplayRefreshRatesFB;
    PFN_xrRequestDisplayRefreshRateFB RequestDisplayRefreshRateFB;
+   PFN_xrPerfSettingsSetPerformanceLevelEXT PerfSettingsSetPerformanceLevelEXT;
    XrInstance instance;
    XrSystemId system;
    XrEnvironmentBlendMode blend_mode;
    unsigned max_dim;          /* the largest swapchain side */
+   unsigned max_width;        /* the widest swapchain, 0 if not said */
    uint32_t rec_width;        /* one eye's recommended image width */
    uint32_t rec_height;       /* and its height */
    uint32_t max_layers;       /* the most layers a frame may end with */
    bool frame_controller;     /* XR_VALVE_frame_controller_interaction */
    bool refresh_ext;          /* XR_FB_display_refresh_rate */
+   bool palm_pose;            /* XR_EXT_palm_pose */
+   bool hand_tracking;        /* XR_EXT_hand_tracking. */
+   bool hand_data_source;     /* XR_EXT_hand_tracking_data_source */
+   bool perf_settings;        /* XR_EXT_performance_settings */
    openxr_runtime_platform_t platform;   /* set before create_instance */
    const char *binding_ext;
 } openxr_runtime_t;

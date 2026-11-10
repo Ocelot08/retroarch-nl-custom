@@ -25,7 +25,8 @@
  * server back to check that the crtc is scanning out exactly the
  * timing the engine produced. Then a second switch, then restore and
  * close, and the server must be back on its desktop mode with the
- * generated modes gone.
+ * generated modes gone. Then the csync key on the wire, and how a
+ * same-named RA mode already on the server is treated.
  *
  * Needs an X server whose RandR implementation honours XRRCreateMode
  * on an output: an Xorg 'dummy' driver server does, Xvfb does not (it
@@ -193,6 +194,19 @@ static int test_head_selection(Display *dpy, video_modeline_ops_t *ops,
    {
       fprintf(stderr, "FAIL: open(auto) bound a head with no desktop mode\n");
       return 1;
+   }
+   {
+      unsigned dims = 0;
+      char name[64] = {0};
+      dispserv_x11.get_video_output_size(data, &dims, name, sizeof(name));
+      if (dims != modes[i].dims || strcmp(name, under))
+      {
+         fprintf(stderr, "FAIL: window output identity/geometry %s %ux%u\n",
+               name, VIDEO_SCALE_W(dims), VIDEO_SCALE_H(dims));
+         return 1;
+      }
+      printf("[pass] window output snapshot: %s %ux%u\n", name,
+            VIDEO_SCALE_W(dims), VIDEO_SCALE_H(dims));
    }
    printf("[pass] open(auto): head under the window (%s), desktop %dx%d\n",
          under, (int)VIDEO_SCALE_W(modes[i].dims),
@@ -572,6 +586,304 @@ fail:
    return 1;
 }
 
+static bool reject_next_media_mode;
+
+Status live_XRRSetCrtcConfig(Display *dpy, XRRScreenResources *res,
+      RRCrtc crtc, Time timestamp, int x, int y, RRMode mode,
+      Rotation rotation, RROutput *outputs, int noutput)
+{
+   if (reject_next_media_mode)
+   {
+      reject_next_media_mode = false;
+      mode = (RRMode)0xffffffff;
+   }
+   return XRRSetCrtcConfig(dpy, res, crtc, timestamp, x, y, mode,
+         rotation, outputs, noutput);
+}
+
+static int test_media_refresh(Display *dpy, void *data)
+{
+   XRRScreenResources *res;
+   XRROutputInfo *oi = NULL;
+   XRRCrtcInfo *ci = NULL;
+   XRRModeInfo timing;
+   RROutput output = 0;
+   RRMode added[2] = { 0, 0 };
+   res_state_t original, current;
+   void *lease = NULL;
+   int i, m, failed = 1;
+   if (res_read(dpy, &original) < 0)
+      return 1;
+   res = XRRGetScreenResourcesCurrent(dpy, DefaultRootWindow(dpy));
+   if (!res)
+      return 1;
+   memset(&timing, 0, sizeof(timing));
+   for (i = 0; i < res->noutput; i++)
+   {
+      oi = XRRGetOutputInfo(dpy, res, res->outputs[i]);
+      if (oi && oi->connection == RR_Connected && oi->crtc)
+         ci = XRRGetCrtcInfo(dpy, res, oi->crtc);
+      if (ci && ci->mode == original.id)
+      {
+         output = res->outputs[i];
+         break;
+      }
+      if (ci) XRRFreeCrtcInfo(ci);
+      if (oi) XRRFreeOutputInfo(oi);
+      ci = NULL;
+      oi = NULL;
+   }
+   for (m = 0; output && m < res->nmode; m++)
+      if (res->modes[m].id == original.id)
+      {
+         timing = res->modes[m];
+         break;
+      }
+   if (ci) XRRFreeCrtcInfo(ci);
+   if (oi) XRRFreeOutputInfo(oi);
+   XRRFreeScreenResources(res);
+   if (!output || !timing.hTotal || !timing.vTotal)
+      return 1;
+   for (i = 0; i < 2; i++)
+   {
+      double rate = i ? 48000.0 / 1001.0 : 48.0;
+      timing.name = i ? "RA-media-47952" : "RA-media-48";
+      timing.nameLength = (unsigned)strlen(timing.name);
+      timing.dotClock = (unsigned long)((double)timing.hTotal * timing.vTotal * rate + 0.5);
+      added[i] = XRRCreateMode(dpy, DefaultRootWindow(dpy), &timing);
+      if (!added[i])
+         goto done;
+      XRRAddOutputMode(dpy, output, added[i]);
+   }
+   XSync(dpy, False);
+   lease = dispserv_x11.begin_media_refresh(data, 24, 1);
+   if (!lease || res_expect(dpy, original.w, original.h, 48.0f,
+            "media chooses advertised 48 Hz")
+         || !dispserv_x11.media_refresh_current(data, lease, 24, 1)
+         || dispserv_x11.media_refresh_current(data, lease, 30, 1))
+      goto done;
+   dispserv_x11.end_media_refresh(data, lease);
+   lease = NULL;
+   if (res_expect(dpy, original.w, original.h, original.rate,
+            "media restores original mode"))
+      goto done;
+   reject_next_media_mode = true;
+   lease = dispserv_x11.begin_media_refresh(data, 24, 1);
+   if (lease || reject_next_media_mode || res_expect(dpy, original.w,
+            original.h, original.rate, "media protocol rejection leaves mode unchanged"))
+      goto done;
+   lease = dispserv_x11.begin_media_refresh(data, 24000, 1001);
+   if (!lease || res_expect(dpy, original.w, original.h, 48000.0f / 1001.0f,
+            "media chooses fractional refresh"))
+      goto done;
+   dispserv_x11.end_media_refresh(data, lease);
+   lease = dispserv_x11.begin_media_refresh(data, 24, 1);
+   if (!lease || !dispserv_x11.set_resolution(data, 0, 0,
+            48000.0f / 1001.0f, 0, 0, 0, 0))
+      goto done;
+   dispserv_x11.end_media_refresh(data, lease);
+   lease = NULL;
+   if (res_read(dpy, &current) < 0 || current.id != added[1])
+   {
+      fprintf(stderr, "FAIL: media restore clobbered an external mode change\n");
+      goto done;
+   }
+   failed = 0;
+   puts("[pass] media fractional refresh and conditional restoration on live Xorg");
+done:
+   if (lease)
+      dispserv_x11.end_media_refresh(data, lease);
+   if (!dispserv_x11.set_resolution(data, VIDEO_SCALE_PACK(original.w, original.h),
+            0, original.rate, 0, 0, 0, 0))
+      failed = 1;
+   for (i = 0; i < 2; i++)
+      if (added[i])
+      {
+         XRRDeleteOutputMode(dpy, output, added[i]);
+         XRRDestroyMode(dpy, added[i]);
+      }
+   XSync(dpy, False);
+   return failed;
+}
+
+/* An engine on the managed head, the way the CRT consumer opens one */
+static video_modeline_gen_t *live_engine(video_modeline_ops_t *ops,
+      void *data, const char *csync)
+{
+   video_modeline_disp_t ds;
+   video_modeline_gen_t *gen = modeline_gen_new();
+   if (!gen)
+      return NULL;
+   modeline_set_monitor(gen, "arcade_15");
+   if (csync)
+      modeline_set_option(gen, "csync", csync);
+   memset(&ds, 0, sizeof(ds));
+   strcpy(ds.screen, "auto");
+   if (!ops->open(data, &ds) || !modeline_list_init(gen, ops))
+   {
+      modeline_gen_free(gen);
+      return NULL;
+   }
+   return gen;
+}
+
+static void live_engine_end(video_modeline_ops_t *ops, void *data,
+      video_modeline_gen_t *gen)
+{
+   modeline_restore(gen, ops);
+   ops->close(data);
+   modeline_gen_free(gen);
+}
+
+static video_modeline_t *live_switch(video_modeline_gen_t *gen,
+      video_modeline_ops_t *ops)
+{
+   video_modeline_t *mode = modeline_get(gen, ops,
+         VIDEO_SCALE_PACK(320, 240), 60.0, 0);
+   if (!mode || !modeline_flush(gen, ops) || !modeline_set(gen, ops, mode))
+      return NULL;
+   return mode;
+}
+
+/* An RA-named mode on the server that this run did not create */
+static RRMode live_foreign_mode(Display *dpy, const video_modeline_t *m,
+      const char *name, int htotal_delta)
+{
+   XRRModeInfo xm;
+   char buf[64];
+   memset(&xm, 0, sizeof(xm));
+   strncpy(buf, name, sizeof(buf) - 1);
+   buf[sizeof(buf) - 1] = '\0';
+   xm.name       = buf;
+   xm.nameLength = (unsigned)strlen(buf);
+   xm.dotClock   = (unsigned long)m->pclock;
+   xm.width      = m->hactive;
+   xm.hSyncStart = m->hbegin;
+   xm.hSyncEnd   = m->hend;
+   xm.hTotal     = m->htotal + htotal_delta;
+   xm.height     = m->vactive;
+   xm.vSyncStart = m->vbegin;
+   xm.vSyncEnd   = m->vend;
+   xm.vTotal     = m->vtotal;
+   xm.modeFlags  = (m->interlace ? RR_Interlace : 0)
+      | (m->doublescan ? RR_DoubleScan : 0)
+      | (m->hsync ? RR_HSyncPositive : RR_HSyncNegative)
+      | (m->vsync ? RR_VSyncPositive : RR_VSyncNegative);
+   return XRRCreateMode(dpy, DefaultRootWindow(dpy), &xm);
+}
+
+static bool live_mode_listed(Display *dpy, RRMode id)
+{
+   int m;
+   bool found = false;
+   XRRScreenResources *res = XRRGetScreenResourcesCurrent(dpy,
+         DefaultRootWindow(dpy));
+   for (m = 0; res && m < res->nmode && !found; m++)
+      found = (res->modes[m].id == id);
+   if (res)
+      XRRFreeScreenResources(res);
+   return found;
+}
+
+/* The csync key reaches the wire, and a same-named RA mode already on
+ * the server is reused when its timing is identical (a leftover of
+ * an earlier session) and left alone when it is not. */
+static int test_csync_and_mode_names(Display *dpy,
+      video_modeline_ops_t *ops, void *data)
+{
+   live_state_t st;
+   video_modeline_gen_t *gen;
+   video_modeline_t *mode;
+   video_modeline_t plain;
+   char name[64];
+   RRMode foreign = 0;
+   int failed = 1;
+
+   /* Composite sync, negative */
+   if (!(gen = live_engine(ops, data, "negative")))
+      return 1;
+   mode = live_switch(gen, ops);
+   if (!mode || check_on_wire(dpy, mode, "320x240@60 csync negative")
+         || live_read(dpy, &st) < 0)
+      goto done_engine;
+   if ((st.flags & (RR_CSync | RR_CSyncNegative | RR_CSyncPositive))
+         != (RR_CSync | RR_CSyncNegative)
+         || !strstr(st.name, "-cn"))
+   {
+      fprintf(stderr, "FAIL: csync mode %s has flags %lx\n", st.name, st.flags);
+      goto done_engine;
+   }
+   printf("[pass] csync negative on the wire as %s\n", st.name);
+   live_engine_end(ops, data, gen);
+
+   /* The plain mode, for its name and timing */
+   if (!(gen = live_engine(ops, data, NULL)))
+      return 1;
+   mode = live_switch(gen, ops);
+   if (!mode || live_read(dpy, &st) < 0
+         || (st.flags & RR_CSync))
+   {
+      fprintf(stderr, "FAIL: plain 320x240 switch\n");
+      goto done_engine;
+   }
+   plain = *mode;
+   strcpy(name, st.name);
+   live_engine_end(ops, data, gen);
+
+   /* A leftover with the same name and timing is taken over */
+   foreign = live_foreign_mode(dpy, &plain, name, 0);
+   if (!(gen = live_engine(ops, data, NULL)))
+      goto done;
+   mode = live_switch(gen, ops);
+   if (!mode || (RRMode)mode->platform_data != foreign
+         || check_on_wire(dpy, mode, "leftover reused"))
+   {
+      fprintf(stderr, "FAIL: the identical leftover %s was not reused\n", name);
+      goto done_engine;
+   }
+   live_engine_end(ops, data, gen);
+   if (live_mode_listed(dpy, foreign) || live_read(dpy, &st) < 0
+         || st.ra_modes)
+   {
+      fprintf(stderr, "FAIL: the reused leftover outlived restore\n");
+      goto done;
+   }
+   foreign = 0;
+   printf("[pass] identical leftover %s reused and cleaned up\n", name);
+
+   /* Same name, other timing: a suffixed mode, the other one kept */
+   foreign = live_foreign_mode(dpy, &plain, name, 8);
+   if (!(gen = live_engine(ops, data, NULL)))
+      goto done;
+   mode = live_switch(gen, ops);
+   if (!mode || (RRMode)mode->platform_data == foreign
+         || check_on_wire(dpy, mode, "same name, other timing")
+         || live_read(dpy, &st) < 0
+         || strncmp(st.name, name, strlen(name)) || !strstr(st.name, "-1"))
+   {
+      fprintf(stderr, "FAIL: a same-named mode with other timing was taken (%s)\n",
+            st.name);
+      goto done_engine;
+   }
+   live_engine_end(ops, data, gen);
+   if (!live_mode_listed(dpy, foreign))
+   {
+      fprintf(stderr, "FAIL: restore destroyed a mode it did not create\n");
+      goto done;
+   }
+   printf("[pass] other timing under %s: own mode, theirs kept\n", name);
+   failed = 0;
+   goto done;
+
+done_engine:
+   live_engine_end(ops, data, gen);
+done:
+   if (foreign && live_mode_listed(dpy, foreign))
+      XRRDestroyMode(dpy, foreign);
+   XSync(dpy, False);
+   return failed;
+}
+
 int main(void)
 {
    Display *dpy;
@@ -738,7 +1050,13 @@ int main(void)
          XRRFreeScreenResources(res);
    }
 
+   if (test_csync_and_mode_names(dpy, &ops, data))
+      return 1;
+
    if (test_screen_resolution(dpy, data))
+      return 1;
+
+   if (test_media_refresh(dpy, data))
       return 1;
 
    dispserv_x11.destroy(data);

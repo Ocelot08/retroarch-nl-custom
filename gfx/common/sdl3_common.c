@@ -94,13 +94,39 @@ static void sdl3_window_save_position(SDL_Window *win)
    settings->uints.window_position_dims = VIDEO_SCALE_PACK(w, h);
 }
 
-void sdl3_pump_input_events(void)
+/* Events nothing reads, which would otherwise fill the queue */
+static void sdl3_flush_unread_events(void)
 {
+   SDL_FlushEvents(SDL_EVENT_TERMINATING,   SDL_EVENT_SYSTEM_THEME_CHANGED);
+#if SDL_VERSION_ATLEAST(3, 4, 0)
+   SDL_FlushEvents(SDL_EVENT_PINCH_BEGIN,   SDL_EVENT_PINCH_END);
+#endif
+   SDL_FlushEvent(SDL_EVENT_CLIPBOARD_UPDATE);
+   SDL_FlushEvents(SDL_EVENT_DROP_FILE,     SDL_EVENT_DROP_POSITION);
+   SDL_FlushEvents(SDL_EVENT_AUDIO_DEVICE_ADDED,
+         SDL_EVENT_AUDIO_DEVICE_FORMAT_CHANGED);
+   SDL_FlushEvents(SDL_EVENT_RENDER_TARGETS_RESET,
+         SDL_EVENT_RENDER_DEVICE_LOST);
+}
+
+bool sdl3_pump_input_events(void)
+{
+   /* The joypad and input polls run back to back: one backend round
+    * trip serves both. */
+   static Uint64 last_ns = 0;
+   Uint64 now_ns;
+
    /* Two threads pumping at once deadlock in the X11 backend. */
    if (     video_driver_thread_wrapper_active()
          && SDL_WasInit(SDL_INIT_VIDEO))
-      return;
+      return false;
+   now_ns = SDL_GetTicksNS();
+   if (last_ns && now_ns - last_ns < SDL_NS_PER_MS)
+      return true;
+   last_ns = now_ns;
    SDL_PumpEvents();
+   sdl3_flush_unread_events();
+   return true;
 }
 
 void sdl3_pump_window_events(bool *quit, bool *resize)
@@ -143,6 +169,8 @@ void sdl3_pump_window_events(bool *quit, bool *resize)
       SDL_FlushEvents(SDL_EVENT_FINGER_DOWN,      SDL_EVENT_FINGER_CANCELED);
       SDL_FlushEvents(SDL_EVENT_PEN_PROXIMITY_IN, SDL_EVENT_PEN_AXIS);
    }
+
+   sdl3_flush_unread_events();
 }
 
 void sdl3_set_handles(SDL_Window *window)
@@ -219,32 +247,58 @@ void sdl3_set_handles(SDL_Window *window)
    }
 }
 
-/* Moves the window to the provided 1-based monitor. If 0
- * is provided, leave as is. */
-static void sdl3_window_move_to_monitor(SDL_Window *win,
-      unsigned monitor_index)
+/* The display the 1-based @monitor_index names, or 0 for the index
+ * the system chooses - none configured, or one that is not there. */
+static SDL_DisplayID sdl3_monitor_display(unsigned monitor_index)
 {
    int count;
    SDL_DisplayID *displays;
    SDL_DisplayID display = 0;
 
-   if (!win || monitor_index == 0)
-      return;
+   if (monitor_index == 0)
+      return 0;
 
    displays = SDL_GetDisplays(&count);
    if (displays && (int)monitor_index <= count)
       display = displays[monitor_index - 1];
    SDL_free(displays);
 
+   return display;
+}
+
+/* Moves the window to the provided 1-based monitor. If 0
+ * is provided, leave as is. */
+static void sdl3_window_move_to_monitor(SDL_Window *win,
+      unsigned monitor_index)
+{
+   SDL_DisplayID display;
+
+   if (!win || monitor_index == 0)
+      return;
+
    /* Out-of-range index (e.g. the configured monitor was unplugged):
     * leave the window where the system placed it. */
-   if (display == 0)
+   if (!(display = sdl3_monitor_display(monitor_index)))
       return;
 
    SDL_SetWindowPosition(win,
          SDL_WINDOWPOS_CENTERED_DISPLAY(display),
          SDL_WINDOWPOS_CENTERED_DISPLAY(display));
    SDL_SyncWindow(win);
+}
+
+/* The display a window's size and mode are decided against: the one it
+ * is on once it exists - the user may have dragged it - and before
+ * that the configured monitor, which is where it is put. */
+static SDL_DisplayID sdl3_target_display(SDL_Window *win)
+{
+   SDL_DisplayID display;
+
+   if (win)
+      return SDL_GetDisplayForWindow(win);
+
+   display = sdl3_monitor_display(config_get_ptr()->uints.video_monitor_index);
+   return display ? display : SDL_GetPrimaryDisplay();
 }
 
 /* Creates the SDL3 window. */
@@ -262,11 +316,13 @@ static SDL_Window *sdl3_window_create(unsigned width, unsigned height,
       flags |= SDL_WINDOW_FULLSCREEN;
       /* Desktop full screen at the desktop's size: a window made
        * smaller is only grown by a window manager, and without one it
-       * keeps the size it was made at. */
-      if (settings->bools.video_windowed_fullscreen)
+       * keeps the size it was made at. The size is the configured
+       * monitor's, which is where the window goes below. So is a 0x0
+       * size's, which asks for the desktop's. */
+      if (settings->bools.video_windowed_fullscreen || !width || !height)
       {
          const SDL_DisplayMode *mode = SDL_GetDesktopDisplayMode(
-               SDL_GetPrimaryDisplay());
+               sdl3_target_display(NULL));
          if (mode)
          {
             width  = (unsigned)mode->w;
@@ -316,26 +372,39 @@ static void sdl3_window_apply_fullscreen(SDL_Window *win,
 {
    SDL_DisplayMode mode;
    settings_t *settings = config_get_ptr();
-   bool exclusive = fullscreen
+   SDL_DisplayID display = sdl3_target_display(win);
+   unsigned mode_w       = width;
+   unsigned mode_h       = height;
+   bool exclusive;
+
+   /* 0x0 asks for the desktop's size */
+   if (fullscreen && (!mode_w || !mode_h))
+   {
+      const SDL_DisplayMode *desktop = SDL_GetDesktopDisplayMode(display);
+      if (desktop)
+      {
+         mode_w = (unsigned)desktop->w;
+         mode_h = (unsigned)desktop->h;
+      }
+   }
+
+   exclusive = fullscreen
          && !settings->bools.video_windowed_fullscreen
-         && SDL_GetClosestFullscreenDisplayMode(
-               SDL_GetDisplayForWindow(win),
-               width, height,
+         && SDL_GetClosestFullscreenDisplayMode(display,
+               (int)mode_w, (int)mode_h,
                settings->floats.video_refresh_rate, false, &mode);
 
    SDL_SetWindowFullscreenMode(win, exclusive ? &mode : NULL);
    SDL_SetWindowFullscreen(win, fullscreen);
 
-   if (fullscreen)
-      SDL_HideCursor();
-   else
+   /* The cursor is the frontend's, applied through sdl3_show_mouse(). */
+   if (!fullscreen)
    {
       /* Leaving fullscreen is asynchronous, and size requests
        * are dropped while still fullscreen, so we wait until
        * it has completed. */
       SDL_SyncWindow(win);
       SDL_SetWindowSize(win, width, height);
-      SDL_ShowCursor();
    }
 }
 
@@ -370,11 +439,14 @@ void sdl3_window_get_video_size(SDL_Window *win,
       return;
    }
 
-   /* The window doesn't exist yet, so report the desktop size. */
+   /* The window doesn't exist yet, so report the desktop size, which
+    * a mode gives in points. */
    mode = SDL_GetCurrentDisplayMode(SDL_GetPrimaryDisplay());
    if (mode)
    {
-      *dims = VIDEO_SCALE_PACK(mode->w, mode->h);
+      float d = mode->pixel_density > 0.0f ? mode->pixel_density : 1.0f;
+      *dims   = VIDEO_SCALE_PACK((unsigned)(mode->w * d + 0.5f),
+            (unsigned)(mode->h * d + 0.5f));
    }
 }
 
@@ -428,6 +500,26 @@ void sdl3_ctx_input_driver(void *data,
       const char *name)
 {
    sdl3_input_driver(name);
+}
+
+bool sdl3_next_window_is_sdl3(void)
+{
+   /* The driver in front, and through it the context the drivers ask
+    * sdl3_ctx_enabled() about. A core's gl/glcore/vulkan request
+    * swaps the setting and keeps the user's choice in
+    * cached_driver_id, which sdl3_ctx_enabled() honours. A driver
+    * with no context driver (d3d*, metal, ...) never makes an SDL3
+    * window, whatever the context setting still says. */
+   const char *video = config_get_ptr()->arrays.video_driver;
+   if (string_is_equal(video, "sdl3"))
+      return true;
+   if (string_is_equal(video, "vulkan"))
+      return sdl3_ctx_enabled("vk_sdl3");
+   if (     string_is_equal(video, "gl")
+         || string_is_equal(video, "glcore")
+         || string_is_equal(video, "gl1"))
+      return sdl3_ctx_enabled("gl_sdl3");
+   return false;
 }
 
 bool sdl3_ctx_enabled(const char *ctx_ident)

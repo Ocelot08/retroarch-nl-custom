@@ -66,7 +66,7 @@
 #include "../../../configuration.h"
 #include "../../../retroarch.h"
 #include "../../../core_updater_list.h"
-#include "../../../play_feature_delivery/play_feature_delivery.h"
+#include "../../../os/android/play_feature_delivery.h"
 #include "../../../tasks/tasks_internal.h"
 
 #define NUM_CORES 8
@@ -106,6 +106,11 @@ static retro_atomic_int_t pfd_fail;
 static retro_atomic_int_t pfd_hold;
 /* Reported as already installed via play feature delivery */
 static retro_atomic_int_t pfd_installed;
+/* The install task watching the download, and how often it asked:
+ * like the JNI layer, the stand-in wakes the watcher when the status
+ * moves on, and the watcher parks in between. */
+static retro_atomic_int_t pfd_waiter;
+static retro_atomic_int_t pfd_status_asks;
 
 bool play_feature_delivery_enabled(void) { return true; }
 
@@ -132,9 +137,10 @@ bool play_feature_delivery_core_installed(const char *core_file)
    return retro_atomic_load_acquire_int(&pfd_installed) != 0;
 }
 
-bool play_feature_delivery_download(const char *core_file)
+bool play_feature_delivery_download(const char *core_file, uint32_t waiter)
 {
    (void)core_file;
+   retro_atomic_store_release_int(&pfd_waiter, (int)waiter);
    retro_atomic_fetch_add_int(&pfd_downloads, 1);
    return true;
 }
@@ -143,6 +149,7 @@ bool play_feature_delivery_download_status(
       enum play_feature_delivery_install_status *status,
       unsigned *progress)
 {
+   retro_atomic_fetch_add_int(&pfd_status_asks, 1);
    if (retro_atomic_load_acquire_int(&pfd_hold))
    {
       *status   = PLAY_FEATURE_DELIVERY_DOWNLOADING;
@@ -330,9 +337,22 @@ static void lane_cancel_during_install(bool threaded)
    CHECK(task_queue_find(&find_data),
          "install still pending after the switch retired");
 
+   /* Held for a while: the install parks between status updates */
+   retro_atomic_store_release_int(&pfd_status_asks, 0);
+   for (i = 0; i < 50; i++)
+   {
+      task_queue_check();
+      retro_sleep(1);
+   }
+   if (threaded)
+      CHECK(retro_atomic_load_acquire_int(&pfd_status_asks) <= 3,
+            "install waits parked between status updates");
+
    /* Now let the install finish; its callback runs after the switch
-    * task's handle is gone */
+    * task's handle is gone.  The status update wakes it, as Java's
+    * does. */
    retro_atomic_store_release_int(&pfd_hold, 0);
+   task_queue_wake((uint32_t)retro_atomic_load_acquire_int(&pfd_waiter));
    CHECK(pump_until_idle(5000), "install completed after the switch");
 
    lane_end();
@@ -430,6 +450,68 @@ static void lane_recovery(bool threaded, enum recovery_outcome outcome)
    lane_end();
 }
 
+/* A second core picked from the Core Downloader while one installs.
+ * It was turned away without a word - the pick did nothing. Held now,
+ * it installs once the first is through; the same core picked twice
+ * waits once. */
+static void lane_menu_picks_held(bool threaded)
+{
+   struct string_list *cores = NULL;
+   core_updater_list_t *list = NULL;
+   char name[3][64];
+   int i;
+
+   lane_begin(threaded, "cores picked during an install are held");
+   for (i = 0; i < 3; i++)
+      snprintf(name[i], sizeof(name[i]), "pfd%02d_libretro_android.so", i);
+
+   cores = play_feature_delivery_available_cores();
+   if (     !cores
+         || !(list = core_updater_list_init())
+         || !core_updater_list_parse_pfd_data(list, g_dir, g_dir, cores))
+   {
+      printf("  SKIP: could not create fixture\n");
+      string_list_free(cores);
+      core_updater_list_free(list);
+      lane_end();
+      return;
+   }
+   string_list_free(cores);
+
+   /* the first stays downloading until let go */
+   retro_atomic_store_release_int(&pfd_hold, 1);
+   CHECK(task_push_play_feature_delivery_core_install(list, name[0], true)
+         != NULL, "picks: the first install is pushed");
+   for (i = 0; i < 500 && !retro_atomic_load_acquire_int(&pfd_downloads); i++)
+   {
+      task_queue_check();
+      retro_sleep(1);
+   }
+   CHECK(task_push_play_feature_delivery_core_install(list, name[1], true)
+         != NULL, "picks: a second core during it is taken, not refused");
+   CHECK(task_push_play_feature_delivery_core_install(list, name[1], true)
+         == NULL, "picks: the same core picked again waits once");
+   CHECK(task_push_play_feature_delivery_core_install(list, name[2], true)
+         != NULL, "picks: a third core is taken too");
+   for (i = 0; i < 50; i++)
+   {
+      task_queue_check();
+      retro_sleep(1);
+   }
+   CHECK(retro_atomic_load_acquire_int(&pfd_downloads) == 1,
+         "picks: one install at a time");
+
+   retro_atomic_store_release_int(&pfd_hold, 0);
+   if (retro_atomic_load_acquire_int(&pfd_waiter))
+      task_queue_wake((uint32_t)retro_atomic_load_acquire_int(&pfd_waiter));
+   CHECK(pump_until_idle(5000), "picks: every install completes");
+   CHECK(retro_atomic_load_acquire_int(&pfd_downloads) == 3,
+         "picks: the held cores install once the first is through");
+
+   core_updater_list_free(list);
+   lane_end();
+}
+
 int main(void)
 {
    char cmd[128];
@@ -452,6 +534,7 @@ int main(void)
       lane_recovery(threaded != 0, INSTALL_FAILS);
       lane_recovery(threaded != 0, INSTALL_SUCCEEDS);
       lane_recovery(threaded != 0, ALREADY_INSTALLED);
+      lane_menu_picks_held(threaded != 0);
    }
 
    snprintf(cmd, sizeof(cmd), "rm -rf %s", g_dir);

@@ -73,6 +73,11 @@
 #include "../../../configuration.h"
 #include "../../../msg_hash.h"
 
+#if defined(_WIN32) && !defined(_XBOX) && !defined(__WINRT__)
+bool stub_win32_modal_active;
+bool win32_message_modal_active(void) { return stub_win32_modal_active; }
+#endif
+
 /* --- singletons --- */
 static char s_video_state[1 << 16];
 video_driver_state_t *video_state_get_ptr(void)
@@ -118,12 +123,14 @@ const char *font_driver_language_font_file(void) { return NULL; }
 
 void font_driver_bind_block(void *font_data, void *block)
 { (void)font_data; (void)block; }
-void font_driver_free(font_data_t *font) { (void)font; }
-
-/* Retiring a font for a deferred release. No frame clock here and
- * nothing owning a GPU atlas, so this is the same no-op as the free
- * above. */
-void font_driver_free_deferred(font_data_t *font) { (void)font; }
+/* Counted, so a test can tell a font freed here from one handed to
+ * its owner. No GPU atlas behind either. */
+unsigned stub_fonts_freed;
+unsigned stub_fonts_retired;
+void font_driver_free(font_data_t *font)
+{ if (font) stub_fonts_freed++; }
+void font_driver_free_deferred(font_data_t *font)
+{ if (font) stub_fonts_retired++; }
 
 /* Whether the font already loaded is the one being asked for.
  * gfx_display_font_file() below never produces one, so the honest
@@ -134,6 +141,13 @@ bool font_driver_matches(const font_data_t *font,
 { (void)font; (void)path; (void)size; return false; }
 
 /* --- display: signatures copied from gfx/gfx_display.h --- */
+void gfx_display_set_output_dims(gfx_display_t *p_disp,
+      unsigned output_dims)
+{ (void)p_disp; (void)output_dims; }
+unsigned gfx_display_output_dims(const gfx_display_t *p_disp,
+      unsigned video_dims)
+{ (void)p_disp; return video_dims; }
+float video_driver_ui_display_aspect(void) { return 0.0f; }
 void gfx_display_draw_quad(gfx_display_t *p_disp, void *data,
       unsigned video_dims,
       int x, int y, unsigned dims,
@@ -190,7 +204,11 @@ void gfx_display_draw(gfx_display_ctx_driver_t *dispctx,
 static gfx_display_t stub_disp;
 gfx_display_t *disp_get_ptr(void) { return &stub_disp; }
 
-void gfx_display_flush_batch(gfx_display_t *p_disp) { (void)p_disp; }
+int stub_media_startup_token;
+unsigned stub_widget_flushes;
+int menu_driver_media_startup_token(void) { return stub_media_startup_token; }
+void gfx_display_flush_batch(gfx_display_t *p_disp)
+{ (void)p_disp; stub_widget_flushes++; }
 
 void gfx_display_blend_begin(gfx_display_ctx_driver_t *dispctx, void *data)
 { (void)dispctx; (void)data; }
@@ -260,9 +278,15 @@ static settings_t s_settings;
 settings_t *config_get_ptr(void) { return &s_settings; }
 retro_time_t cpu_features_get_time_usec(void) { return 0; }
 void video_thread_status_text(const char *s) { (void)s; }
+bool video_driver_thread_wrapper_active(void) { return false; }
+bool video_thread_run_queued(custom_command_method_t func, void *data)
+{ (void)func; (void)data; return false; }
 
 /* --- video driver --- */
 uint32_t video_driver_get_disp_flags(void) { return 0; }
+unsigned video_frame_ui_layer_dims(const video_frame_info_t *video_info,
+      unsigned layer)
+{ (void)layer; return video_info->dims; }
 bool video_driver_get_viewport_info(struct video_viewport *vp)
 { (void)vp; return false; }
 void video_driver_monitor_reset(void) { }

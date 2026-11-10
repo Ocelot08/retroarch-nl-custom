@@ -42,6 +42,8 @@
 #include "../../ui/ui_companion_driver.h"
 
 #include "../menu_driver.h"
+#include "../menu_media_browser.h"
+#include "../menu_media_controls.h"
 #include "../menu_screensaver.h"
 
 #include "../../gfx/gfx_animation.h"
@@ -622,6 +624,12 @@ typedef struct materialui_handle
 {
    /* Pointer info */
    menu_input_pointer_t pointer;                      /* int64_t alignment */
+   menu_media_controls_t media;
+   gfx_thumbnail_t browser_thumbnail;
+   char browser_path[PATH_MAX_LENGTH];
+   char browser_directory[PATH_MAX_LENGTH];
+   char browser_name[PATH_MAX_LENGTH];
+   bool browser_suspended, browser_resume_paused;
    /* Use common tickers for all text
     * > Simplifies configuration and
     *   improves performance */
@@ -2012,10 +2020,57 @@ static const materialui_theme_t *materialui_get_theme(enum materialui_color_them
    return &materialui_theme_blue;
 }
 
+typedef struct
+{
+   uint16_t dst;   /* byte offset into materialui_colors_t */
+   uint8_t  src;   /* byte offset into materialui_theme_t  */
+   uint8_t  alpha;
+} materialui_color_map_t;
+
+#define MUI_COLOR_MAP(s, d, a) \
+   { (uint16_t)offsetof(materialui_colors_t, d), \
+     (uint8_t)offsetof(materialui_theme_t, s), (a) }
+
+typedef char materialui_color_map_src_check[
+   (sizeof(materialui_theme_t) <= 256) ? 1 : -1];
+
+static const materialui_color_map_t materialui_color_map[] = {
+   MUI_COLOR_MAP(sys_bar_background, sys_bar_background, 1),
+   MUI_COLOR_MAP(title_bar_background, title_bar_background, 1),
+   MUI_COLOR_MAP(list_background, list_background, 1),
+   MUI_COLOR_MAP(list_highlighted_background, list_highlighted_background, 1),
+   MUI_COLOR_MAP(nav_bar_background, nav_bar_background, 1),
+   MUI_COLOR_MAP(surface_background, surface_background, 1),
+   MUI_COLOR_MAP(thumbnail_background, thumbnail_background, 1),
+   MUI_COLOR_MAP(side_bar_background, side_bar_background, 1),
+   MUI_COLOR_MAP(status_bar_background, status_bar_background, 1),
+   MUI_COLOR_MAP(on_sys_bar, sys_bar_icon, 1),
+   MUI_COLOR_MAP(on_header, header_icon, 1),
+   MUI_COLOR_MAP(list_icon, list_icon, 1),
+   MUI_COLOR_MAP(list_switch_on, list_switch_on, 1),
+   MUI_COLOR_MAP(list_switch_on_background, list_switch_on_background, 1),
+   MUI_COLOR_MAP(list_switch_off, list_switch_off, 1),
+   MUI_COLOR_MAP(list_switch_off_background, list_switch_off_background, 1),
+   MUI_COLOR_MAP(nav_bar_icon_active, nav_bar_icon_active, 1),
+   MUI_COLOR_MAP(nav_bar_icon_passive, nav_bar_icon_passive, 1),
+   MUI_COLOR_MAP(nav_bar_icon_disabled, nav_bar_icon_disabled, 1),
+   MUI_COLOR_MAP(header_shadow, header_shadow, 0),
+   MUI_COLOR_MAP(landscape_border_shadow, landscape_border_shadow_left, 0),
+   MUI_COLOR_MAP(landscape_border_shadow, landscape_border_shadow_right, 0),
+   MUI_COLOR_MAP(status_bar_shadow, status_bar_shadow, 0),
+   MUI_COLOR_MAP(selection_marker_shadow, selection_marker_shadow_top, 0),
+   MUI_COLOR_MAP(selection_marker_shadow, selection_marker_shadow_bottom, 0),
+   MUI_COLOR_MAP(scrollbar, scrollbar, 1),
+   MUI_COLOR_MAP(divider, divider, 1),
+   MUI_COLOR_MAP(divider, entry_divider, 1),
+   MUI_COLOR_MAP(missing_thumbnail_icon, missing_thumbnail_icon, 1),
+};
+
 static void materialui_prepare_colors(
       materialui_handle_t *mui, enum materialui_color_theme color_theme)
 {
    const materialui_theme_t *current_theme = materialui_get_theme(color_theme);
+   size_t i;
 
    /* Parse theme colours */
 
@@ -2030,102 +2085,14 @@ static void materialui_prepare_colors(
    /* Disabled color */
    mui->colors.disabled_text              = (current_theme->list_text                  << 8) | 0x7F;
 
-   /* > Background colours */
-   hex32_to_rgba_normalized(
-            current_theme->sys_bar_background,
-            mui->colors.sys_bar_background, 1.0f);
-   hex32_to_rgba_normalized(
-            current_theme->title_bar_background,
-            mui->colors.title_bar_background, 1.0f);
-   hex32_to_rgba_normalized(
-            current_theme->list_background,
-            mui->colors.list_background, 1.0f);
-   hex32_to_rgba_normalized(
-            current_theme->list_highlighted_background,
-            mui->colors.list_highlighted_background, 1.0f);
-   hex32_to_rgba_normalized(
-            current_theme->nav_bar_background,
-            mui->colors.nav_bar_background, 1.0f);
-   hex32_to_rgba_normalized(
-            current_theme->surface_background,
-            mui->colors.surface_background, 1.0f);
-   hex32_to_rgba_normalized(
-            current_theme->thumbnail_background,
-            mui->colors.thumbnail_background, 1.0f);
-   hex32_to_rgba_normalized(
-            current_theme->side_bar_background,
-            mui->colors.side_bar_background, 1.0f);
-   hex32_to_rgba_normalized(
-            current_theme->status_bar_background,
-            mui->colors.status_bar_background, 1.0f);
-
-   /* > System bar + header icon colours */
-   hex32_to_rgba_normalized(
-            current_theme->on_sys_bar,
-            mui->colors.sys_bar_icon, 1.0f);
-   hex32_to_rgba_normalized(
-            current_theme->on_header,
-            mui->colors.header_icon, 1.0f);
-
-   /* > List icon colours */
-   hex32_to_rgba_normalized(
-            current_theme->list_icon,
-            mui->colors.list_icon, 1.0f);
-   hex32_to_rgba_normalized(
-            current_theme->list_switch_on,
-            mui->colors.list_switch_on, 1.0f);
-   hex32_to_rgba_normalized(
-            current_theme->list_switch_on_background,
-            mui->colors.list_switch_on_background, 1.0f);
-   hex32_to_rgba_normalized(
-            current_theme->list_switch_off,
-            mui->colors.list_switch_off, 1.0f);
-   hex32_to_rgba_normalized(
-            current_theme->list_switch_off_background,
-            mui->colors.list_switch_off_background, 1.0f);
-
-   /* > Navigation bar icon colours */
-   hex32_to_rgba_normalized(
-            current_theme->nav_bar_icon_active,
-            mui->colors.nav_bar_icon_active, 1.0f);
-   hex32_to_rgba_normalized(
-            current_theme->nav_bar_icon_passive,
-            mui->colors.nav_bar_icon_passive, 1.0f);
-   hex32_to_rgba_normalized(
-            current_theme->nav_bar_icon_disabled,
-            mui->colors.nav_bar_icon_disabled, 1.0f);
-
-   /* > Misc. colours */
-   hex32_to_rgba_normalized(
-            current_theme->header_shadow,
-            mui->colors.header_shadow, 0.0f);
-   hex32_to_rgba_normalized(
-            current_theme->landscape_border_shadow,
-            mui->colors.landscape_border_shadow_left, 0.0f);
-   hex32_to_rgba_normalized(
-            current_theme->landscape_border_shadow,
-            mui->colors.landscape_border_shadow_right, 0.0f);
-   hex32_to_rgba_normalized(
-            current_theme->status_bar_shadow,
-            mui->colors.status_bar_shadow, 0.0f);
-   hex32_to_rgba_normalized(
-            current_theme->selection_marker_shadow,
-            mui->colors.selection_marker_shadow_top, 0.0f);
-   hex32_to_rgba_normalized(
-            current_theme->selection_marker_shadow,
-            mui->colors.selection_marker_shadow_bottom, 0.0f);
-   hex32_to_rgba_normalized(
-            current_theme->scrollbar,
-            mui->colors.scrollbar, 1.0f);
-   hex32_to_rgba_normalized(
-            current_theme->divider,
-            mui->colors.divider, 1.0f);
-   hex32_to_rgba_normalized(
-            current_theme->divider,
-            mui->colors.entry_divider, 1.0f);
-   hex32_to_rgba_normalized(
-            current_theme->missing_thumbnail_icon,
-            mui->colors.missing_thumbnail_icon, 1.0f);
+   for (i = 0; i < ARRAY_SIZE(materialui_color_map); i++)
+   {
+      const materialui_color_map_t *m = &materialui_color_map[i];
+      hex32_to_rgba_normalized(
+            *(const uint32_t*)((const char*)current_theme + m->src),
+            (float*)((char*)&mui->colors + m->dst),
+            (float)m->alpha);
+   }
 
    /* Have to record nominal screen fade opacity,
     * since the actual value is set dynamically
@@ -2517,6 +2484,13 @@ static void materialui_update_fullscreen_thumbnail_label(
    size_t selection            = menu_st->selection_ptr;
    menu_entry_t selected_entry;
 
+   if (*mui->browser_path)
+   {
+      strlcpy(mui->fullscreen_thumbnail_label, mui->browser_name,
+            sizeof(mui->fullscreen_thumbnail_label));
+      return;
+   }
+
    /* Cache selected entry label
     * (used as menu title when fullscreen thumbnails
     * are shown) */
@@ -2863,6 +2837,14 @@ static void materialui_render_messagebox(
    int slice_y                = 0;
    int slice_w                = 0;
    int slice_h                = 0;
+   bool draw_selection = draw_caret && input_driver_keyboard_line_selected();
+   unsigned selection_first_line = 1;
+   float selection_color[16] = {
+      0.20f, 0.40f, 0.80f, 0.35f,
+      0.20f, 0.40f, 0.80f, 0.35f,
+      0.20f, 0.40f, 0.80f, 0.35f,
+      0.20f, 0.40f, 0.80f, 0.35f,
+   };
    unsigned cursor_line       = 0;
    int cursor_x               = 0;
    size_t wrapped_len         = 0;
@@ -2947,7 +2929,7 @@ static void materialui_render_messagebox(
       draw_caret = false;
 
       if (input && line_text
-            && ((menu_driver_get_current_time() / 500000) & 1))
+            && (draw_selection || ((menu_driver_get_current_time() / 500000) & 1)))
       {
          char cursor_src[MENU_LABEL_MAX_LENGTH];
          char cursor_msg[MENU_LABEL_MAX_LENGTH];
@@ -2963,6 +2945,17 @@ static void materialui_render_messagebox(
              * non-overlapping source and destination
              * buffers, so stage the source separately */
             memcpy(cursor_src, msg, len);
+            if (draw_selection)
+            {
+               cursor_src[len] = '\0';
+               (mui->word_wrap)(cursor_msg, sizeof(cursor_msg),
+                     cursor_src, len, usable_width / (int)mui->font_data.list.glyph_width,
+                     mui->font_data.list.wideglyph_width, 0);
+               selection_first_line = string_count_occurrences_single_character(
+                     cursor_msg, '\n');
+               if (!selection_first_line)
+                  selection_first_line = 1;
+            }
             memcpy(cursor_src + len, line_text, ptr);
             cursor_src[len + ptr] = '\0';
 
@@ -2984,7 +2977,7 @@ static void materialui_render_messagebox(
                   mui->font_data.list.font,
                   input, strlen(input), 1.0f);
 
-            draw_caret = true;
+            draw_caret = !draw_selection;
          }
       }
    }
@@ -3047,6 +3040,15 @@ static void materialui_render_messagebox(
    /* Print each line of the message */
    for (i = 0; i < line_count; i++)
    {
+      if (draw_selection && (unsigned)i >= selection_first_line && lengths[i] > 0)
+         gfx_display_draw_quad(p_disp, userdata, video_dims,
+               x - longest_width / 2.0f,
+               y + (i * mui->font_data.list.line_height),
+               VIDEO_SCALE_PACK(font_driver_get_message_width(
+                     mui->font_data.list.font, lines[i], lengths[i], 1.0f),
+                     mui->font_data.list.line_ascender),
+               video_dims, selection_color, NULL);
+
       if (lengths[i] > 0)
          gfx_display_draw_text(
                mui->font_data.list.font, lines[i],
@@ -3078,7 +3080,7 @@ static void materialui_render_messagebox(
             0.5f, 0.5f, 0.5f, 0.1f,
       };
       gfx_display_ctx_driver_t *dispctx      = p_disp->dispctx;
-      const char *str_back                   = msg_hash_to_str(MENU_ENUM_LABEL_VALUE_BASIC_MENU_CONTROLS_BACK);
+      const char *str_back                   = msg_hash_to_str(MENU_ENUM_LABEL_VALUE_BASIC_MENU_CONTROLS_CANCEL);
       const char *str_ok                     = msg_hash_to_str(MENU_ENUM_LABEL_VALUE_BASIC_MENU_CONTROLS_OK);
       unsigned str_back_width                = font_driver_get_message_width(mui->font_data.list.font, str_back, strlen(str_back), 1.0f);
       unsigned str_ok_width                  = font_driver_get_message_width(mui->font_data.list.font, str_ok, strlen(str_ok), 1.0f);
@@ -4334,6 +4336,108 @@ static void materialui_layout(
       settings_t *settings,
       bool video_is_threaded);
 
+static void materialui_hide_fullscreen_thumbnails(materialui_handle_t *mui, bool animate);
+
+static void materialui_show_fullscreen_thumbnails(materialui_handle_t *data,
+      struct menu_state *menu_st, size_t selection);
+
+static void materialui_media_settings_show(void *user)
+{
+   struct menu_state *menu_st = menu_state_get_ptr();
+   materialui_handle_t *mui = (materialui_handle_t*)user;
+   materialui_show_fullscreen_thumbnails(mui, menu_st, menu_st->selection_ptr);
+   mui->flags |= MUI_FLAG_NEED_COMPUTE;
+}
+
+static void materialui_media_settings_hide(void *user)
+{
+   materialui_handle_t *mui = (materialui_handle_t*)user;
+   materialui_hide_fullscreen_thumbnails(mui, false);
+   mui->flags |= MUI_FLAG_NEED_COMPUTE;
+}
+
+static void materialui_browser_update(materialui_handle_t *mui,
+      struct menu_state *menu_st, bool open_history)
+{
+   file_list_t *list = menu_st->entries.list
+      ? MENU_LIST_GET_SELECTION(menu_st->entries.list, 0) : NULL;
+   file_list_t *stack = menu_st->entries.list
+      ? MENU_LIST_GET(menu_st->entries.list, 0) : NULL;
+   const char *directory = NULL, *name = NULL;
+   char history_dir[DIR_MAX_LENGTH];
+   gfx_media_playback_state_t state;
+   if (menu_media_controls_settings_active(&mui->media))
+   {
+      gfx_thumbnail_animate(&mui->browser_thumbnail, menu_driver_get_current_time());
+      return;
+   }
+   if ((mui->flags & MUI_FLAG_IS_FILE_LIST) && list && stack && stack->size
+         && menu_st->selection_ptr < list->size)
+   {
+      const struct item_file *item = &list->list[menu_st->selection_ptr];
+      enum image_type_enum type = image_texture_get_type(item->path);
+      if (item->type == FILE_TYPE_IMAGE || item->type == FILE_TYPE_IMAGEVIEWER
+            || type == IMAGE_TYPE_MP4 || type == IMAGE_TYPE_WEBM)
+      {
+         directory = stack->list[stack->size - 1].path;
+         name = item->path;
+      }
+   }
+   /* An image history entry is viewed while the viewer is open */
+   else if ((mui->flags & MUI_FLAG_IS_PLAYLIST)
+         && (open_history || (mui->flags & MUI_FLAG_SHOW_FULLSCREEN_THUMBNAILS))
+         && (name = menu_media_selected_history_image(menu_st)))
+   {
+      fill_pathname_basedir(history_dir, name, sizeof(history_dir));
+      directory = history_dir;
+      name = path_basename(name);
+   }
+   if (!directory || !*directory || !name || !*name)
+   {
+      if (*mui->browser_path)
+      {
+         gfx_thumbnail_reset(&mui->browser_thumbnail);
+         materialui_hide_fullscreen_thumbnails(mui, false);
+      }
+      mui->browser_path[0] = mui->browser_directory[0] = mui->browser_name[0] = '\0';
+      return;
+   }
+   if (!string_is_equal(directory, mui->browser_directory)
+         || !string_is_equal(name, mui->browser_name)
+         || mui->browser_thumbnail.status == GFX_THUMBNAIL_STATUS_UNKNOWN)
+   {
+      gfx_thumbnail_reset(&mui->browser_thumbnail);
+      mui->browser_suspended = false;
+      strlcpy(mui->browser_directory, directory, sizeof(mui->browser_directory));
+      strlcpy(mui->browser_name, name, sizeof(mui->browser_name));
+      fill_pathname_join_special(mui->browser_path, directory, name, sizeof(mui->browser_path));
+      gfx_thumbnail_request_file(mui->browser_path, &mui->browser_thumbnail,
+            config_get_ptr()->uints.gfx_thumbnail_upscale_threshold);
+   }
+   if (mui->flags & MUI_FLAG_SHOW_FULLSCREEN_THUMBNAILS)
+   {
+      if (mui->browser_suspended)
+      {
+         gfx_thumbnail_set_paused(&mui->browser_thumbnail, mui->browser_resume_paused,
+               menu_driver_get_current_time());
+         mui->browser_suspended = false;
+      }
+      gfx_thumbnail_animate(&mui->browser_thumbnail, menu_driver_get_current_time());
+   }
+   else if (!mui->browser_suspended && gfx_thumbnail_get_playback_state(
+            &mui->browser_thumbnail, menu_driver_get_current_time(), &state))
+   {
+      mui->browser_resume_paused = state.paused;
+      gfx_thumbnail_set_paused(&mui->browser_thumbnail, true, menu_driver_get_current_time());
+      mui->browser_suspended = true;
+   }
+}
+
+static bool materialui_get_selected_thumbnails(
+      materialui_handle_t *mui, size_t selection,
+      gfx_thumbnail_t **primary_thumbnail,
+      gfx_thumbnail_t **secondary_thumbnail);
+
 /* Called on each frame. We use this callback to:
  * - Determine current scroll position
  * - Determine index of first/last on-screen entries
@@ -4383,6 +4487,8 @@ static void materialui_render(void *data,
 
    if (!mui || !list)
       return;
+
+   menu_media_controls_settings_iterate(&mui->media);
 
    /* Check whether screen dimensions, menu scale
     * factor or layout optimisation settings have changed */
@@ -4448,7 +4554,8 @@ static void materialui_render(void *data,
       }
 
       if (mui->font_data.list.font && mui->font_data.hint.font)
-         materialui_compute_entries_box(mui, dims, header_height);
+         materialui_compute_entries_box(mui, mui->media.settings_open
+               ? VIDEO_SCALE_PACK(dims_w - dims_w / 4, dims_h) : dims, header_height);
 
       if (preserve)
       {
@@ -4484,6 +4591,25 @@ static void materialui_render(void *data,
 
    /* Read pointer state */
    menu_input_get_pointer_state(&mui->pointer);
+   materialui_browser_update(mui, menu_st, false);
+   {
+      gfx_thumbnail_t *primary = NULL, *secondary = NULL;
+      bool shown = (mui->flags & MUI_FLAG_SHOW_FULLSCREEN_THUMBNAILS)
+         && !(mui->flags & MUI_FLAG_SHOW_SCREENSAVER)
+         && !menu_input_dialog_get_display_kb();
+      if (shown)
+         materialui_get_selected_thumbnails(mui, menu_st->selection_ptr,
+               &primary, &secondary);
+      mui->media.settings_user = mui;
+      mui->media.settings_hide = materialui_media_settings_hide;
+      mui->media.settings_show = materialui_media_settings_show;
+      menu_media_controls_thumbnail(&mui->media, primary, secondary, shown,
+            dims_w > VIDEO_SCALE_W(mui->nav_bar_layout_dims)
+               ? dims_w - VIDEO_SCALE_W(mui->nav_bar_layout_dims) : 0,
+            dims_h > VIDEO_SCALE_H(mui->nav_bar_layout_dims)
+               ? dims_h - VIDEO_SCALE_H(mui->nav_bar_layout_dims) : 0,
+            &mui->pointer, menu_driver_get_current_time());
+   }
 
    /* If menu screensaver is active, update
     * screensaver and return */
@@ -7678,6 +7804,12 @@ static bool materialui_get_selected_thumbnails(
    struct menu_state   *menu_st = menu_state_get_ptr();
    menu_list_t *menu_list       = menu_st->entries.list;
 
+   if (*mui->browser_path)
+   {
+      *primary_thumbnail = *secondary_thumbnail = &mui->browser_thumbnail;
+      return true;
+   }
+
    /* Ensure selection is on screen
     * > Special case: When viewing 'desktop'-layout
     *   playlists skip this check, since thumbnails
@@ -7762,8 +7894,9 @@ static void materialui_show_fullscreen_thumbnails(
 
    /* Sanity check: Return immediately if this is a view
     * mode without thumbnails */
-   if (     (mui->list_view_type == MUI_LIST_VIEW_DEFAULT)
-         || (mui->list_view_type == MUI_LIST_VIEW_PLAYLIST))
+   if (!*mui->browser_path
+         && ((mui->list_view_type == MUI_LIST_VIEW_DEFAULT)
+            || (mui->list_view_type == MUI_LIST_VIEW_PLAYLIST)))
       return;
 
    /* Get thumbnails */
@@ -7790,7 +7923,13 @@ static void materialui_show_fullscreen_thumbnails(
    animation_entry.userdata     = NULL;
 
    /* Push animation */
-   gfx_animation_push(&animation_entry);
+   if (menu_driver_media_startup_token())
+   {
+      gfx_animation_kill_by_tag(&alpha_tag);
+      mui->fullscreen_thumbnail_alpha = 1.0f;
+   }
+   else
+      gfx_animation_push(&animation_entry);
 
    /* Enable fullscreen thumbnails */
    mui->fullscreen_thumbnail_selection = selection;
@@ -7856,6 +7995,18 @@ MUI_NOINLINE static void materialui_render_fullscreen_thumbnails(materialui_hand
 {
    unsigned video_width  = VIDEO_SCALE_W(video_dims);
    unsigned video_height = VIDEO_SCALE_H(video_dims);
+   int startup_token = menu_driver_media_startup_token();
+   if (startup_token
+         && (mui->flags & MUI_FLAG_SHOW_FULLSCREEN_THUMBNAILS)
+         && mui->fullscreen_thumbnail_alpha >= 0.9999f
+         && mui->browser_thumbnail.status == GFX_THUMBNAIL_STATUS_AVAILABLE
+         && mui->browser_thumbnail.alpha >= 0.9999f)
+      menu_driver_media_startup_ready(startup_token);
+
+   if (startup_token
+         && mui->browser_thumbnail.status == GFX_THUMBNAIL_STATUS_MISSING)
+      menu_driver_media_startup_ready(startup_token);
+
    /* Check whether fullscreen thumbnails are visible */
    if (mui->fullscreen_thumbnail_alpha > 0.0f)
    {
@@ -7885,8 +8036,9 @@ MUI_NOINLINE static void materialui_render_fullscreen_thumbnails(materialui_hand
        * mode without thumbnails
        * > Note: Baring inexplicable internal errors, this
        *   can never happen... */
-      if (     (mui->list_view_type == MUI_LIST_VIEW_DEFAULT)
-            || (mui->list_view_type == MUI_LIST_VIEW_PLAYLIST))
+      if (!*mui->browser_path
+         && ((mui->list_view_type == MUI_LIST_VIEW_DEFAULT)
+            || (mui->list_view_type == MUI_LIST_VIEW_PLAYLIST)))
          goto error;
 
       /* Get thumbnails */
@@ -7898,7 +8050,9 @@ MUI_NOINLINE static void materialui_render_fullscreen_thumbnails(materialui_hand
       show_primary_thumbnail =
             (primary_thumbnail->status != GFX_THUMBNAIL_STATUS_MISSING);
       show_secondary_thumbnail =
-               !(mui->flags & MUI_FLAG_SECONDARY_THUMBNAIL_BLOCKED)
+               !(mui->flags & MUI_FLAG_IS_FILE_LIST)
+            && !*mui->browser_path
+            && !(mui->flags & MUI_FLAG_SECONDARY_THUMBNAIL_BLOCKED)
             && (mui->flags & MUI_FLAG_SECONDARY_THUMBNAIL_ENABLED)
             && (secondary_thumbnail->status != GFX_THUMBNAIL_STATUS_MISSING);
 
@@ -8550,6 +8704,20 @@ static void materialui_frame(void *data, video_frame_info_t *video_info)
     *   of text */
    materialui_render_fullscreen_thumbnails(mui, p_disp, userdata,
          video_info->dims, header_height, selection);
+   menu_media_controls_draw(&mui->media, p_disp, userdata,
+         video_info->dims, mui->font_data.hint.font);
+   if (mui->media.view.settings_preview)
+   {
+      unsigned preview_width = video_width / 4;
+      unsigned preview_height = video_height / 4;
+      unsigned right = video_width > VIDEO_SCALE_W(mui->nav_bar_layout_dims)
+         ? video_width - VIDEO_SCALE_W(mui->nav_bar_layout_dims) : video_width;
+      gfx_thumbnail_draw(userdata, video_info->dims, &mui->browser_thumbnail,
+            (float)(right > preview_width ? right - preview_width : 0),
+            (float)(video_height - preview_height) / 2.0f,
+            VIDEO_SCALE_PACK(preview_width, preview_height), GFX_THUMBNAIL_ALIGN_CENTRE,
+            1.0f, 1.0f, NULL);
+   }
 
    /* Draw title + system bar */
    materialui_render_header(mui, tex_list, menu_st, menu_list,
@@ -9629,6 +9797,7 @@ static void *materialui_init(void **userdata, bool video_is_threaded)
    if (!(mui = (materialui_handle_t*)calloc(1, sizeof(materialui_handle_t))))
       goto error;
 
+   gfx_thumbnail_init_blank(&mui->browser_thumbnail);
    *userdata = mui;
 
    /* Get DPI/screen-size-aware base unit size for
@@ -9774,6 +9943,8 @@ static void materialui_free(void *data)
    if (!mui)
       return;
 
+   menu_media_controls_cancel(&mui->media);
+   gfx_thumbnail_reset(&mui->browser_thumbnail);
    materialui_free_textures(mui);
    materialui_context_bg_destroy(mui);
 
@@ -9824,7 +9995,9 @@ static void materialui_context_destroy(void *data)
    /* Signal the render path to stop using textures/fonts.
     * Under threaded video, materialui_frame() may be mid-render
     * on the video thread when this runs on the main thread. */
+   menu_media_controls_context_reset(&mui->media, true);
    mui->context_generation++;
+   gfx_thumbnail_reset(&mui->browser_thumbnail);
 
    /* Free standard menu textures */
    materialui_free_textures(mui);
@@ -10915,6 +11088,33 @@ static enum menu_action materialui_parse_menu_entry_action(
    enum menu_action new_action = action;
    struct menu_state *menu_st  = menu_state_get_ptr();
 
+   if (!(mui->flags & MUI_FLAG_SHOW_FULLSCREEN_THUMBNAILS)
+         && (((mui->flags & MUI_FLAG_IS_FILE_LIST)
+               && (action == MENU_ACTION_OK || action == MENU_ACTION_SELECT || action == MENU_ACTION_START)
+               && menu_media_selected_is_viewable(menu_st))
+            || ((mui->flags & MUI_FLAG_IS_PLAYLIST)
+               && action == MENU_ACTION_OK
+               && menu_media_selected_in_history(menu_st))))
+   {
+      materialui_browser_update(mui, menu_st, true);
+      if (*mui->browser_path)
+      {
+         materialui_show_fullscreen_thumbnails(mui, menu_st, menu_st->selection_ptr);
+         return MENU_ACTION_NOOP;
+      }
+   }
+
+   if ((mui->flags & MUI_FLAG_SHOW_FULLSCREEN_THUMBNAILS)
+         && menu_media_controls_action(&mui->media, action,
+            menu_driver_get_current_time()))
+      return MENU_ACTION_NOOP;
+   if ((mui->flags & MUI_FLAG_SHOW_FULLSCREEN_THUMBNAILS)
+         && action == MENU_ACTION_OK
+         && (((mui->flags & MUI_FLAG_IS_FILE_LIST)
+               && menu_media_selected_is_viewable(menu_st))
+            || ((mui->flags & MUI_FLAG_IS_PLAYLIST) && *mui->browser_path)))
+      return MENU_ACTION_NOOP;
+
    /* Scan user inputs */
    switch (action)
    {
@@ -11033,19 +11233,7 @@ static enum menu_action materialui_parse_menu_entry_action(
 
             if (mui->flags & MUI_FLAG_IS_PLAYLISTS_TAB)
             {
-               size_t selection_total     = menu_st->entries.list ? MENU_LIST_GET_SELECTION(menu_st->entries.list, 0)->size : 0;
-               size_t selection           = menu_st->selection_ptr;
-               size_t new_selection       = random_range(0, (unsigned)(selection_total - 1));
-               menu_entry_t entry_new;
-
-               MENU_ENTRY_INITIALIZE(entry_new);
-               menu_entry_get(&entry_new, 0, new_selection, NULL, false);
-               /* Keep randomizing until selection is a fresh playlist */
-               while (new_selection == selection || entry_new.type != FILE_TYPE_PLAYLIST_COLLECTION)
-               {
-                  new_selection = random_range(0, (unsigned)(selection_total - 1));
-                  menu_entry_get(&entry_new, 0, new_selection, NULL, false);
-               }
+               size_t new_selection = menu_playlists_tab_random_selection(selection);
 
                if (new_selection != selection)
                {
@@ -11373,6 +11561,14 @@ static int materialui_pointer_down(void *userdata,
    if (!mui)
       return -1;
 
+   if ((mui->flags & MUI_FLAG_SHOW_FULLSCREEN_THUMBNAILS)
+         && mui->media.controls.target.user)
+   {
+      gfx_media_controls_pointer(&mui->media.controls, (int)x, (int)y,
+            true, true, menu_driver_get_current_time());
+      return 0;
+   }
+
    /* Any active scroll animation would otherwise fight
     * direct list dragging */
    materialui_kill_scroll_animation(mui, menu_st);
@@ -11637,6 +11833,14 @@ static int materialui_pointer_up(void *userdata,
    /* Read cached size from mui rather than locking video_st via
     * video_driver_get_output_dims: mui->last_{width,height} is updated
     * every frame in materialui_render. */
+
+   if ((mui->flags & MUI_FLAG_SHOW_FULLSCREEN_THUMBNAILS)
+         && menu_media_controls_release(&mui->media, x, y,
+            menu_driver_get_current_time()))
+   {
+      menu_input->pointer.y_accel = 0.0f;
+      return 0;
+   }
 
    /* All input is ignored if user was previously
     * dragging the scrollbar */
@@ -12305,7 +12509,8 @@ static void materialui_list_insert(void *userdata,
                node->icon_type          = MUI_ICON_TYPE_INTERNAL;
             }
             else if (string_is_equal(label, MENU_ENUM_LABEL_CORE_INPUT_REMAPPING_OPTIONS_STR)
-                  || string_is_equal(label, MENU_ENUM_LABEL_INPUT_RETROPAD_BINDS_STR))
+                  || string_is_equal(label, MENU_ENUM_LABEL_INPUT_RETROPAD_BINDS_STR)
+                  || string_is_equal(label, MENU_ENUM_LABEL_INPUT_CONTROLLERS_STR))
             {
                node->icon_texture_index = MUI_TEXTURE_CONTROLS;
                node->icon_type          = MUI_ICON_TYPE_INTERNAL;
@@ -12542,6 +12747,7 @@ static void materialui_list_insert(void *userdata,
                   || string_is_equal(label, MENU_ENUM_LABEL_UPDATE_GLSL_SHADERS_STR)
                   || string_is_equal(label, MENU_ENUM_LABEL_UPDATE_SLANG_SHADERS_STR)
                   || string_is_equal(label, MENU_ENUM_LABEL_PLAYLIST_MANAGER_REFRESH_PLAYLIST_STR)
+                  || string_is_equal(label, MENU_ENUM_LABEL_PLAYLIST_MANAGER_REFRESH_ALL_PLAYLISTS_STR)
                   )
                   {
                      node->icon_texture_index = MUI_TEXTURE_UPDATER;
@@ -12584,6 +12790,7 @@ static void materialui_list_insert(void *userdata,
              * all this manually inside this menu driver */
             else if (
                      string_is_equal(label, MENU_ENUM_LABEL_MENU_FILE_BROWSER_SETTINGS_STR)
+                  || string_is_equal(label, MENU_ENUM_LABEL_MEDIA_PLAYER_SETTINGS_STR)
                   || string_is_equal(label, MENU_ENUM_LABEL_DRIVER_SETTINGS_STR)
                   || string_is_equal(label, MENU_ENUM_LABEL_VIDEO_SETTINGS_STR)
                   || string_is_equal(label, MENU_ENUM_LABEL_VIDEO_OUTPUT_SETTINGS_STR)
@@ -12593,6 +12800,7 @@ static void materialui_list_insert(void *userdata,
                   || string_is_equal(label, MENU_ENUM_LABEL_VIDEO_SCALING_SETTINGS_STR)
                   || string_is_equal(label, MENU_ENUM_LABEL_VIDEO_HDR_SETTINGS_STR)
                   || string_is_equal(label, MENU_ENUM_LABEL_VIDEO_STEREO_SETTINGS_STR)
+                  || string_is_equal(label, MENU_ENUM_LABEL_VIDEO_DLSS_NR_SETTINGS_STR)
                   || string_is_equal(label, MENU_ENUM_LABEL_AUDIO_SETTINGS_STR)
                   || string_is_equal(label, MENU_ENUM_LABEL_AUDIO_OUTPUT_SETTINGS_STR)
 #ifdef HAVE_MICROPHONE

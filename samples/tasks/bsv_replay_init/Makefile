@@ -20,6 +20,7 @@ SOURCES := bsv_replay_init_test.c \
            $(LIBRETRO_COMM_DIR)/compat/compat_strl.c \
            $(LIBRETRO_COMM_DIR)/compat/fopen_utf8.c \
            $(LIBRETRO_COMM_DIR)/encodings/encoding_rzstd.c \
+           $(LIBRETRO_COMM_DIR)/encodings/encoding_xxh64.c \
            $(LIBRETRO_COMM_DIR)/encodings/encoding_utf.c \
            $(LIBRETRO_COMM_DIR)/encodings/encoding_crc32.c \
            $(LIBRETRO_COMM_DIR)/features/features_cpu.c \
@@ -29,6 +30,7 @@ SOURCES := bsv_replay_init_test.c \
            $(LIBRETRO_COMM_DIR)/lists/string_list.c \
            $(LIBRETRO_COMM_DIR)/queues/task_queue.c \
            $(LIBRETRO_COMM_DIR)/rthreads/rthreads.c \
+           $(LIBRETRO_COMM_DIR)/rthreads/retro_eventcount.c \
            $(LIBRETRO_COMM_DIR)/streams/file_stream.c \
            $(LIBRETRO_COMM_DIR)/streams/interface_stream.c \
            $(LIBRETRO_COMM_DIR)/streams/memory_stream.c \
@@ -47,9 +49,28 @@ LDFLAGS += -lpthread -lm
 # on desktop builds.
 ifeq ($(STATESTREAM),1)
    SOURCES += $(REPO_ROOT)/input/bsv/uint32s_index.c \
+              $(LIBRETRO_COMM_DIR)/encodings/encoding_xxh3.c \
               $(REPO_ROOT)/libretro-db/rmsgpack.c \
               $(REPO_ROOT)/libretro-db/rmsgpack_dom.c
-   CFLAGS  += -DHAVE_STATESTREAM -I$(REPO_ROOT)/deps
+   CFLAGS  += -DHAVE_STATESTREAM
+endif
+
+# NETPLAY=1 exercises the recorder and the real rollback/confirmation loop
+# against the deterministic fixture, with the ordinary BSV reader on replay.
+ifeq ($(NETPLAY),1)
+   CFLAGS += -DHAVE_NETWORKING -DBSV_TEST_NETPLAY
+   BSV_NETPLAY_SRC := $(REPO_ROOT)/network/netplay/netplay_frontend.c
+   BSV_FRAGMENTS := netplay_bsv_recording.inc netplay_bsv_post.inc netplay_bsv_eligibility.inc netplay_bsv_frontend.inc
+   bsv_replay_init_test.o: $(BSV_FRAGMENTS) bsv_netplay_test.inc
+
+netplay_bsv_frontend.inc: $(REPO_ROOT)/input/input_driver.c
+	sed -n '/===== BEGIN netplay BSV frontend =====/,/===== END netplay BSV frontend =====/p' $< > $@
+netplay_bsv_recording.inc: $(BSV_NETPLAY_SRC)
+	sed -n '/===== BEGIN netplay BSV recording =====/,/===== END netplay BSV recording =====/p' $< > $@
+netplay_bsv_post.inc: $(BSV_NETPLAY_SRC)
+	sed -n '/===== BEGIN netplay BSV post frame =====/,/===== END netplay BSV post frame =====/p' $< > $@
+netplay_bsv_eligibility.inc: $(BSV_NETPLAY_SRC)
+	sed -n '/===== BEGIN netplay BSV eligibility =====/,/===== END netplay BSV eligibility =====/p' $< > $@
 endif
 
 CFLAGS += $(EXTRA_CFLAGS)
@@ -60,6 +81,8 @@ ifneq ($(SANITIZER),)
    CFLAGS  := -fsanitize=$(SANITIZER) -fno-omit-frame-pointer $(CFLAGS)
    LDFLAGS := -fsanitize=$(SANITIZER) $(LDFLAGS)
 endif
+
+.DEFAULT_GOAL := all
 
 all: $(TARGET)
 
@@ -94,6 +117,6 @@ sweep:
 
 clean:
 	rm -rf $(SAMPLE_OBJDIR)
-	rm -f $(TARGET) $(OBJS) $(TARGET).replay
+	rm -f $(TARGET) $(OBJS) $(TARGET).replay netplay_bsv_*.inc bsv_netplay_*.replay
 
 .PHONY: all sweep clean

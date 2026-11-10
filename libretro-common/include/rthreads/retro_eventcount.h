@@ -268,7 +268,8 @@ void retro_eventcount_commit_wait(retro_eventcount_t *ec, int key);
  *               polls.  A bound long enough to overflow the backend's
  *               own unit is clamped, never wrapped.
  *
- * As retro_eventcount_commit_wait(), bounded in time.
+ * As retro_eventcount_commit_wait(), bounded in time. Nonpositive bounds
+ * only check the epoch and close the registered wait.
  *
  * @return true if @ec was notified, false if the bound expired.  A
  * spurious early return reports true, so the caller's loop still owns
@@ -280,7 +281,7 @@ bool retro_eventcount_commit_wait_timeout(retro_eventcount_t *ec,
 /**
  * retro_eventcount_spin_iters:
  *
- * @return how many times a waiter spins on its flag word before it
+ * @return how many times a waiter polls eventcount state before it
  * commits to the kernel, as this build resolved it.  Zero on a
  * uniprocessor, where the spin is skipped.  For logs and benchmarks;
  * on Windows it is only meaningful after the first

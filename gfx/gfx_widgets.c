@@ -34,12 +34,16 @@
 #include "gfx_display.h"
 #include "gfx_widgets.h"
 #include "font_driver.h"
+#if defined(_WIN32) && !defined(_XBOX) && !defined(__WINRT__)
+#include "common/win32_common.h"
+#endif
 #ifdef HAVE_THREADS
 #include "video_thread_wrapper.h"
 #endif
 
 #ifdef HAVE_MENU
 #include "../menu/menu_defines.h"
+#include "../menu/menu_driver.h"
 #endif
 
 #include "../configuration.h"
@@ -61,6 +65,22 @@ static dispgfx_widget_t dispwidget_st = {0};
  * file behind the path is what changed. */
 static retro_atomic_int_t widget_fonts_reload = RETRO_ATOMIC_INT_INITIALIZER(0);
 static bool               widget_fonts_force  = false;
+
+#ifdef HAVE_THREADS
+/* Set by gfx_widgets_reload_assets(); taken by the worker's next step,
+ * which reloads the icons on its own thread */
+static retro_atomic_int_t widget_assets_reload = RETRO_ATOMIC_INT_INITIALIZER(0);
+/* Set by the worker when it has laid the widgets out again; taken by
+ * the main thread, whose frame time counter a relayout resets */
+static retro_atomic_int_t widget_relayout_done = RETRO_ATOMIC_INT_INITIALIZER(0);
+/* A teardown gfx_widgets_deinit_async() handed off: run on the main
+ * thread once the video thread has passed a fence queued behind the
+ * frame in flight. Main thread only, but the fence. */
+static bool               widget_teardown_due;
+static bool               widget_fence_posted;
+static bool               widget_init_retry;
+static retro_atomic_int_t widget_fence;
+#endif
 
 /* Recompute the layout variables that depend on whether widget icons
  * are loaded.  Called from gfx_widgets_layout() during context_reset,
@@ -252,7 +272,7 @@ static disp_widget_msg_t *gfx_widgets_pending_peek(dispgfx_widget_t *p_dispwidge
  * gone. */
 typedef struct gfx_widgets_task_cmd
 {
-   struct gfx_widgets_task_cmd *next;
+   mpsc_stack_node_t link;  /* first: the stack's, from push to drain */
    char     *title;
    char     *error;
    uintptr_t key;
@@ -274,47 +294,19 @@ static void gfx_widgets_task_cmd_push(dispgfx_widget_t *p_dispwidget,
       gfx_widgets_task_cmd_t *cmd)
 {
    retro_atomic_fetch_add_int(&p_dispwidget->task_cmds_count, 1);
-#ifdef RETRO_ATOMIC_HAS_PTR
-   {
-      void *head;
-      do
-      {
-         head      = retro_atomic_load_acquire_ptr(&p_dispwidget->task_cmds);
-         cmd->next = (gfx_widgets_task_cmd_t*)head;
-      } while (!retro_atomic_cas_ptr(&p_dispwidget->task_cmds, head, cmd));
-   }
-#else
-   gfx_widgets_state_lock();
-   cmd->next               = (gfx_widgets_task_cmd_t*)p_dispwidget->task_cmds;
-   p_dispwidget->task_cmds = cmd;
-   gfx_widgets_state_unlock();
-#endif
+   mpsc_stack_push(&p_dispwidget->task_cmds, &cmd->link);
 }
+
+#define TASK_CMD_NEXT(cmd) ((gfx_widgets_task_cmd_t*)(cmd)->link.next)
 
 /* Everything sent since the last call, oldest first. */
 static gfx_widgets_task_cmd_t *gfx_widgets_task_cmds_take(
       dispgfx_widget_t *p_dispwidget)
 {
-   gfx_widgets_task_cmd_t *cmd, *list = NULL;
-#ifdef RETRO_ATOMIC_HAS_PTR
-   if (!retro_atomic_load_relaxed_ptr(&p_dispwidget->task_cmds))
+   if (mpsc_stack_empty(&p_dispwidget->task_cmds))
       return NULL;
-   cmd = (gfx_widgets_task_cmd_t*)
-      retro_atomic_exchange_ptr(&p_dispwidget->task_cmds, NULL);
-#else
-   gfx_widgets_state_lock();
-   cmd                     = (gfx_widgets_task_cmd_t*)p_dispwidget->task_cmds;
-   p_dispwidget->task_cmds = NULL;
-   gfx_widgets_state_unlock();
-#endif
-   while (cmd)
-   {
-      gfx_widgets_task_cmd_t *next = cmd->next;
-      cmd->next                    = list;
-      list                         = cmd;
-      cmd                          = next;
-   }
-   return list;
+   return (gfx_widgets_task_cmd_t*)mpsc_stack_reverse(
+         mpsc_stack_drain(&p_dispwidget->task_cmds));
 }
 
 static void gfx_widgets_task_cmd_free(dispgfx_widget_t *p_dispwidget,
@@ -326,12 +318,27 @@ static void gfx_widgets_task_cmd_free(dispgfx_widget_t *p_dispwidget,
    free(cmd);
 }
 
+/* Bumped by the widgets' owner whenever it loses what a task last
+ * sent it - a task widget freed, an update dropped or discarded - so
+ * the main thread sends the task's title again (see
+ * gfx_widgets_msg_queue_push()). Static, not in dispgfx_widget_t: it
+ * must not return to a value a task recorded when the widgets are
+ * cleared for a reinit. */
+static retro_atomic_int_t gfx_widgets_task_text_epoch;
+
+static void gfx_widgets_task_text_lost(void)
+{
+   retro_atomic_fetch_add_int(&gfx_widgets_task_text_epoch, 1);
+}
+
 static void gfx_widgets_task_cmds_discard(dispgfx_widget_t *p_dispwidget)
 {
    gfx_widgets_task_cmd_t *cmd = gfx_widgets_task_cmds_take(p_dispwidget);
+   if (cmd)
+      gfx_widgets_task_text_lost();
    while (cmd)
    {
-      gfx_widgets_task_cmd_t *next = cmd->next;
+      gfx_widgets_task_cmd_t *next = TASK_CMD_NEXT(cmd);
       gfx_widgets_task_cmd_free(p_dispwidget, cmd);
       cmd                          = next;
    }
@@ -344,6 +351,8 @@ static void gfx_widgets_task_cmds_discard(dispgfx_widget_t *p_dispwidget)
 static void gfx_widgets_task_pending_discard(dispgfx_widget_t *p_dispwidget)
 {
    unsigned i;
+   if (p_dispwidget->task_pending_size)
+      gfx_widgets_task_text_lost();
    for (i = 0; i < p_dispwidget->task_pending_size; i++)
    {
       disp_widget_msg_t *msg_widget = p_dispwidget->task_pending[i];
@@ -544,15 +553,21 @@ static void gfx_widgets_task_cmd_apply(dispgfx_widget_t *p_dispwidget,
        * its retirement, for a widget it may have had - spawns nothing,
        * and with no room to wait in the next update tries again */
       if (     !cmd->title
-            || (cmd->task_flags & RETRO_TASK_FLG_MUTE)
-            || p_dispwidget->task_pending_size
+            || (cmd->task_flags & RETRO_TASK_FLG_MUTE))
+         return;
+      /* The title is spent unused: the next update carries it again */
+      if (     p_dispwidget->task_pending_size
                >= ARRAY_SIZE(p_dispwidget->task_pending)
             || !(msg_widget = (disp_widget_msg_t*)calloc(1, sizeof(*msg_widget))))
+      {
+         gfx_widgets_task_text_lost();
          return;
+      }
 
       if (!(msg_widget->msg_new = strdup(*text)))
       {
          free(msg_widget);
+         gfx_widgets_task_text_lost();
          return;
       }
       msg_widget->msg              = *text;
@@ -684,7 +699,7 @@ static void gfx_widgets_task_cmds_apply(dispgfx_widget_t *p_dispwidget)
    gfx_widgets_task_cmd_t *cmd = gfx_widgets_task_cmds_take(p_dispwidget);
    while (cmd)
    {
-      gfx_widgets_task_cmd_t *next = cmd->next;
+      gfx_widgets_task_cmd_t *next = TASK_CMD_NEXT(cmd);
       gfx_widgets_task_cmd_apply(p_dispwidget, cmd);
       gfx_widgets_task_cmd_free(p_dispwidget, cmd);
       cmd                          = next;
@@ -748,10 +763,46 @@ void gfx_widgets_msg_queue_push(
    {
       task_progress_snapshot_t snapshot;
       gfx_widgets_task_cmd_t *cmd;
-      uintptr_t key = (uintptr_t)task->frontend_userdata;
+      uintptr_t key       = (uintptr_t)task->frontend_userdata;
+      /* Read before the snapshot: see task_get_text_gen() */
+      unsigned text_gen   = task_get_text_gen(task);
+      unsigned epoch      = (unsigned)retro_atomic_load_acquire_int(
+            &gfx_widgets_task_text_epoch);
+      /* The owner still has the text this key last carried: nothing
+       * of it was lost since, the task changed none of it, and the key
+       * is the one it went under, not a widget handed on to this task */
+      bool text_shown     = key
+            && task->frontend_shown_key      == key
+            && task->frontend_shown_text_gen == text_gen
+            && task->frontend_shown_epoch    == epoch;
+      bool text_copied    = false;
+      unsigned state;
 
-      /* Terminal flags are published even if copying a string fails. */
-      task_get_progress_snapshot(task, &snapshot);
+      if (text_shown)
+      {
+         /* Progress only, as most frames of a running task are: the
+          * strings are not copied, and an update that changes nothing
+          * is not sent. A finished task is always sent whole. */
+         snapshot.title    = NULL;
+         snapshot.error    = NULL;
+         snapshot.flags    = task_get_flags(task);
+         snapshot.progress = task_get_progress(task);
+         if (snapshot.flags & RETRO_TASK_FLG_FINISHED)
+            text_shown     = false;
+      }
+      /* Terminal flags are published even if copying a string fails;
+       * the text then counts as not sent */
+      if (!text_shown)
+         text_copied = task_get_progress_snapshot(task, &snapshot);
+
+      /* progress, flags, style and category: all a cmd carries besides
+       * the text, packed */
+      state = (unsigned)(uint8_t)snapshot.progress
+            | ((unsigned)snapshot.flags        <<  8)
+            | ((unsigned)(uint8_t)task->style  << 16)
+            | ((unsigned)(uint8_t)category     << 24);
+      if (text_shown && task->frontend_shown_state == state)
+         return;
 
       /* No widget to update and none to spawn; and progress, which is
        * sent again next frame, gives way when the owner is behind */
@@ -787,6 +838,15 @@ void gfx_widgets_msg_queue_push(
       cmd->style      = (uint8_t)task->style;
       cmd->progress   = snapshot.progress;
       gfx_widgets_task_cmd_push(p_dispwidget, cmd);
+
+      /* What the owner now has of the task */
+      task->frontend_shown_state = state;
+      if (!text_shown)
+      {
+         task->frontend_shown_key      = text_copied ? key : 0;
+         task->frontend_shown_text_gen = text_gen;
+         task->frontend_shown_epoch    = epoch;
+      }
    }
 }
 
@@ -862,6 +922,8 @@ static void gfx_widgets_msg_queue_free(
    {
       if (p_dispwidget->msg_queue_tasks_count > 0)
          p_dispwidget->msg_queue_tasks_count--;
+      if (msg->task_key)
+         gfx_widgets_task_text_lost();
    }
 
    /* Kill all animations */
@@ -1049,7 +1111,8 @@ void gfx_widgets_flush_text(
       return;
 
    if (font_data->font && font_data->font->renderer && font_data->font->renderer->flush)
-      font_data->font->renderer->flush(video_dims,
+      font_data->font->renderer->flush(
+            gfx_display_output_dims(disp_get_ptr(), video_dims),
             font_data->font->renderer_data);
    font_data->raster_block.carr.coords.vertices = 0;
    font_data->usage_count                       = 0;
@@ -1315,19 +1378,27 @@ static void gfx_widgets_layout(
    }
 }
 
-/* Relayout when the screen, the scale factor or the notification font
- * changes. It builds and retires fonts, which the font driver keeps on
- * the main thread, so it stays there when the threaded video worker
- * runs the rest of the widgets; it is rare, and holds the widget state
- * lock only for the relayout itself. */
-static INLINE void gfx_widgets_update_layout(
-      void *data_disp,
-      void *settings_data,
-      unsigned dims, bool fullscreen,
-      const char *dir_assets, char *font_path,
-      bool is_threaded)
+unsigned gfx_widgets_layout_dims(unsigned dims, float display_aspect)
 {
-   dispgfx_widget_t *p_dispwidget   = &dispwidget_st;
+   unsigned width  = VIDEO_SCALE_W(dims);
+   unsigned height = VIDEO_SCALE_H(dims);
+   unsigned layout_width;
+   if (display_aspect <= 0.0f || !height)
+      return dims;
+   layout_width    = (unsigned)(height * display_aspect + 0.5f);
+   /* Native modes, panels and other windows are left as they are */
+   if (layout_width * 2 > width)
+      return dims;
+   return VIDEO_SCALE_PACK(layout_width, height);
+}
+
+/* The scale the widgets lay out at, from the settings: worked out on
+ * the main thread, and carried to the threaded video worker in the
+ * frame (video_frame_info_t.widget_scale_factor) */
+float gfx_widgets_scale_factor(void *data_disp, void *settings_data,
+      unsigned dims, bool fullscreen)
+{
+   gfx_display_t *p_disp            = (gfx_display_t*)data_disp;
    /* c.f. https://gcc.gnu.org/bugzilla/show_bug.cgi?id=323
     * On some platforms (e.g. 32-bit x86 without SSE),
     * GCC can produce inconsistent floating point results
@@ -1337,7 +1408,6 @@ static INLINE void gfx_widgets_update_layout(
     * disables optimisations and removes excess precision
     * (https://gcc.gnu.org/bugzilla/show_bug.cgi?id=323#c87) */
    volatile float scale_factor      = 0.0f;
-   gfx_display_t *p_disp            = (gfx_display_t*)data_disp;
    settings_t *settings             = (settings_t*)settings_data;
 #ifdef HAVE_XMB
    enum menu_driver_id_type type    = p_disp->menu_driver_id;
@@ -1348,32 +1418,46 @@ static INLINE void gfx_widgets_update_layout(
       scale_factor                  = gfx_display_get_dpi_scale(
             p_disp,
             settings, dims, fullscreen, true);
+   return scale_factor;
+}
 
-   /* Check whether screen dimensions, menu scale factor or the
-    * notification font have changed. The font is watched here rather
-    * than from a settings callback because the rebuild needs the
-    * video driver up and the thread that drives it, which is what
-    * runs once a frame here. */
+/* Relayout when the screen, the scale factor or the notification font
+ * changes, on the thread that owns the widgets, which builds their
+ * fonts too. The font is watched here rather than from a settings
+ * callback because the rebuild needs the video driver up and the
+ * thread that drives it, which is what runs once a frame here. */
+static INLINE bool gfx_widgets_update_layout(
+      gfx_display_t *p_disp, float scale_factor,
+      unsigned dims, const char *dir_assets, char *font_path,
+      bool is_threaded)
+{
+   dispgfx_widget_t *p_dispwidget   = &dispwidget_st;
+#if defined(_WIN32) && !defined(_XBOX) && !defined(__WINRT__)
+   /* Keep live resizing out of font atlas construction. */
+   if (p_dispwidget->last_scale_factor > 0.0f && win32_message_modal_active())
+      scale_factor = p_dispwidget->last_scale_factor;
+#endif
+
+
    if ((scale_factor != p_dispwidget->last_scale_factor) ||
        (dims         != p_dispwidget->last_video_dims) ||
        !string_is_equal(p_dispwidget->last_font_path,
              font_path ? font_path : "") ||
        retro_atomic_load_acquire_int(&widget_fonts_reload))
    {
-      gfx_widgets_state_lock();
       p_dispwidget->last_scale_factor = scale_factor;
       p_dispwidget->last_video_dims   = dims;
       widget_fonts_force              = retro_atomic_cas_int(
             &widget_fonts_reload, 1, 0);
 
       /* Note: We don't need a full context reset here
-       * > Just rescale layout, and reset frame time counter */
+       * > Just rescale layout */
       gfx_widgets_layout(p_disp, p_dispwidget,
             is_threaded, dir_assets, font_path);
       widget_fonts_force              = false;
-      video_driver_monitor_reset();
-      gfx_widgets_state_unlock();
+      return true;
    }
+   return false;
 }
 
 /* Once a frame: the widgets' own iterate() and the message queue. On
@@ -1484,24 +1568,23 @@ void gfx_widgets_iterate(
       const char *dir_assets, char *font_path,
       bool is_threaded)
 {
-   gfx_widgets_state_lock();
-   gfx_widgets_update_layout(data_disp, settings_data, dims,
-         fullscreen, dir_assets, font_path, is_threaded);
+   dims = gfx_widgets_layout_dims(dims, video_driver_ui_display_aspect());
+   /* A relayout resets the frame time counter */
+   if (gfx_widgets_update_layout((gfx_display_t*)data_disp,
+            gfx_widgets_scale_factor(data_disp, settings_data, dims,
+               fullscreen),
+            dims, dir_assets, font_path, is_threaded))
+      video_driver_monitor_reset();
    gfx_widgets_iterate_frame(dims, fullscreen,
          dir_assets, font_path, is_threaded);
-   gfx_widgets_state_unlock();
 }
 
 #ifdef HAVE_THREADS
-void gfx_widgets_iterate_layout(
-      void *data_disp,
-      void *settings_data,
-      unsigned dims, bool fullscreen,
-      const char *dir_assets, char *font_path,
-      bool is_threaded)
+void gfx_widgets_iterate_main(void)
 {
-   gfx_widgets_update_layout(data_disp, settings_data, dims,
-         fullscreen, dir_assets, font_path, is_threaded);
+   if (     retro_atomic_load_relaxed_int(&widget_relayout_done)
+         && retro_atomic_cas_int(&widget_relayout_done, 1, 0))
+      video_driver_monitor_reset();
 }
 #endif
 
@@ -1806,7 +1889,7 @@ static void gfx_widgets_draw_task_msg(
             &p_dispwidget->gfx_widget_fonts.msg_queue);
       if (dispctx && dispctx->scissor_end)
          dispctx->scissor_end(userdata,
-               video_dims);
+               gfx_display_output_dims(p_disp, video_dims));
    }
 
    /* Progress text */
@@ -1967,6 +2050,15 @@ bool gfx_widgets_visible(void *data)
    bool widgets_is_slowmotion     = (video_flags & VIDEO_FLAG_WIDGETS_SLOWMOTION) != 0;
    bool widgets_is_rewinding      = (video_flags & VIDEO_FLAG_WIDGETS_REWINDING) != 0;
    bool notifications_hidden      = video_info->notifications_hidden || video_info->msg_queue_delay;
+
+   if (!video_info->widgets_active)
+      return false;
+#ifdef HAVE_THREADS
+   if (     !retro_atomic_load_acquire_int(&p_dispwidget->worker)
+         && p_dispwidget->video_st
+         && ((video_driver_state_t*)p_dispwidget->video_st)->thread_wrapper_active)
+      return false;
+#endif
 
 #ifdef HAVE_MENU
    if ((video_info->menu_st_flags & MENU_ST_FLAG_SCREENSAVER_ACTIVE))
@@ -2543,7 +2635,10 @@ static void gfx_widgets_frame_state(void *data)
    bool time_show                   = video_info->time_show;
    bool onscreen_panels             = fps_show || framecount_show || memory_show || core_status_msg_show || time_show;
    void *userdata                   = video_info->userdata;
-   unsigned video_width             = VIDEO_SCALE_W(video_info->dims);
+   unsigned output_dims             = video_info->dims;
+   unsigned layout_dims             = gfx_widgets_layout_dims(output_dims,
+         video_info->widget_display_aspect);
+   unsigned video_width             = VIDEO_SCALE_W(layout_dims);
    uint32_t video_flags             = video_info->video_st_flags;
    bool widgets_is_paused           = (video_flags & VIDEO_FLAG_WIDGETS_PAUSED) != 0;
    bool widgets_is_fastmotion       = (video_flags & VIDEO_FLAG_WIDGETS_FASTMOTION) != 0;
@@ -2590,7 +2685,14 @@ static void gfx_widgets_frame_state(void *data)
 
    if (video_st->current_video && video_st->current_video->set_viewport)
       video_st->current_video->set_viewport(
-            video_st->data, video_info->dims, true, false);
+            video_st->data, output_dims, true, false);
+
+   /* Laid out at layout_dims, stretched across the output */
+   if (layout_dims != output_dims)
+   {
+      video_info->dims = layout_dims;
+      gfx_display_set_output_dims(p_disp, output_dims);
+   }
 
    /* The overlay layout editor's bar, as last handed over whole */
    {
@@ -2643,9 +2745,11 @@ static void gfx_widgets_frame_state(void *data)
 
       if (video_driver_get_viewport_info(&content_vp) && VIDEO_SCALE_W(content_vp.dims) && VIDEO_SCALE_H(content_vp.dims))
       {
-         overlay_x      = VIDEO_POS_X(content_vp.pos);
+         overlay_x      = VIDEO_POS_X(content_vp.pos) * (int)video_width
+            / (int)VIDEO_SCALE_W(output_dims);
          overlay_y      = VIDEO_POS_Y(content_vp.pos);
-         overlay_width  = VIDEO_SCALE_W(content_vp.dims);
+         overlay_width  = VIDEO_SCALE_W(content_vp.dims) * video_width
+            / VIDEO_SCALE_W(output_dims);
          overlay_height = VIDEO_SCALE_H(content_vp.dims);
       }
       gfx_display_set_alpha(p_dispwidget->pure_white, 1.0f);
@@ -2891,9 +2995,12 @@ static void gfx_widgets_frame_state(void *data)
    font_driver_bind_block(p_dispwidget->gfx_widget_fonts.bold.font, NULL);
    font_driver_bind_block(p_dispwidget->gfx_widget_fonts.msg_queue.font, NULL);
 
+   video_info->dims = output_dims;
+   gfx_display_set_output_dims(p_disp, 0);
+
    if (video_st->current_video && video_st->current_video->set_viewport)
       video_st->current_video->set_viewport(
-            video_st->data, video_info->dims, false, true);
+            video_st->data, output_dims, false, true);
 }
 
 void gfx_widgets_frame(void *data)
@@ -2902,26 +3009,52 @@ void gfx_widgets_frame(void *data)
    dispgfx_widget_t *p_dispwidget = &dispwidget_st;
 #endif
 
-   gfx_widgets_state_lock();
 #ifdef HAVE_THREADS
    /* A frame the wrapper already had queued still says the widgets
     * are active. Once gfx_widgets_deinit() has taken the worker away
-    * from them - under this lock, before it frees the fonts - the
-    * fonts are not there to draw with; the frame's own flag is the
-    * main thread's word from before that. */
-   if (     !p_dispwidget->worker
+    * from them - the frames that saw it waited out, or fenced, before
+    * the teardown - the fonts are not there to draw with; the frame's
+    * own flag is the main thread's word from before that. */
+   if (     !retro_atomic_load_acquire_int(&p_dispwidget->worker)
          && p_dispwidget->video_st
          && ((video_driver_state_t*)p_dispwidget->video_st)->thread_wrapper_active)
-   {
-      gfx_widgets_state_unlock();
       return;
-   }
+#endif
+#ifdef HAVE_MENU
+   if (menu_driver_media_startup_token())
+      return;
 #endif
    gfx_widgets_frame_state(data);
-   gfx_widgets_state_unlock();
 
    /* Nothing gathered may still be waiting when the frame is over */
    gfx_display_flush_batch(disp_get_ptr());
+}
+
+void gfx_widgets_draw_idle_logo(void *data, uintptr_t texture)
+{
+   unsigned i, side;
+   float white[16];
+   video_frame_info_t *video_info = (video_frame_info_t*)data;
+   gfx_display_t *p_disp          = (gfx_display_t*)video_info->disp_userdata;
+   void *userdata                 = video_info->userdata;
+   unsigned width                 = VIDEO_SCALE_W(video_info->dims);
+   unsigned height                = VIDEO_SCALE_H(video_info->dims);
+
+   if (!texture || !p_disp || !p_disp->dispctx)
+      return;
+   side = ((width < height) ? width : height) / 4;
+   if (!side)
+      return;
+   for (i = 0; i < 16; i++)
+      white[i] = 1.0f;
+   gfx_display_blend_begin(p_disp->dispctx, userdata);
+   gfx_widgets_draw_icon(userdata, p_disp, video_info->dims,
+         VIDEO_SCALE_PACK(side, side), texture,
+         (float)(width - side) / 2.0f, (float)(height - side) / 2.0f,
+         0.0f, 1.0f, 0.0f, white);
+   gfx_display_blend_end(p_disp->dispctx, userdata);
+   /* Nothing gathered may still be waiting when the logo is done */
+   gfx_display_flush_batch(p_disp);
 }
 
 static void gfx_widgets_free(dispgfx_widget_t *p_dispwidget)
@@ -2968,10 +3101,6 @@ static void gfx_widgets_free(dispgfx_widget_t *p_dispwidget)
       free(msg);
       p_dispwidget->current_msgs[i] = NULL;
    }
-#ifdef HAVE_THREADS
-   slock_free(p_dispwidget->state_lock);
-   p_dispwidget->state_lock = NULL;
-#endif
 
    p_dispwidget->msg_queue_tasks_count = 0;
 
@@ -3028,11 +3157,13 @@ static void gfx_widgets_load_icons(dispgfx_widget_t *p_dispwidget)
    }
 }
 
+/* @layout: lay out here; otherwise the threaded video worker does, and
+ * builds the fonts, on its first step */
 static void gfx_widgets_context_reset(
       dispgfx_widget_t *p_dispwidget,
       gfx_display_t *p_disp,
       settings_t *settings,
-      bool is_threaded,
+      bool is_threaded, bool layout,
       unsigned dims, bool fullscreen,
       const char *dir_assets, char *font_path)
 {
@@ -3053,44 +3184,29 @@ static void gfx_widgets_context_reset(
 
    /* Update scaling/dimensions */
    p_dispwidget->last_video_dims      = dims;
-#ifdef HAVE_XMB
-   if (p_disp->menu_driver_id == MENU_DRIVER_ID_XMB)
-      p_dispwidget->last_scale_factor = gfx_display_get_widget_pixel_scale(
-            p_disp, settings, p_dispwidget->last_video_dims, fullscreen);
-   else
-#endif
-      p_dispwidget->last_scale_factor = gfx_display_get_dpi_scale(
-                     p_disp, settings, p_dispwidget->last_video_dims,
-                     fullscreen, true);
+   if (!layout)
+   {
+      p_dispwidget->last_scale_factor = 0.0f;
+      return;
+   }
+   p_dispwidget->last_scale_factor = gfx_widgets_scale_factor(p_disp,
+         settings, dims, fullscreen);
 
    gfx_widgets_layout(p_disp, p_dispwidget,
          is_threaded, dir_assets, font_path);
    video_driver_monitor_reset();
 }
 
-void gfx_widgets_reload_assets(void)
+/* The icons, and the widgets that load their own from the assets
+ * directory, reloaded on the thread that draws the widgets: none is
+ * mid-draw while a slot changes. Under the wrapper an unload is
+ * retired behind the frames that may still name the texture. */
+static void gfx_widgets_reload_assets_now(dispgfx_widget_t *p_dispwidget,
+      bool is_threaded, bool fullscreen, const char *dir_assets,
+      const char *font_path)
 {
-   dispgfx_widget_t *p_dispwidget = &dispwidget_st;
-   settings_t *settings           = config_get_ptr();
-   bool is_threaded               = false;
    size_t i;
 
-   if (     !p_dispwidget->active
-         || !(p_dispwidget->flags & DISPGFX_WIDGET_FLAG_INITED))
-      return;
-
-   /* The icons, and the widgets that load their own from the assets
-    * directory, are reloaded here under the state lock, which a frame
-    * drawing the widgets holds: none is mid-draw while a slot changes.
-    * Under the wrapper an unload is retired behind the frames that may
-    * still name the texture. */
-#ifdef HAVE_THREADS
-   if (p_dispwidget->video_st)
-      is_threaded = ((video_driver_state_t*)
-            p_dispwidget->video_st)->thread_wrapper_active;
-#endif
-
-   gfx_widgets_state_lock();
    gfx_widgets_load_icons(p_dispwidget);
 
    for (i = 0; i < ARRAY_SIZE(widgets); i++)
@@ -3099,10 +3215,7 @@ void gfx_widgets_reload_assets(void)
 
       /* The others hold live state (popups, badges, a screenshot)
        * that their context_destroy throws away. The load content
-       * animation is left out too: its reset loads the core icon
-       * synchronously, which under the wrapper waits on the video
-       * thread while this one holds the lock that thread draws the
-       * widgets under. It loads that icon again when it next runs. */
+       * animation loads its icon again when it next runs. */
       if (widget != &gfx_widget_volume)
          continue;
       if (widget->context_destroy)
@@ -3110,13 +3223,32 @@ void gfx_widgets_reload_assets(void)
       if (widget->context_reset)
          widget->context_reset(is_threaded,
                p_dispwidget->last_video_dims,
-               settings->bools.video_fullscreen,
-               settings->paths.directory_assets,
-               settings->paths.path_font,
+               fullscreen,
+               dir_assets,
+               (char*)font_path,
                p_dispwidget->monochrome_png_path,
                p_dispwidget->gfx_widgets_path);
    }
-   gfx_widgets_state_unlock();
+}
+
+void gfx_widgets_reload_assets(void)
+{
+   dispgfx_widget_t *p_dispwidget = &dispwidget_st;
+   settings_t *settings           = config_get_ptr();
+
+   if (     !p_dispwidget->active
+         || !(p_dispwidget->flags & DISPGFX_WIDGET_FLAG_INITED))
+      return;
+
+#ifdef HAVE_THREADS
+   if (retro_atomic_load_relaxed_int(&p_dispwidget->worker))
+      retro_atomic_store_release_int(&widget_assets_reload, 1);
+   else
+#endif
+      gfx_widgets_reload_assets_now(p_dispwidget, false,
+            settings->bools.video_fullscreen,
+            settings->paths.directory_assets,
+            settings->paths.path_font);
 
    /* Fonts are rebuilt by the next layout pass, on the thread that
     * drives the widgets, which retires the old ones */
@@ -3133,10 +3265,22 @@ bool gfx_widgets_init(
       const char *dir_assets, char *font_path)
 {
    size_t i;
+   bool worker                                 = false;
    dispgfx_widget_t *p_dispwidget              = &dispwidget_st;
    gfx_display_t *p_disp                       = (gfx_display_t*)data_disp;
    gfx_animation_t *p_anim                     = (gfx_animation_t*)data_anim;
    settings_t *settings                        = (settings_t*)settings_data;
+
+#ifdef HAVE_THREADS
+   /* Not over the teardown still waiting for the frame in flight:
+    * again once it has run (gfx_widgets_poll_teardown()) */
+   gfx_widgets_poll_teardown();
+   if (widget_teardown_due)
+   {
+      widget_init_retry = true;
+      return false;
+   }
+#endif
    p_dispwidget->divider_width_1px             = 1;
    p_dispwidget->gfx_widgets_generic_tag       = (uintptr_t)widgets_active_ptr;
 
@@ -3174,11 +3318,6 @@ bool gfx_widgets_init(
       memset(&p_dispwidget->current_msgs[0], 0, sizeof(p_dispwidget->current_msgs));
       p_dispwidget->current_msgs_size = 0;
 
-#ifdef HAVE_THREADS
-      retro_atomic_size_init(&p_dispwidget->state_owner, 0);
-      p_dispwidget->state_depth       = 0;
-      p_dispwidget->state_lock        = slock_new();
-#endif
 
       fill_pathname_join_special(
             p_dispwidget->gfx_widgets_path,
@@ -3222,21 +3361,26 @@ bool gfx_widgets_init(
       p_dispwidget->flags |= DISPGFX_WIDGET_FLAG_INITED;
    }
 
+#ifdef HAVE_THREADS
+   /* Under the threaded video wrapper the worker that draws the
+    * widgets also lays them out, building their fonts on its thread,
+    * and animates them */
+   p_dispwidget->video_st = video_state_get_ptr();
+   worker                 = ((video_driver_state_t*)
+         p_dispwidget->video_st)->thread_wrapper_active;
+#endif
+
    gfx_widgets_context_reset(
          p_dispwidget,
          p_disp,
          settings,
-         video_is_threaded,
+         video_is_threaded, !worker,
          dims, fullscreen,
          dir_assets, font_path);
 
 #ifdef HAVE_THREADS
-   /* Under the threaded video wrapper the worker that draws the
-    * widgets also animates and lays them out */
-   p_dispwidget->video_st = video_state_get_ptr();
-   p_dispwidget->worker   = ((video_driver_state_t*)
-         p_dispwidget->video_st)->thread_wrapper_active;
-   gfx_animation_widgets_own(p_dispwidget->worker);
+   gfx_animation_widgets_own(worker);
+   retro_atomic_store_release_int(&p_dispwidget->worker, worker ? 1 : 0);
 #endif
 
    return true;
@@ -3254,6 +3398,16 @@ static void gfx_widgets_font_free(gfx_widget_font_data_t *font_data)
    font_data->font        = NULL;
    font_data->usage_count = 0;
 }
+
+#ifdef HAVE_THREADS
+/* The video thread's fonts, handed back to it to free on its frames */
+static void gfx_widgets_font_retire(gfx_widget_font_data_t *font_data)
+{
+   font_driver_free_deferred(font_data->font);
+   font_data->font        = NULL;
+   font_data->usage_count = 0;
+}
+#endif
 
 static void gfx_widgets_context_destroy(dispgfx_widget_t *p_dispwidget)
 {
@@ -3297,18 +3451,9 @@ static void gfx_widgets_detach_tasks(dispgfx_widget_t *p_dispwidget)
 {
    size_t i;
 
-   /* Not displayed yet: discarded outright, with the updates nobody
-    * will apply. */
-   for (;;)
-   {
-      disp_widget_msg_t *msg_widget = gfx_widgets_pending_pop(p_dispwidget);
-
-      if (!msg_widget)
-         break;
-
-      gfx_widgets_msg_queue_free(p_dispwidget, msg_widget);
-      free(msg_widget);
-   }
+   /* Task updates not applied yet are discarded: nobody will apply
+    * them. The pending ring holds only plain messages, which wait for
+    * the next owner or for gfx_widgets_free(). */
    gfx_widgets_task_cmds_discard(p_dispwidget);
    gfx_widgets_task_pending_discard(p_dispwidget);
 
@@ -3323,26 +3468,28 @@ static void gfx_widgets_detach_tasks(dispgfx_widget_t *p_dispwidget)
          msg->flags |= DISPWIDG_FLAG_EXPIRED;
 
       msg->task_key = 0;
+      gfx_widgets_task_text_lost();
    }
 }
 
-void gfx_widgets_deinit(bool widgets_persisting)
+/* Main thread, with no frame drawing the widgets. @worker: they were
+ * the video thread's, and its fonts go back to it to free on its own
+ * frames. Then back to the main list: the tweens of widgets that
+ * persist carry on under whichever video comes up next, and freeing
+ * kills the rest where the widget code looks for them. */
+static void gfx_widgets_teardown(dispgfx_widget_t *p_dispwidget,
+      bool widgets_persisting, bool worker)
 {
-   dispgfx_widget_t *p_dispwidget = &dispwidget_st;
-
 #ifdef HAVE_THREADS
-   /* Back to the main list: the tweens of widgets that persist carry
-    * on under whichever video comes up next, and freeing kills the
-    * rest where the widget code looks for them. Under the state lock:
-    * a frame the worker is drawing finishes first, and every frame
-    * after it sees the worker gone (gfx_widgets_frame()) and draws no
-    * widgets, so the fonts freed below are read by nobody. The frames
-    * the wrapper still holds were queued while the widgets were
-    * active, and would otherwise draw with a font being freed. */
-   gfx_widgets_state_lock();
-   p_dispwidget->worker = false;
+   if (worker)
+   {
+      gfx_widgets_font_retire(&p_dispwidget->gfx_widget_fonts.regular);
+      gfx_widgets_font_retire(&p_dispwidget->gfx_widget_fonts.bold);
+      gfx_widgets_font_retire(&p_dispwidget->gfx_widget_fonts.msg_queue);
+   }
    gfx_animation_widgets_own(false);
-   gfx_widgets_state_unlock();
+#else
+   (void)worker;
 #endif
 
    gfx_widgets_detach_tasks(p_dispwidget);
@@ -3351,6 +3498,83 @@ void gfx_widgets_deinit(bool widgets_persisting)
 
    if (!widgets_persisting)
       gfx_widgets_free(p_dispwidget);
+}
+
+#ifdef HAVE_THREADS
+
+static uintptr_t gfx_widgets_fence(void *data)
+{
+   (void)data;
+   retro_atomic_store_release_int(&widget_fence, 1);
+   return 0;
+}
+
+bool gfx_widgets_poll_teardown(void)
+{
+   if (widget_teardown_due)
+   {
+      /* No wrapper: nothing draws them. A full queue: next frame. */
+      if (     !widget_fence_posted
+            &&  video_driver_thread_wrapper_active())
+         widget_fence_posted = video_thread_run_queued(
+               gfx_widgets_fence, NULL);
+      if (     widget_fence_posted
+            && !retro_atomic_load_acquire_int(&widget_fence))
+         return false;
+      if (!widget_fence_posted && video_driver_thread_wrapper_active())
+         return false;
+      widget_teardown_due = false;
+      widget_fence_posted = false;
+      gfx_widgets_teardown(&dispwidget_st, false, true);
+   }
+   if (!widget_init_retry)
+      return false;
+   widget_init_retry = false;
+   return true;
+}
+
+void gfx_widgets_deinit_async(void)
+{
+   dispgfx_widget_t *p_dispwidget = &dispwidget_st;
+
+   if (     widget_teardown_due
+         || !retro_atomic_load_relaxed_int(&p_dispwidget->worker))
+   {
+      gfx_widgets_deinit(false);
+      return;
+   }
+   /* Frames after the store draw no widgets; the one in flight may */
+   retro_atomic_store_release_int(&p_dispwidget->worker, 0);
+   retro_atomic_store_release_int(&widget_fence, 0);
+   widget_teardown_due = true;
+   widget_fence_posted = false;
+   gfx_widgets_poll_teardown();
+}
+#endif
+
+void gfx_widgets_deinit(bool widgets_persisting)
+{
+   dispgfx_widget_t *p_dispwidget = &dispwidget_st;
+   bool worker                    = false;
+
+#ifdef HAVE_THREADS
+   /* The caller has waited out the frame in flight: a handed off
+    * teardown runs now, and was the full one */
+   if (widget_teardown_due)
+   {
+      widget_teardown_due = false;
+      widget_fence_posted = false;
+      gfx_widgets_teardown(p_dispwidget, false, true);
+      return;
+   }
+   /* Every frame after the store sees the worker gone
+    * (gfx_widgets_frame()) and draws no widgets */
+   worker = retro_atomic_load_relaxed_int(&p_dispwidget->worker) != 0;
+   if (worker)
+      retro_atomic_store_release_int(&p_dispwidget->worker, 0);
+#endif
+
+   gfx_widgets_teardown(p_dispwidget, widgets_persisting, worker);
 }
 
 #ifdef HAVE_TRANSLATE
@@ -3426,14 +3650,26 @@ void gfx_widgets_worker_step(void *data,
    dispgfx_widget_t *p_dispwidget = &dispwidget_st;
    unsigned widget_dims;
 
-   if (!p_dispwidget->worker)
+   if (!retro_atomic_load_acquire_int(&p_dispwidget->worker))
       return;
 
-   /* Per-eye UI lays out at one eye's size. */
-   widget_dims = video_views_ui_dims(&video_info->views_layout,
-         video_info->dims);
+   /* At the notifications' window's size: one eye's for per-eye UI */
+   widget_dims = gfx_widgets_layout_dims(
+         video_frame_ui_layer_dims(video_info,
+            VIDEO_WINDOW_UI_NOTIFICATIONS),
+         video_info->widget_display_aspect);
 
-   gfx_widgets_state_lock();
+   if (gfx_widgets_update_layout(disp_get_ptr(),
+            video_info->widget_scale_factor, widget_dims,
+            video_info->widget_dir_assets,
+            (char*)video_info->widget_path_font, true))
+      retro_atomic_store_release_int(&widget_relayout_done, 1);
+   if (     retro_atomic_load_relaxed_int(&widget_assets_reload)
+         && retro_atomic_cas_int(&widget_assets_reload, 1, 0))
+      gfx_widgets_reload_assets_now(p_dispwidget, true,
+            video_info->fullscreen, video_info->widget_dir_assets,
+            video_info->widget_path_font);
+
    /* The panels' text, carried with the frame */
    if (status_text_len)
    {
@@ -3454,80 +3690,6 @@ void gfx_widgets_worker_step(void *data,
          video_info->widget_dir_assets,
          (char*)video_info->widget_path_font,
          true);
-   gfx_widgets_state_unlock();
-}
-
-void gfx_widgets_state_lock(void)
-{
-   dispgfx_widget_t *p_dispwidget = &dispwidget_st;
-   uintptr_t self;
-
-   if (     !p_dispwidget->state_lock
-         || !p_dispwidget->video_st
-         || !((video_driver_state_t*)
-               p_dispwidget->video_st)->thread_wrapper_active)
-      return;
-
-   self = sthread_get_current_thread_id();
-   if ((uintptr_t)retro_atomic_load_acquire_size(
-            &p_dispwidget->state_owner) == self)
-   {
-      p_dispwidget->state_depth++;
-      return;
-   }
-
-   slock_lock(p_dispwidget->state_lock);
-   retro_atomic_store_release_size(&p_dispwidget->state_owner, (size_t)self);
-   p_dispwidget->state_depth = 1;
-}
-
-void gfx_widgets_state_unlock(void)
-{
-   dispgfx_widget_t *p_dispwidget = &dispwidget_st;
-
-   /* Not the owner: the matching lock found the wrapper inactive */
-   if ((uintptr_t)retro_atomic_load_acquire_size(
-            &p_dispwidget->state_owner) != sthread_get_current_thread_id())
-      return;
-   if (--p_dispwidget->state_depth)
-      return;
-
-   retro_atomic_store_release_size(&p_dispwidget->state_owner, 0);
-   slock_unlock(p_dispwidget->state_lock);
-}
-
-/* For the threaded video wrapper, before this thread waits on the
- * worker: a draw blocked on the lock would never let the worker reach
- * the command. Returns the depth to hand back to resume, 0 if this
- * thread held nothing. */
-unsigned gfx_widgets_state_yield(void)
-{
-   dispgfx_widget_t *p_dispwidget = &dispwidget_st;
-   unsigned depth;
-
-   if (     !p_dispwidget->state_lock
-         || (uintptr_t)retro_atomic_load_acquire_size(
-            &p_dispwidget->state_owner) != sthread_get_current_thread_id())
-      return 0;
-
-   depth                     = p_dispwidget->state_depth;
-   p_dispwidget->state_depth = 0;
-   retro_atomic_store_release_size(&p_dispwidget->state_owner, 0);
-   slock_unlock(p_dispwidget->state_lock);
-   return depth;
-}
-
-void gfx_widgets_state_resume(unsigned depth)
-{
-   dispgfx_widget_t *p_dispwidget = &dispwidget_st;
-
-   if (!depth || !p_dispwidget->state_lock)
-      return;
-
-   slock_lock(p_dispwidget->state_lock);
-   retro_atomic_store_release_size(&p_dispwidget->state_owner,
-         (size_t)sthread_get_current_thread_id());
-   p_dispwidget->state_depth = depth;
 }
 #endif
 

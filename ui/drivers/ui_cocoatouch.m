@@ -14,6 +14,7 @@
  */
 
 #include <stdint.h>
+#include <math.h>
 #include "../../apple_runtime.h"
 #include <stddef.h>
 #include <stdlib.h>
@@ -252,18 +253,25 @@ bool ios_running_on_ipad(void)
 }
 
 /* Input helpers: This is kept here because it needs ObjC */
+/* Main thread only; the next layout pass applies the current settings */
+void cocoa_request_layout(void)
+{
+   [[CocoaView get].view setNeedsLayout];
+}
+
 static void handle_touch_event(NSArray* touches)
 {
 #if !TARGET_OS_TV
    unsigned i;
-   float scale               = cocoa_screen_get_native_scale();
+   UIView *renderView        = [apple_platform renderView];
+   float scale               = [renderView contentScaleFactor];
 
    cocoa_input_touches_begin();
 
    for (i = 0; i < touches.count; i++)
    {
       UITouch      *touch = [touches objectAtIndex:i];
-      CGPoint       coord = [touch locationInView:[touch view]];
+      CGPoint       coord = [touch locationInView:renderView];
       if (touch.phase != UITouchPhaseEnded && touch.phase != UITouchPhaseCancelled)
          if (!cocoa_input_touch_add((int16_t)(coord.x * scale),
                   (int16_t)(coord.y * scale)))
@@ -641,8 +649,8 @@ API_AVAILABLE(ios(13.0), tvos(13.0))
 
 - (void)scene:(UIScene *)scene willConnectToSession:(UISceneSession *)session options:(UISceneConnectionOptions *)connectionOptions {
    RetroArch_iOS *app = [RetroArch_iOS get];
-   app.window = [[UIWindow alloc] initWithWindowScene:(UIWindowScene *)scene];
-
+   app.window.windowScene = (UIWindowScene *)scene;
+   app.window.frame = ((UIWindowScene *)scene).coordinateSpace.bounds;
    [app.window makeKeyAndVisible];
 
    /* A URL that launched the app comes here, not to
@@ -787,6 +795,10 @@ API_AVAILABLE(ios(13.0), tvos(13.0))
       _renderView.userInteractionEnabled = YES;
    }
 #endif
+#if TARGET_OS_IOS
+   _renderView.autoresizingMask = UIViewAutoresizingNone;
+   [self layoutRenderView];
+#else
    /* Layout anchors are iOS 9; the view is asked whether it has them
     * and pinned to the container's edges either way. The anchors, the
     * constraint between them and its activation (iOS 8) go by selector,
@@ -812,8 +824,40 @@ API_AVAILABLE(ios(13.0), tvos(13.0))
       _renderView.frame            = rootView.bounds;
       _renderView.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
    }
+#endif
    [_renderView layoutIfNeeded];
 }
+
+#if TARGET_OS_IOS
+/* Whole device pixels, so the layer is not resampled at a fractional
+ * position or size. Config files are not range checked; clamp here. */
+static CGFloat cocoa_margin_points(float percent, CGFloat extent, CGFloat scale)
+{
+   return round(extent * fminf(fmaxf(percent, 0), 25) / 100 * scale) / scale;
+}
+
+- (void)layoutRenderView
+{
+   CGRect bounds;
+   CGFloat scale, left, right, top, bottom;
+   settings_t *settings = config_get_ptr();
+   if (!_renderView || !settings)
+      return;
+   bounds = [CocoaView get].view.bounds;
+   if (bounds.size.width <= 0 || bounds.size.height <= 0)
+      return;
+   scale  = [_renderView contentScaleFactor];
+   if (scale <= 0)
+      scale = 1;
+   left   = cocoa_margin_points(settings->floats.video_ios_margin_left,   bounds.size.width,  scale);
+   right  = cocoa_margin_points(settings->floats.video_ios_margin_right,  bounds.size.width,  scale);
+   top    = cocoa_margin_points(settings->floats.video_ios_margin_top,    bounds.size.height, scale);
+   bottom = cocoa_margin_points(settings->floats.video_ios_margin_bottom, bounds.size.height, scale);
+   _renderView.frame = CGRectMake(bounds.origin.x + left,
+         bounds.origin.y + top, bounds.size.width - left - right,
+         bounds.size.height - top - bottom);
+}
+#endif
 
 - (apple_view_type_t)viewType { return _vt; }
 
@@ -1006,6 +1050,8 @@ bool cocoa_audio_session_begin_record(unsigned preferred_rate,
    config.enableMemoryIntrospection = YES;
    config.enableQueueNameSearch = YES;
    config.addConsoleLogToReport = YES;
+   /* The __cxa_throw rebinding breaks exceptions cores catch themselves. */
+   config.enableSwapCxaThrow = NO;
 
    /* Install KSCrash without any network sink */
    NSError *installError = nil;
@@ -1191,9 +1237,9 @@ bool cocoa_audio_session_begin_record(unsigned preferred_rate,
       }
       options = (char*)calloc(_len, sizeof(char));
       string_list_join_concat(options, _len, icons, "|");
-      if (appicon_setting->values)
-         free((void*)appicon_setting->values);
-      appicon_setting->values = options;
+      if (appicon_setting->aux.values)
+         free((void*)appicon_setting->aux.values);
+      appicon_setting->aux.values = options;
    }
 
 #if TARGET_OS_TV
@@ -1505,7 +1551,7 @@ bool cocoa_audio_session_begin_record(unsigned preferred_rate,
                   sel_registerName("stopAccessingSecurityScopedResource"));
       }
    }
-   task_push_dbscan(fullpath, NULL);
+   task_push_dbscan(fullpath, NULL, NULL);
    return true;
 }
 
@@ -1602,12 +1648,14 @@ bool cocoa_audio_session_begin_record(unsigned preferred_rate,
                           defaultRegion:(UIPointerRegion *)defaultRegion API_AVAILABLE(ios(13.4))
 {
    CGPoint location;
+   CGFloat scale;
    if (cocoa_input_mouse_grabbed())
       return nil;
-   location = [apple_platform.renderView convertPoint:[request location] fromView:nil];
+   location = [request location];
+   scale    = [apple_platform.renderView contentScaleFactor];
    cocoa_input_pointer_at(
-         (int16_t)(location.x * [[UIScreen mainScreen] scale]),
-         (int16_t)(location.y * [[UIScreen mainScreen] scale]));
+         (int16_t)(location.x * scale),
+         (int16_t)(location.y * scale));
    return [UIPointerRegion regionWithRect:[apple_platform.renderView bounds] identifier:@"game view"];
 }
 #endif
@@ -1627,7 +1675,7 @@ bool cocoa_audio_session_begin_record(unsigned preferred_rate,
    if (utf8Text)
    {
       size_t newLen;
-      strlcpy(self.keyboardAllocatedBuffer, utf8Text, 512);
+      strlcpy(self.keyboardAllocatedBuffer, utf8Text, INPUT_NATIVE_KEYBOARD_BUFFER_SIZE);
       newLen = strlen(self.keyboardAllocatedBuffer);
       *self.keyboardSizePtr = newLen;
       /* Keep ptr in sync with size to prevent buffer overrun when appending */
@@ -1649,7 +1697,7 @@ bool cocoa_audio_session_begin_record(unsigned preferred_rate,
          if (finalText)
          {
             size_t finalLen;
-            strlcpy(self.keyboardAllocatedBuffer, finalText, 512);
+            strlcpy(self.keyboardAllocatedBuffer, finalText, INPUT_NATIVE_KEYBOARD_BUFFER_SIZE);
             finalLen = strlen(self.keyboardAllocatedBuffer);
             *self.keyboardSizePtr = finalLen;
             if (self.keyboardPtrPtr)
@@ -1766,15 +1814,17 @@ bool ios_keyboard_start(char **buffer_ptr, size_t *size_ptr, size_t *ptr_ptr,
       return false;
 
    /* Allocate a fixed-size buffer for keyboard input */
-   char *allocated_buffer = (char *)malloc(512);
+   char *allocated_buffer = (char *)malloc(INPUT_NATIVE_KEYBOARD_BUFFER_SIZE);
    if (!allocated_buffer)
       return false;
 
    /* Initialize buffer with existing content if any */
    if (*buffer_ptr && **buffer_ptr)
-      strlcpy(allocated_buffer, *buffer_ptr, 512);
+      strlcpy(allocated_buffer, *buffer_ptr, INPUT_NATIVE_KEYBOARD_BUFFER_SIZE);
    else
       allocated_buffer[0] = '\0';
+
+   free(*buffer_ptr);
 
    /* Update the keyboard_line buffer pointer to point to our allocated buffer */
    *buffer_ptr = allocated_buffer;
@@ -1809,6 +1859,8 @@ bool ios_keyboard_start(char **buffer_ptr, size_t *size_ptr, size_t *ptr_ptr,
 
    /* Show the keyboard */
    [app.keyboardTextField becomeFirstResponder];
+   if (len)
+      [app.keyboardTextField selectAll:nil];
    return true;
 }
 

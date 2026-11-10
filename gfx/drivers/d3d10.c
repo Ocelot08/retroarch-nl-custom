@@ -56,7 +56,8 @@
 #include "../common/d3dcompiler_common.h"
 /* slang_process.h is self-contained - it only defines types and
  * constants used by pass state.  The actual slang_process() call
- * sites remain guarded with HAVE_SLANG+HAVE_SPIRV_CROSS. */
+ * sites remain guarded with HAVE_SLANG and a compiler that prints
+ * text: SPIRV-Cross or rslc. */
 #include "../drivers_shader/slang_process.h"
 #ifdef HAVE_MENU
 #include "../../menu/menu_driver.h"
@@ -76,6 +77,8 @@
 #define D3D10_ROLLING_SCANLINE_SIMULATION
 
 #define D3D10_MAX_GPU_COUNT 16
+
+#define D3D10_SW_LEND_SLOTS 3
 
 enum d3d10_video_flags
 {
@@ -319,6 +322,7 @@ typedef struct
    {
       d3d10_texture_t   texture;
       D3D10Buffer       vbo;
+      DXGI_FORMAT      source_format;
    } menu;
    struct
    {
@@ -342,6 +346,23 @@ typedef struct
       DXGI_FORMAT     format;
       bool            active;
    } sw_direct;
+   /* Software frames the core renders straight into, without a copy on
+    * the CPU: staging textures lent through
+    * get_current_software_framebuffer, mapped READ_WRITE (host cached)
+    * without waiting, and copied on the GPU into chain.history[0] when
+    * the frame is pushed from one. A slot stays mapped until then, and
+    * only that copy unmaps it, retiring the cached frame that points
+    * into it. `last` is the slot the last pushed frame came from, not
+    * lent again while it may be the cached frame. */
+   struct
+   {
+      D3D10Texture2D         staging[D3D10_SW_LEND_SLOTS];
+      D3D10_MAPPED_TEXTURE2D mapped[D3D10_SW_LEND_SLOTS];
+      unsigned               mapped_bits;
+      unsigned               last;
+      unsigned               dims;
+      DXGI_FORMAT            format;
+   } sw_lend;
    /* Views: the stock chain draws each straight from the frame; a
     * preset each through a chain of its own, whose history a software
     * frame's view is written straight into. The canvas holds both eyes
@@ -592,8 +613,9 @@ static void d3d10_update_texture(
    D3D10_MAPPED_TEXTURE2D mapped_texture;
    D3D10_BOX                frame_box;
 
-   texture->staging->lpVtbl->Map(texture->staging, 0, D3D10_MAP_WRITE, 0,
-         &mapped_texture);
+   if (FAILED(texture->staging->lpVtbl->Map(texture->staging,
+               0, D3D10_MAP_WRITE, 0, &mapped_texture)))
+      return;
 
    dxgi_copy(
          width, height, format, pitch, data, texture->desc.Format,
@@ -654,6 +676,176 @@ static bool d3d10_sw_direct_upload(d3d10_video_t *d3d10,
    dxgi_copy(width, height, d3d10->format, pitch, frame,
          tex->desc.Format, mapped.RowPitch, mapped.pData);
    tex->handle->lpVtbl->Unmap(tex->handle, 0);
+   return true;
+}
+
+/* The lent slots go, unmapped first. A cached frame may point into a
+ * mapped one, so it is retired before the memory goes. */
+static void d3d10_sw_lend_release(d3d10_video_t *d3d10)
+{
+   unsigned i;
+   if (d3d10->sw_lend.mapped_bits)
+      video_driver_cached_frame_retire();
+   for (i = 0; i < D3D10_SW_LEND_SLOTS; i++)
+   {
+      if (d3d10->sw_lend.mapped_bits & (1u << i))
+         d3d10->sw_lend.staging[i]->lpVtbl->Unmap(
+               d3d10->sw_lend.staging[i], 0);
+      Release(d3d10->sw_lend.staging[i]);
+      d3d10->sw_lend.staging[i] = NULL;
+   }
+   d3d10->sw_lend.mapped_bits = 0;
+   d3d10->sw_lend.dims        = 0;
+   d3d10->sw_lend.last        = 0;
+}
+
+/* Lends the core a staging slot to render its frame into, where the
+ * frame can go into chain.history[0] by a copy on the GPU, and only a
+ * slot the GPU is done copying from: one still busy is passed over and
+ * none is waited for. Declined when the row pitch is not the frame's
+ * tight pitch, as cores tend to ignore fb->pitch. */
+static bool d3d10_get_current_software_framebuffer(void *data,
+      struct retro_framebuffer *fb)
+{
+   d3d10_video_t   *d3d10 = (d3d10_video_t*)data;
+   d3d10_texture_t *hist;
+   unsigned bpp, dims, k;
+
+   if (     !d3d10 || !fb || !d3d10->device
+         || (     d3d10->format != DXGI_FORMAT_B8G8R8X8_UNORM
+               && d3d10->format != DXGI_FORMAT_B5G6R5_UNORM))
+      return false;
+   hist = &d3d10->chain.history[0];
+   bpp  = (d3d10->format == DXGI_FORMAT_B5G6R5_UNORM) ? 2 : 4;
+   dims = VIDEO_SCALE_PACK(fb->width, fb->height);
+   /* The loan is the size asked for, which history[0] need not be: a
+    * core may push a window inside it, history[0] at the window's size */
+   if (     !hist->handle
+         || hist->desc.Format != d3d10->format)
+      return false;
+
+   if (     d3d10->sw_lend.dims   != dims
+         || d3d10->sw_lend.format != d3d10->format)
+   {
+      D3D10_TEXTURE2D_DESC desc = hist->desc;
+      d3d10_sw_lend_release(d3d10);
+      desc.Width              = fb->width;
+      desc.Height             = fb->height;
+      desc.MipLevels          = 1;
+      desc.ArraySize          = 1;
+      desc.SampleDesc.Count   = 1;
+      desc.SampleDesc.Quality = 0;
+      desc.BindFlags          = 0;
+      desc.MiscFlags          = 0;
+      desc.Usage              = D3D10_USAGE_STAGING;
+      /* Read as well: a core may read back what it rendered */
+      desc.CPUAccessFlags     = D3D10_CPU_ACCESS_READ | D3D10_CPU_ACCESS_WRITE;
+      for (k = 0; k < D3D10_SW_LEND_SLOTS; k++)
+      {
+         d3d10->device->lpVtbl->CreateTexture2D(d3d10->device, &desc,
+               NULL, &d3d10->sw_lend.staging[k]);
+         if (!d3d10->sw_lend.staging[k])
+         {
+            d3d10_sw_lend_release(d3d10);
+            return false;
+         }
+      }
+      d3d10->sw_lend.dims   = dims;
+      d3d10->sw_lend.format = d3d10->format;
+   }
+
+   for (k = 1; k < D3D10_SW_LEND_SLOTS; k++)
+   {
+      unsigned slot = (d3d10->sw_lend.last + k) % D3D10_SW_LEND_SLOTS;
+      unsigned bit  = 1u << slot;
+      if (!(d3d10->sw_lend.mapped_bits & bit))
+      {
+         if (FAILED(d3d10->sw_lend.staging[slot]->lpVtbl->Map(
+                     d3d10->sw_lend.staging[slot], 0,
+                     D3D10_MAP_READ_WRITE, D3D10_MAP_FLAG_DO_NOT_WAIT,
+                     &d3d10->sw_lend.mapped[slot])))
+            continue;
+         d3d10->sw_lend.mapped_bits |= bit;
+      }
+      if (d3d10->sw_lend.mapped[slot].RowPitch != fb->width * bpp)
+         return false;
+      fb->data         = d3d10->sw_lend.mapped[slot].pData;
+      fb->pitch        = d3d10->sw_lend.mapped[slot].RowPitch;
+      fb->format       = (bpp == 4)
+         ? RETRO_PIXEL_FORMAT_XRGB8888 : RETRO_PIXEL_FORMAT_RGB565;
+      fb->memory_flags = RETRO_MEMORY_TYPE_CACHED;
+      return true;
+   }
+   return false;
+}
+
+/* The slot @frame was rendered into, or -1 for a frame from anywhere
+ * else; remembered as the one the cached frame may now point into.
+ * The frame may be a window inside the slot, as a core cropping its
+ * overscan pushes one: *x and *y say where it starts. */
+static int d3d10_sw_lend_find(d3d10_video_t *d3d10, const void *frame,
+      unsigned width, unsigned height, unsigned pitch,
+      unsigned *x, unsigned *y)
+{
+   unsigned k;
+   unsigned lend_w = VIDEO_SCALE_W(d3d10->sw_lend.dims);
+   unsigned lend_h = VIDEO_SCALE_H(d3d10->sw_lend.dims);
+   unsigned bpp    = (d3d10->sw_lend.format == DXGI_FORMAT_B5G6R5_UNORM)
+      ? 2 : 4;
+   if (!d3d10->sw_lend.mapped_bits || !width || !height)
+      return -1;
+   for (k = 0; k < D3D10_SW_LEND_SLOTS; k++)
+   {
+      const uint8_t *base;
+      size_t off;
+      if (     !(d3d10->sw_lend.mapped_bits & (1u << k))
+            || d3d10->sw_lend.mapped[k].RowPitch != pitch)
+         continue;
+      base = (const uint8_t*)d3d10->sw_lend.mapped[k].pData;
+      if ((const uint8_t*)frame < base)
+         continue;
+      off = (size_t)((const uint8_t*)frame - base);
+      if (     off >= (size_t)pitch * lend_h
+            || (off % pitch) % bpp
+            || (off % pitch) / bpp + width  > lend_w
+            || off / pitch         + height > lend_h)
+         continue;
+      *x = (unsigned)((off % pitch) / bpp);
+      *y = (unsigned)(off / pitch);
+      d3d10->sw_lend.last = k;
+      return (int)k;
+   }
+   return -1;
+}
+
+/* A frame pushed from lent slot @slot into chain.history[0], copied
+ * there on the GPU. Unmapped for the copy, so the cached frame, which
+ * points into the slot, is retired: a redraw draws history[0] as it
+ * stands. False when history[0] no longer takes it. */
+static bool d3d10_sw_lend_push(d3d10_video_t *d3d10, int slot,
+      unsigned x, unsigned y, unsigned width, unsigned height)
+{
+   D3D10_BOX box;
+   d3d10_texture_t *hist = &d3d10->chain.history[0];
+   if (     slot < 0
+         || !hist->handle
+         || hist->desc.Format != d3d10->sw_lend.format
+         || hist->desc.Width  != width
+         || hist->desc.Height != height)
+      return false;
+   box.left   = x;
+   box.top    = y;
+   box.front  = 0;
+   box.right  = x + width;
+   box.bottom = y + height;
+   box.back   = 1;
+   d3d10->sw_lend.staging[slot]->lpVtbl->Unmap(
+         d3d10->sw_lend.staging[slot], 0);
+   d3d10->sw_lend.mapped_bits &= ~(1u << slot);
+   video_driver_cached_frame_retire();
+   d3d10->device->lpVtbl->CopySubresourceRegion(d3d10->device,
+         (D3D10Resource)hist->handle, 0, 0, 0, 0,
+         (D3D10Resource)d3d10->sw_lend.staging[slot], 0, &box);
    return true;
 }
 
@@ -1294,46 +1486,58 @@ static int d3d10_font_get_message_width(void *data, const char *msg,
          font->font_data, msg, msg_len, scale);
 }
 
-/* Update only the atlas dirty rectangle of the A8 font texture:
- * map the staging texture preserving its contents, copy the changed
- * rows, and issue a boxed CopySubresourceRegion for just that area.
+/* Update only the atlas dirty rectangles @r[0..@n) of the A8 font
+ * texture: map the staging texture once preserving its contents, copy
+ * each one's rows, and issue a boxed CopySubresourceRegion for each.
  * The generic d3d10_update_texture() re-uploads the whole surface. */
-static void d3d10_font_update_atlas_region(
-      D3D10Device ctx, d3d10_font_t *font, unsigned xy0, unsigned xy1)
+static void d3d10_font_update_atlas_rects(D3D10Device ctx,
+      d3d10_font_t *font, const unsigned (*r)[2], unsigned n)
 {
-   unsigned y;
-   unsigned x0 = VIDEO_SCALE_W(xy0);
-   unsigned y0 = VIDEO_SCALE_H(xy0);
-   unsigned x1 = VIDEO_SCALE_W(xy1);
-   unsigned y1 = VIDEO_SCALE_H(xy1);
+   unsigned i, y, kept = 0;
+   D3D10_BOX box[FONT_ATLAS_DIRTY_MAX];
    D3D10_MAPPED_TEXTURE2D mapped;
-   D3D10_BOX box;
 
-   if (     x1 <= x0 || y1 <= y0
-         || x1 > (unsigned)font->atlas->width
-         || y1 > (unsigned)font->atlas->height)
+   if (n > FONT_ATLAS_DIRTY_MAX)
+      n = FONT_ATLAS_DIRTY_MAX;
+   for (i = 0; i < n; i++)
+   {
+      unsigned x0 = VIDEO_SCALE_W(r[i][0]);
+      unsigned y0 = VIDEO_SCALE_H(r[i][0]);
+      unsigned x1 = VIDEO_SCALE_W(r[i][1]);
+      unsigned y1 = VIDEO_SCALE_H(r[i][1]);
+      if (     x1 <= x0 || y1 <= y0
+            || x1 > (unsigned)font->atlas->width
+            || y1 > (unsigned)font->atlas->height)
+         continue;
+      box[kept].left   = x0;
+      box[kept].top    = y0;
+      box[kept].front  = 0;
+      box[kept].right  = x1;
+      box[kept].bottom = y1;
+      box[kept].back   = 1;
+      kept++;
+   }
+   if (!kept)
       return;
 
    if (FAILED(font->texture.staging->lpVtbl->Map(
          font->texture.staging, 0, D3D10_MAP_WRITE, 0, &mapped)))
       return;
 
-   for (y = y0; y < y1; y++)
-      memcpy((uint8_t*)mapped.pData + y * mapped.RowPitch + x0,
-             font->atlas->buffer + (size_t)y * font->atlas->width + x0,
-             x1 - x0);
+   for (i = 0; i < kept; i++)
+      for (y = box[i].top; y < box[i].bottom; y++)
+         memcpy((uint8_t*)mapped.pData + y * mapped.RowPitch + box[i].left,
+                font->atlas->buffer + (size_t)y * font->atlas->width
+                   + box[i].left,
+                box[i].right - box[i].left);
 
    font->texture.staging->lpVtbl->Unmap(font->texture.staging, 0);
 
-   box.left   = x0;
-   box.top    = y0;
-   box.front  = 0;
-   box.right  = x1;
-   box.bottom = y1;
-   box.back   = 1;
-   ctx->lpVtbl->CopySubresourceRegion(
-         ctx, (D3D10Resource)font->texture.handle, 0, x0, y0, 0,
-         (D3D10Resource)font->texture.staging, 0, &box);
+   for (i = 0; i < kept; i++)
+      ctx->lpVtbl->CopySubresourceRegion(
+            ctx, (D3D10Resource)font->texture.handle, 0,
+            box[i].left, box[i].top, 0,
+            (D3D10Resource)font->texture.staging, 0, &box[i]);
 }
 
 static void d3d10_font_render_msg(
@@ -1406,7 +1610,7 @@ static void d3d10_font_render_msg(
 
    get_glyph         = font->font_driver->get_glyph;
    font_data         = font->font_data;
-   inv_viewport_w    = 1.0f / (float)d3d10->viewport.Width;
+   inv_viewport_w    = rp.x_scale / (float)d3d10->viewport.Width;
    inv_viewport_h    = 1.0f / (float)d3d10->viewport.Height;
    inv_tex_w         = 1.0f / (float)font->texture.desc.Width;
    inv_tex_h         = 1.0f / (float)font->texture.desc.Height;
@@ -1416,7 +1620,7 @@ static void d3d10_font_render_msg(
    drop_pos_x        = 0.0f;
    drop_pos_y        = 0.0f;
    drop_pre_x        = 0;
-   pre_x             = roundf(x * width);
+   pre_x             = roundf(x * width / rp.x_scale);
 
    if (has_drop)
    {
@@ -1425,9 +1629,9 @@ static void d3d10_font_render_msg(
       unsigned b_dark     = b * drop_mod;
       unsigned alpha_dark = alpha * drop_alpha;
       color_dark          = DXGI_COLOR_RGBA(r_dark, g_dark, b_dark, alpha_dark);
-      drop_pos_x          = x + scale * drop_x / width;
+      drop_pos_x          = x + scale * drop_x * rp.x_scale / width;
       drop_pos_y          = y + scale * drop_y / height;
-      drop_pre_x          = roundf(drop_pos_x * width);
+      drop_pre_x          = roundf(drop_pos_x * width / rp.x_scale);
    }
 
    /* Single VBO map for all geometry (drop shadow + main text) */
@@ -1540,7 +1744,7 @@ static void d3d10_font_render_msg(
 #undef D3D10_FONT_SPRITE
    }
 
-   count = v - v_begin;
+   count = (unsigned)(v - v_begin);
    d3d10->sprites.vbo->lpVtbl->Unmap(d3d10->sprites.vbo);
 
    if (!count)
@@ -1549,8 +1753,14 @@ static void d3d10_font_render_msg(
    if (font->atlas->dirty)
    {
       if (font->texture.staging)
-         d3d10_font_update_atlas_region(d3d10->device, font,
-               font->atlas->dirty_xy0, font->atlas->dirty_xy1);
+      {
+         unsigned i, n = font_atlas_dirty_rects(font->atlas);
+         unsigned r[FONT_ATLAS_DIRTY_MAX][2];
+         for (i = 0; i < n; i++)
+            font_atlas_dirty_rect(font->atlas, i, &r[i][0], &r[i][1]);
+         d3d10_font_update_atlas_rects(d3d10->device, font,
+               (const unsigned (*)[2])r, n);
+      }
       font->atlas->dirty = false;
    }
 
@@ -1921,8 +2131,9 @@ static void d3d10_gfx_set_rotation(void* data, unsigned rotation)
    MAT_ELEM_4X4(rot, 1, 1) = cosine;
    matrix_4x4_multiply(d3d10->mvp, rot, d3d10->ubo_values.mvp);
 
-   d3d10->frame.ubo->lpVtbl->Map(d3d10->frame.ubo,
-         D3D10_MAP_WRITE_DISCARD, 0, (void**)&mapped_ubo);
+   if (FAILED(d3d10->frame.ubo->lpVtbl->Map(d3d10->frame.ubo,
+               D3D10_MAP_WRITE_DISCARD, 0, (void**)&mapped_ubo)))
+      return;
    *(math_matrix_4x4*)mapped_ubo = d3d10->mvp;
    d3d10->frame.ubo->lpVtbl->Unmap(d3d10->frame.ubo);
 }
@@ -2023,14 +2234,63 @@ typedef struct d3d10_deferred_state
 {
    struct video_shader      *shader_preset;
    d3d10_deferred_pass_t     passes[GFX_MAX_SHADERS];
-   d3d10_texture_t           luts[GFX_MAX_TEXTURES];
-   bool                      luts_loaded;
 } d3d10_deferred_state_t;
+
+#if defined(HAVE_SLANG) && (defined(HAVE_SPIRV_CROSS) || defined(HAVE_RSLC))
+/* The preset's LUTs some pass samples or takes the size of, loaded
+ * once every pass is processed; one no pass reads is never decoded. */
+static bool d3d10_load_luts(d3d10_video_t *d3d10)
+{
+   unsigned i;
+   uint8_t read[GFX_MAX_TEXTURES];
+   const struct video_shader *preset = d3d10->chain.shader_preset;
+   memset(read, 0, sizeof(read));
+   for (i = 0; i < preset->passes; i++)
+      slang_semantics_luts_read(&d3d10->chain.pass[i].semantics,
+            &d3d10->chain.luts[0].view, &d3d10->chain.luts[0].size_data,
+            sizeof(*d3d10->chain.luts), preset->luts, read);
+   for (i = 0; i < preset->luts; i++)
+   {
+      struct texture_image image;
+      if (!read[i])
+         continue;
+      memset(&image, 0, sizeof(image));
+      image.supports_rgba        = true;
+
+      if (!image_texture_load(&image, preset->lut[i].path))
+      {
+         RARCH_ERR("[D3D10] Failed to load LUT: \"%s\".\n", preset->lut[i].path);
+         return false;
+      }
+
+      d3d10->chain.luts[i].desc.Width  = image.width;
+      d3d10->chain.luts[i].desc.Height = image.height;
+      d3d10->chain.luts[i].desc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+
+      if (preset->lut[i].mipmap)
+         d3d10->chain.luts[i].desc.MiscFlags = D3D10_RESOURCE_MISC_GENERATE_MIPS;
+
+      d3d10_release_texture(&d3d10->chain.luts[i]);
+      d3d10_init_texture(d3d10->device, &d3d10->chain.luts[i]);
+
+      if (d3d10->chain.luts[i].staging)
+         d3d10_update_texture(
+               d3d10->device,
+               image.width, image.height, 0,
+               DXGI_FORMAT_R8G8B8A8_UNORM, image.pixels,
+               &d3d10->chain.luts[i]);
+
+      image_texture_free(&image);
+   }
+   return true;
+}
+
+#endif
 
 static bool d3d10_shader_load_begin(void *data,
       shader_load_deferred_t *deferred)
 {
-#if defined(HAVE_SLANG) && defined(HAVE_SPIRV_CROSS)
+#if defined(HAVE_SLANG) && (defined(HAVE_SPIRV_CROSS) || defined(HAVE_RSLC))
    d3d10_video_t *d3d10 = (d3d10_video_t*)data;
    d3d10_deferred_state_t *ds;
 
@@ -2053,7 +2313,8 @@ static bool d3d10_shader_load_begin(void *data,
    }
 
    if (!video_shader_load_preset_into_shader(
-            deferred->preset_path, ds->shader_preset))
+            deferred->preset_path, ds->shader_preset)
+         || !video_shader_check_hdr_output(ds->shader_preset, 0))
    {
       free(ds->shader_preset);
       free(ds);
@@ -2062,60 +2323,11 @@ static bool d3d10_shader_load_begin(void *data,
 
    deferred->total_passes = ds->shader_preset->passes;
 
-   /* Load LUTs synchronously */
-   {
-      unsigned i;
-      for (i = 0; i < ds->shader_preset->luts; i++)
-      {
-         struct texture_image image;
-         /* pix10 is a request the load reads: cleared with the rest */
-         memset(&image, 0, sizeof(image));
-         image.supports_rgba = true;
-
-         if (!image_texture_load(&image,
-                  ds->shader_preset->lut[i].path))
-         {
-            RARCH_ERR("[D3D10] Deferred: failed to load LUT: \"%s\".\n",
-                  ds->shader_preset->lut[i].path);
-            goto error;
-         }
-
-         ds->luts[i].desc.Width  = image.width;
-         ds->luts[i].desc.Height = image.height;
-         ds->luts[i].desc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
-
-         if (ds->shader_preset->lut[i].mipmap)
-            ds->luts[i].desc.MiscFlags = D3D10_RESOURCE_MISC_GENERATE_MIPS;
-
-         d3d10_init_texture(d3d10->device, &ds->luts[i]);
-
-         if (ds->luts[i].staging)
-            d3d10_update_texture(
-                  d3d10->device,
-                  image.width, image.height, 0,
-                  DXGI_FORMAT_R8G8B8A8_UNORM, image.pixels,
-                  &ds->luts[i]);
-
-         image_texture_free(&image);
-      }
-      ds->luts_loaded = true;
-   }
-
    RARCH_LOG("[D3D10] Deferred: prepared %u passes for \"%s\".\n",
          deferred->total_passes, deferred->preset_path);
 
    deferred->driver_data = ds;
    return true;
-
-error:
-   {
-      unsigned j;
-      for (j = 0; j < ds->shader_preset->luts; j++)
-         d3d10_release_texture(&ds->luts[j]);
-   }
-   free(ds->shader_preset);
-   free(ds);
-   return false;
 #else
    return false;
 #endif
@@ -2144,12 +2356,6 @@ static void d3d10_deferred_state_free(
       }
    }
 
-   if (ds->luts_loaded && ds->shader_preset)
-   {
-      for (i = 0; i < ds->shader_preset->luts; i++)
-         d3d10_release_texture(&ds->luts[i]);
-   }
-
    if (ds->shader_preset)
    {
       for (i = 0; i < ds->shader_preset->passes; i++)
@@ -2166,7 +2372,7 @@ static void d3d10_deferred_state_free(
 static bool d3d10_shader_load_step(void *data,
       shader_load_deferred_t *deferred)
 {
-#if defined(HAVE_SLANG) && defined(HAVE_SPIRV_CROSS)
+#if defined(HAVE_SLANG) && (defined(HAVE_SPIRV_CROSS) || defined(HAVE_RSLC))
    d3d10_video_t *d3d10          = (d3d10_video_t*)data;
    d3d10_deferred_state_t *ds    =
       (d3d10_deferred_state_t*)deferred->driver_data;
@@ -2208,7 +2414,7 @@ static bool d3d10_shader_load_step(void *data,
                { &d3d10->chain.pass[0].feedback.view, sizeof(*d3d10->chain.pass),
                   &d3d10->chain.pass[0].feedback.size_data,
                   sizeof(*d3d10->chain.pass) },
-               /* Point at d3d10->chain.luts, not ds->luts */
+               /* the LUTs are the chain's, loaded at the install */
                { &d3d10->chain.luts[0].view, sizeof(*d3d10->chain.luts),
                   &d3d10->chain.luts[0].size_data, sizeof(*d3d10->chain.luts) },
             },
@@ -2225,10 +2431,11 @@ static bool d3d10_shader_load_step(void *data,
                &d3d10->chain.pass[i].core_aspect_rot,
                &d3d10->chain.pass[i].total_subframes,
                &d3d10->chain.pass[i].current_subframe,
-               &d3d10->chain.pass[i].swap_count,
             }
          };
 
+         semantics_map.uniforms[SLANG_SEMANTIC_SWAP_COUNT] =
+               &d3d10->chain.pass[i].swap_count;
          if (!slang_process(
                   ds->shader_preset, i, RARCH_SHADER_HLSL,
                   40, &semantics_map,
@@ -2330,11 +2537,6 @@ static bool d3d10_shader_load_step(void *data,
    d3d10->chain.shader_preset = ds->shader_preset;
    ds->shader_preset    = NULL;
 
-   /* Install LUTs */
-   memcpy(d3d10->chain.luts, ds->luts, sizeof(ds->luts));
-   memset(ds->luts, 0, sizeof(ds->luts));
-   ds->luts_loaded = false;
-
    /* Install per-pass state */
    {
       unsigned i;
@@ -2356,6 +2558,16 @@ static bool d3d10_shader_load_step(void *data,
       }
    }
 
+   /* The LUTs the installed passes read */
+   if (!d3d10_load_luts(d3d10))
+   {
+      d3d10_free_shader_preset(d3d10);
+      d3d10_deferred_state_free(ds, deferred->total_passes);
+      deferred->state       = SHADER_LOAD_FAILED;
+      deferred->driver_data = NULL;
+      return false;
+   }
+
    d3d10->flags |= D3D10_ST_FLAG_INIT_HISTORY | D3D10_ST_FLAG_RESIZE_RTS;
 
    deferred->state = SHADER_LOAD_DONE;
@@ -2373,7 +2585,7 @@ static bool d3d10_shader_load_step(void *data,
 static bool d3d10_gfx_set_shader(void* data,
       enum rarch_shader_type type, const char* path)
 {
-#if defined(HAVE_SLANG) && defined(HAVE_SPIRV_CROSS)
+#if defined(HAVE_SLANG) && (defined(HAVE_SPIRV_CROSS) || defined(HAVE_RSLC))
    unsigned         i;
    d3d10_texture_t* source = NULL;
    d3d10_video_t*   d3d10  = (d3d10_video_t*)data;
@@ -2395,7 +2607,8 @@ static bool d3d10_gfx_set_shader(void* data,
 
    d3d10->chain.shader_preset = (struct video_shader*)calloc(1, sizeof(*d3d10->chain.shader_preset));
 
-   if (!video_shader_load_preset_into_shader(path, d3d10->chain.shader_preset))
+   if (!video_shader_load_preset_into_shader(path, d3d10->chain.shader_preset)
+         || !video_shader_check_hdr_output(d3d10->chain.shader_preset, 0))
       goto error;
 
    source = &d3d10->chain.history[0];
@@ -2442,11 +2655,12 @@ static bool d3d10_gfx_set_shader(void* data,
             &d3d10->chain.pass[i].core_aspect_rot, /* OriginalAspectRotated */
             &d3d10->chain.pass[i].total_subframes, /* TotalSubFrames */
             &d3d10->chain.pass[i].current_subframe,/* CurrentSubFrame */
-            &d3d10->chain.pass[i].swap_count, /* SwapCount */
          }
       };
       /* clang-format on */
 
+      semantics_map.uniforms[SLANG_SEMANTIC_SWAP_COUNT] =
+            &d3d10->chain.pass[i].swap_count;
       if (!slang_process(
                d3d10->chain.shader_preset, i, RARCH_SHADER_HLSL,
                40, &semantics_map,
@@ -2505,34 +2719,8 @@ static bool d3d10_gfx_set_shader(void* data,
       }
    }
 
-   for (i = 0; i < d3d10->chain.shader_preset->luts; i++)
-   {
-      struct texture_image image;
-      memset(&image, 0, sizeof(image));
-      image.supports_rgba        = true;
-
-      if (!image_texture_load(&image, d3d10->chain.shader_preset->lut[i].path))
-         goto error;
-
-      d3d10->chain.luts[i].desc.Width  = image.width;
-      d3d10->chain.luts[i].desc.Height = image.height;
-      d3d10->chain.luts[i].desc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
-
-      if (d3d10->chain.shader_preset->lut[i].mipmap)
-         d3d10->chain.luts[i].desc.MiscFlags = D3D10_RESOURCE_MISC_GENERATE_MIPS;
-
-      d3d10_release_texture(&d3d10->chain.luts[i]);
-      d3d10_init_texture(d3d10->device, &d3d10->chain.luts[i]);
-
-      if (d3d10->chain.luts[i].staging)
-         d3d10_update_texture(
-               d3d10->device,
-               image.width, image.height, 0,
-               DXGI_FORMAT_R8G8B8A8_UNORM, image.pixels,
-               &d3d10->chain.luts[i]);
-
-      image_texture_free(&image);
-   }
+   if (!d3d10_load_luts(d3d10))
+      goto error;
 
    d3d10->flags                |=  (D3D10_ST_FLAG_INIT_HISTORY
                                 |   D3D10_ST_FLAG_RESIZE_RTS);
@@ -2566,6 +2754,7 @@ static void d3d10_gfx_free(void* data)
 
    d3d10_release_texture(&d3d10->chain.history[0]);
    d3d10_release_texture(&d3d10->sw_direct.texture);
+   d3d10_sw_lend_release(d3d10);
    d3d10_views_release(d3d10);
    d3d10_record_free(d3d10);
    Release(d3d10->frame.ubo);
@@ -3305,7 +3494,7 @@ static void d3d10_chain_frame(d3d10_video_t *d3d10, d3d10_chain_t *c,
          pass->frame_count = frame_count
             % c->shader_preset->pass[i].frame_count_mod;
       else
-         pass->frame_count = frame_count;
+         pass->frame_count = (uint32_t)frame_count;
       pass->frame_direction  = frame_direction;
       pass->frame_time_delta = frame_time_delta;
       pass->original_fps     = original_fps;
@@ -3353,7 +3542,13 @@ static void d3d10_chain_bind_pass(d3d10_video_t *d3d10, d3d10_chain_t *c,
          {
             while (uniform->size)
             {
-               if (uniform->data)
+               if (uniform->param)
+               {
+                  float v = video_shader_param_get(uniform->param);
+                  memcpy((uint8_t*)uniform_data + uniform->offset,
+                        &v, sizeof(v));
+               }
+               else if (uniform->data)
                   memcpy((uint8_t*)uniform_data + uniform->offset,
                         uniform->data, uniform->size);
                uniform++;
@@ -4177,7 +4372,7 @@ static bool d3d10_gfx_frame(
 {
    unsigned width = VIDEO_SCALE_W(dims);
    unsigned height = VIDEO_SCALE_H(dims);
-   unsigned           i, k, m;
+   unsigned           k, m;
    UINT offset = 0, stride    = 0;
    d3d10_texture_t*   texture = NULL;
    d3d10_video_t      * d3d10 = (d3d10_video_t*)data;
@@ -4206,6 +4401,7 @@ static bool d3d10_gfx_frame(
    bool views                     = false;
    bool views_blend               = false;
    bool views_direct              = false;
+   bool lent                      = false;
    bool views_per_eye             = false;
    bool views_ui                  = false;
    bool one_subframe              = black_frame_insertion || nonblock_state
@@ -4218,15 +4414,21 @@ static bool d3d10_gfx_frame(
 
    if (d3d10->flags & D3D10_ST_FLAG_RESIZE_CHAIN)
    {
-      D3D10Texture2D backBuffer;
+      D3D10Texture2D backBuffer = NULL;
 
       Release(d3d10->renderTargetView);
-      DXGIResizeBuffers(d3d10->swapChain, 0, 0, 0, (DXGI_FORMAT)0, 0);
-
-      d3d10->swapChain->lpVtbl->GetBuffer(d3d10->swapChain, 0,
-            uuidof(ID3D10Texture2D), (void**)&backBuffer);
-      d3d10->device->lpVtbl->CreateRenderTargetView(d3d10->device,
-            (D3D10Resource)backBuffer, NULL, &d3d10->renderTargetView);
+      if (     FAILED(DXGIResizeBuffers(d3d10->swapChain,
+                     0, 0, 0, (DXGI_FORMAT)0, 0))
+            || FAILED(d3d10->swapChain->lpVtbl->GetBuffer(d3d10->swapChain,
+                     0, uuidof(ID3D10Texture2D), (void**)&backBuffer))
+            || FAILED(d3d10->device->lpVtbl->CreateRenderTargetView(
+                     d3d10->device, (D3D10Resource)backBuffer,
+                     NULL, &d3d10->renderTargetView)))
+      {
+         Release(backBuffer);
+         video_driver_modify_disp_flags(VIDEO_FLAG_GPU_DEVICE_LOST, 0);
+         return false;
+      }
       Release(backBuffer);
 
       d3d10->device->lpVtbl->OMSetRenderTargets(d3d10->device, 1,
@@ -4335,12 +4537,21 @@ static bool d3d10_gfx_frame(
          d3d10->flags &= ~D3D10_ST_FLAG_RESIZE_RTS;
       }
 
+      /* Rendered into a lent slot: copied on the GPU, drawn from
+       * history[0]. Views may read the frame, so it stays mapped. */
+      if (!views && frame != RETRO_HW_FRAME_BUFFER_VALID)
+      {
+         unsigned lx = 0, ly = 0;
+         int slot = d3d10_sw_lend_find(d3d10, frame, width, height,
+               pitch, &lx, &ly);
+         lent = d3d10_sw_lend_push(d3d10, slot, lx, ly, width, height);
+      }
       /* Without a preset a software frame is drawn from where it was
        * written; a preset's passes read frame.texture[0]. */
-      d3d10->sw_direct.active = !d3d10->chain.shader_preset
+      d3d10->sw_direct.active = !lent && !d3d10->chain.shader_preset
          && frame != RETRO_HW_FRAME_BUFFER_VALID
          && d3d10_sw_direct_upload(d3d10, width, height, pitch, frame);
-      if (     !d3d10->sw_direct.active
+      if (     !lent && !d3d10->sw_direct.active
             && frame != RETRO_HW_FRAME_BUFFER_VALID
             && d3d10->chain.history[0].staging)
          d3d10_update_texture(
@@ -4459,18 +4670,10 @@ static bool d3d10_gfx_frame(
    if (frame && !views_per_eye)
       d3d10_vv_target_drop(d3d10, &d3d10->views.ui_target,
             &d3d10->views.ui);
-   /* Drawn and composited only when there is UI; overlays are hidden.
-    * No directive inside the macro's arguments: MSVC's preprocessor
-    * takes it as tokens. */
-#ifdef HAVE_GFX_WIDGETS
+   /* Drawn and composited only when there is UI; overlays are hidden. */
    views_ui = VIDEO_VIEWS_UI_WANTED(views_per_eye,
          (d3d10->flags & D3D10_ST_FLAG_MENU_ENABLE), msg, statistics_show,
-         widgets_active && gfx_widgets_visible(video_info))
-#else
-   views_ui = VIDEO_VIEWS_UI_WANTED(views_per_eye,
-         (d3d10->flags & D3D10_ST_FLAG_MENU_ENABLE), msg, statistics_show,
-         false)
-#endif
+         video_info->widgets_visible)
       && d3d10_vv_target_ensure(d3d10, &d3d10->views.ui_target,
             &d3d10->views.ui, video_info->views_layout.ui_dims);
    if (views_ui)
@@ -4488,7 +4691,6 @@ static bool d3d10_gfx_frame(
           * menu to this pass's target here. */
          struct video_viewport vp;
          D3D10_VIEWPORT menu_vp;
-         memset(&vp, 0, sizeof(vp));
          vp.full_dims     = VIDEO_SCALE_PACK(
                (unsigned)d3d10->viewport.Width,
                (unsigned)d3d10->viewport.Height);
@@ -4978,13 +5180,15 @@ static void d3d10_set_menu_texture_frame(
 
    if (
             (d3d10->menu.texture.desc.Width  != width)
-         || (d3d10->menu.texture.desc.Height != height))
+         || (d3d10->menu.texture.desc.Height != height)
+         || (d3d10->menu.source_format != format))
    {
       d3d10->menu.texture.desc.Format = format;
       d3d10->menu.texture.desc.Width  = width;
       d3d10->menu.texture.desc.Height = height;
       d3d10_release_texture(&d3d10->menu.texture);
       d3d10_init_texture(d3d10->device, &d3d10->menu.texture);
+      d3d10->menu.source_format = format;
    }
 
    if (d3d10->menu.texture.staging)
@@ -5165,7 +5369,7 @@ static enum video_texture_update d3d10_gfx_update_texture_internal(
    if (FAILED(hr))
       return VIDEO_TEXTURE_UPDATE_REFUSED;
 
-   dxgi_copy(image->width, image->height, texture->desc.Format, 0,
+   dxgi_copy(image->width, image->height, DXGI_FORMAT_B8G8R8A8_UNORM, 0,
          image->pixels, texture->desc.Format, mapped.RowPitch,
          mapped.pData);
    texture->staging->lpVtbl->Unmap(texture->staging, 0);
@@ -5295,7 +5499,7 @@ static uint32_t d3d10_get_flags(void *data)
    BIT32_SET(flags, GFX_CTX_FLAGS_MENU_FRAME_FILTERING);
    BIT32_SET(flags, GFX_CTX_FLAGS_OVERLAY_BEHIND_MENU_SUPPORTED);
    BIT32_SET(flags, GFX_CTX_FLAGS_BLACK_FRAME_INSERTION);
-#if defined(HAVE_SLANG) && defined(HAVE_SPIRV_CROSS)
+#if defined(HAVE_SLANG) && (defined(HAVE_SPIRV_CROSS) || defined(HAVE_RSLC))
    BIT32_SET(flags, GFX_CTX_FLAGS_SHADERS_SLANG);
    BIT32_SET(flags, GFX_CTX_FLAGS_SUBFRAME_SHADERS);
 #endif
@@ -5391,7 +5595,6 @@ static uintptr_t d3d10_gfx_load_texture_compressed(void* video_data,
 
    {
       D3D10_SHADER_RESOURCE_VIEW_DESC view_desc;
-      memset(&view_desc, 0, sizeof(view_desc));
       view_desc.Format                    = dxgi;
       view_desc.ViewDimension             = D3D_SRV_DIMENSION_TEXTURE2D;
       view_desc.Texture2D.MostDetailedMip = 0;
@@ -5493,7 +5696,7 @@ static const video_poke_interface_t d3d10_poke_interface = {
    win32_show_cursor,
    NULL, /* grab_mouse_toggle */
    d3d10_gfx_get_current_shader,
-   NULL, /* get_current_software_framebuffer */
+   d3d10_get_current_software_framebuffer,
 #if 0
    d3d10_get_hw_render_interface,
 #else

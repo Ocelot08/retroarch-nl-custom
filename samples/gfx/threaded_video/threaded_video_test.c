@@ -20,6 +20,7 @@
  * Nothing is stubbed.
  */
 
+#include <gfx/scaler/pixconv.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <stddef.h>
@@ -41,6 +42,9 @@
 #include "../../../gfx/video_driver.h"
 #include "../../../gfx/gfx_instrument.h"
 #include "../../../gfx/video_thread_wrapper.h"
+#ifdef HAVE_TEMPORAL_UPSCALER
+#include "../../../gfx/video_upscaler.h"
+#endif
 #include "../../../record/record_driver.h"
 #include "../../../gfx/font_driver.h"
 #include "../../../menu/menu_driver.h"
@@ -65,9 +69,12 @@
 #include <rthreads/rthreads.h>
 #include <file/config_file.h>
 #include <formats/image_yuv_blit.h>
+#include <formats/video_hw_frame.h>
 #include <queues/task_queue.h>
 
 static unsigned failures = 0;
+static retro_time_t dplane_grid_base;
+static retro_atomic_int_t dplane_grid_period;
 
 #define CHECK(cond, ...) \
    do { \
@@ -151,7 +158,9 @@ static void run_frames(unsigned n)
    {
       runloop_iterate();
 #ifdef HAVE_COCOA
-      harness_cocoa_pump();
+      /* No native presents or event work on the synthetic display. */
+      if (!retro_atomic_load_acquire_int(&dplane_grid_period))
+         harness_cocoa_pump();
 #endif
    }
 }
@@ -339,6 +348,27 @@ static void lane_line_separation(void)
          "worker_running and deferred_head share line %u",
          (unsigned)LINE_OF(deferred_head));
 
+   /* What the main thread writes every push - its clock, display
+    * pacing's averages and schedule, the handoff counts and what it
+    * publishes - against what the video thread writes every frame. */
+   CHECK(LINE_OF(core_time) != LINE_OF(miss_run)
+         && LINE_OF(core_time) != LINE_OF(drain_cooldown)
+         && LINE_OF(core_time) != LINE_OF(drain_pending),
+         "core_time shares line %u with the video thread's miss counts",
+         (unsigned)LINE_OF(core_time));
+   CHECK(LINE_OF(last_time) != LINE_OF(lend),
+         "last_time and the lent slots share line %u",
+         (unsigned)LINE_OF(last_time));
+   CHECK(LINE_OF(handoff.last) != LINE_OF(repeat_request)
+         && LINE_OF(handoff.last) != LINE_OF(repeat_group),
+         "the handoff counts share line %u with the repeat request",
+         (unsigned)LINE_OF(handoff.last));
+   CHECK(LINE_OF(content_period_us) != LINE_OF(margin_extra_us)
+         && LINE_OF(core_time_us) != LINE_OF(repeat_request)
+         && LINE_OF(core_time_us) != LINE_OF(handoff.last),
+         "the published pacing values share line %u",
+         (unsigned)LINE_OF(core_time_us));
+
    /* The deferred ring's producer and consumer indices. */
    CHECK(LINE_OF(deferred_head) != LINE_OF(deferred_tail),
          "deferred_head and deferred_tail share line %u",
@@ -414,6 +444,153 @@ static void lane_toggle_cycle(unsigned cycles)
 /*   is what a resolution or fullscreen change does.                  */
 /* ------------------------------------------------------------------ */
 
+#ifdef HAVE_GFX_WIDGETS
+#include "../../../gfx/gfx_widgets.h"
+
+static void set_driver(thread_video_t *thr, const video_driver_t *driver);
+static void set_poke(thread_video_t *thr, const video_poke_interface_t *poke);
+static void set_poke_from(thread_video_t *thr, const video_driver_t *driver);
+
+/* ------------------------------------------------------------------ */
+/* Lane: the widgets go only once no frame draws them                 */
+/*   Threaded video turned off clears its setting before the reinit,  */
+/*   so driver_uninit() waits on the wrapper being up, not on the     */
+/*   setting. The widgets turned off tear down once the video thread  */
+/*   is past the frame in flight, and the toggle does not wait for    */
+/*   it. Either way a frame drawing them must not see them go.        */
+/* ------------------------------------------------------------------ */
+
+static const video_driver_t *wolane_inner;
+static video_driver_t        wolane_driver;
+static retro_atomic_int_t    wolane_slow;
+static retro_atomic_int_t    wolane_frames;
+static retro_atomic_int_t    wolane_raced;
+
+static bool wolane_frame(void *data, const void *frame,
+      unsigned dims, uint64_t frame_count,
+      unsigned pitch, const char *msg, video_frame_info_t *video_info)
+{
+   if (retro_atomic_load_acquire_int(&wolane_slow))
+   {
+      volatile gfx_widget_font_data_t *font = (volatile gfx_widget_font_data_t*)
+         &dispwidget_get_ptr()->gfx_widget_fonts.regular;
+      void *had          = font->font;
+      retro_time_t until = cpu_features_get_time_usec() + 500000;
+      retro_atomic_fetch_add_int(&wolane_frames, 1);
+      /* Drawing until the widgets' font goes, or long enough that the
+       * teardown would have reached it */
+      while (     had
+            &&  font->font == had
+            &&  cpu_features_get_time_usec() < until) { }
+      if (had && font->font != had)
+         retro_atomic_store_release_int(&wolane_raced, 1);
+   }
+   return wolane_inner->frame(data, frame, dims, frame_count,
+         pitch, msg, video_info);
+}
+
+static void lane_threaded_off_in_flight(void)
+{
+   static const char *how[3] = { "threaded off", "widgets off",
+      "widgets off and on" };
+   unsigned had = failures;
+   settings_t *settings = config_get_ptr();
+   video_driver_state_t *video_st = video_state_get_ptr();
+   int c;
+
+   for (c = 0; c < 3; c++)
+   {
+      dispgfx_widget_t *w;
+      thread_video_t *thr;
+      retro_time_t took = 0;
+      unsigned i;
+
+      set_threaded_via_setting(true);
+      run_frames(6);
+      expect_wrapper(true, "threaded-off lane");
+      w = dispwidget_get_ptr();
+      if (!retro_atomic_load_acquire_int(&w->worker))
+      {
+         fprintf(stderr, "[skip] threaded-off lane (no widgets on this driver)\n");
+         set_threaded_via_setting(false);
+         return;
+      }
+      if (menu_is_up())
+         command_event(CMD_EVENT_MENU_TOGGLE, NULL);
+      run_frames(3);
+      video_thread_wait_idle();
+      CHECK(w->gfx_widget_fonts.regular.font != NULL,
+            "threaded-off lane (%s): no widget font to watch", how[c]);
+      thr                 = (thread_video_t*)video_st->data;
+      wolane_inner        = thr->driver;
+      wolane_driver       = *thr->driver;
+      wolane_driver.frame = wolane_frame;
+      set_driver(thr, &wolane_driver);
+      retro_atomic_store_release_int(&wolane_raced, 0);
+      retro_atomic_store_release_int(&wolane_frames, 0);
+      retro_atomic_store_release_int(&wolane_slow, 1);
+      /* A frame still drawing, then straight off */
+      for (i = 0; i < 1000
+            && !retro_atomic_load_acquire_int(&wolane_frames); i++)
+      {
+         run_frames(1);
+         if (!retro_atomic_load_acquire_int(&wolane_frames))
+            retro_sleep(1);
+      }
+      if (c == 0)
+         set_threaded_via_setting(false);
+      else
+      {
+         settings->bools.menu_enable_widgets = false;
+         took = cpu_features_get_time_usec();
+         command_event(CMD_EVENT_OSD_NOTIFICATION_TOGGLE, NULL);
+         took = cpu_features_get_time_usec() - took;
+         /* Back before the teardown could run: put off, not over it */
+         if (c == 2)
+         {
+            settings->bools.menu_enable_widgets = true;
+            command_event(CMD_EVENT_OSD_NOTIFICATION_TOGGLE, NULL);
+         }
+      }
+      retro_atomic_store_release_int(&wolane_slow, 0);
+      CHECK(retro_atomic_load_acquire_int(&wolane_frames) > 0,
+            "threaded-off lane (%s): no frame was in flight", how[c]);
+      CHECK(!retro_atomic_load_acquire_int(&wolane_raced),
+            "threaded-off lane (%s): the widgets went while a frame "
+            "drew them", how[c]);
+      if (c > 0)
+      {
+         CHECK(took < 200000,
+               "threaded-off lane (%s): the toggle waited %lld us "
+               "for the frame", how[c], (long long)took);
+         if (c == 1)
+         {
+            /* Torn down once the video thread is past the frame */
+            for (i = 0; i < 60 && (w->flags & DISPGFX_WIDGET_FLAG_INITED); i++)
+               run_frames(1);
+            CHECK(!(w->flags & DISPGFX_WIDGET_FLAG_INITED),
+                  "threaded-off lane (widgets off): never torn down");
+            settings->bools.menu_enable_widgets = true;
+            command_event(CMD_EVENT_OSD_NOTIFICATION_TOGGLE, NULL);
+         }
+         video_thread_wait_idle();
+         set_driver(thr, wolane_inner);
+         /* And back, on the video thread again */
+         for (i = 0; i < 60 && !retro_atomic_load_acquire_int(&w->worker); i++)
+            run_frames(1);
+         CHECK(retro_atomic_load_acquire_int(&w->worker) && w->active,
+               "threaded-off lane (%s): not back after the toggle", how[c]);
+         set_threaded_via_setting(false);
+      }
+      expect_wrapper(false, "threaded-off lane");
+      if (!menu_is_up())
+         command_event(CMD_EVENT_MENU_TOGGLE, NULL);
+   }
+   if (failures == had)
+      fprintf(stderr, "[pass] threaded-off lane (threaded off, widgets off, off and on)\n");
+}
+#endif
+
 static void lane_reinit_under_wrapper(unsigned reps)
 {
    unsigned had = failures;
@@ -444,6 +621,151 @@ static void lane_reinit_under_wrapper(unsigned reps)
 }
 
 /* ------------------------------------------------------------------ */
+/* Lane: the unfocused stub frame across a driver switch              */
+/*   Android stubs the frame on focus loss and lifts it on focus      */
+/*   gain; a core load in between can switch or rebuild the driver.  */
+/* ------------------------------------------------------------------ */
+
+static video_driver_t        stub_a_driver;
+static video_driver_t        stub_b_driver;
+static video_driver_t        stub_inner_driver;
+static const video_driver_t *stub_from;
+static const video_driver_t *stub_inner;
+static retro_atomic_int_t    stub_a_frames;
+static retro_atomic_int_t    stub_b_frames;
+static retro_atomic_int_t    stub_inner_frames;
+
+static bool stub_a_frame(void *data, const void *frame,
+      unsigned dims, uint64_t frame_count,
+      unsigned pitch, const char *msg, video_frame_info_t *video_info)
+{
+   retro_atomic_fetch_add_int(&stub_a_frames, 1);
+   return stub_from->frame(data, frame, dims, frame_count,
+         pitch, msg, video_info);
+}
+
+static bool stub_b_frame(void *data, const void *frame,
+      unsigned dims, uint64_t frame_count,
+      unsigned pitch, const char *msg, video_frame_info_t *video_info)
+{
+   retro_atomic_fetch_add_int(&stub_b_frames, 1);
+   return stub_from->frame(data, frame, dims, frame_count,
+         pitch, msg, video_info);
+}
+
+static bool stub_inner_frame(void *data, const void *frame,
+      unsigned dims, uint64_t frame_count,
+      unsigned pitch, const char *msg, video_frame_info_t *video_info)
+{
+   retro_atomic_fetch_add_int(&stub_inner_frames, 1);
+   return stub_inner->frame(data, frame, dims, frame_count,
+         pitch, msg, video_info);
+}
+
+static void lane_stub_frame_switch(void)
+{
+   unsigned had                   = failures;
+   video_driver_state_t *video_st = video_state_get_ptr();
+   int flags                      = DRIVER_VIDEO_MASK | DRIVER_INPUT_MASK;
+   bool reopen_menu               = menu_is_up();
+   video_driver_frame_t wrapper_frame;
+   thread_video_t *thr;
+   int av;
+
+   expect_wrapper(false, "stub-frame lane");
+   if (reopen_menu)
+      command_event(CMD_EVENT_MENU_TOGGLE, NULL);
+   run_frames(3);
+
+   /* Stubbed under driver A, lifted under driver B */
+   stub_from               = video_st->current_video;
+   stub_a_driver           = *stub_from;
+   stub_a_driver.frame     = stub_a_frame;
+   stub_b_driver           = *stub_from;
+   stub_b_driver.frame     = stub_b_frame;
+   video_st->current_video = &stub_a_driver;
+   video_driver_set_stub_frame();
+   video_st->current_video = &stub_b_driver;
+   video_driver_unset_stub_frame();
+   CHECK(stub_a_driver.frame == stub_a_frame,
+         "stub-frame lane: driver A's frame was left stubbed");
+   CHECK(stub_b_driver.frame == stub_b_frame,
+         "stub-frame lane: driver B was given another driver's frame");
+
+   /* While stubbed no frame reaches the driver, and the core is told */
+   retro_atomic_store_release_int(&stub_a_frames, 0);
+   retro_atomic_store_release_int(&stub_b_frames, 0);
+   video_driver_set_stub_frame();
+   run_frames(3);
+   av = 0;
+   runloop_environment_cb(RETRO_ENVIRONMENT_GET_AUDIO_VIDEO_ENABLE, &av);
+   /* Only Android's frame path honours the stub */
+#ifdef ANDROID
+   CHECK(!retro_atomic_load_acquire_int(&stub_a_frames)
+         && !retro_atomic_load_acquire_int(&stub_b_frames),
+         "stub-frame lane: %d frames drew while stubbed",
+         retro_atomic_load_acquire_int(&stub_a_frames)
+         + retro_atomic_load_acquire_int(&stub_b_frames));
+#endif
+   CHECK(!(av & RETRO_AV_ENABLE_VIDEO),
+         "stub-frame lane: video reported enabled while stubbed");
+   video_driver_unset_stub_frame();
+   run_frames(3);
+   av = 0;
+   runloop_environment_cb(RETRO_ENVIRONMENT_GET_AUDIO_VIDEO_ENABLE, &av);
+   CHECK(retro_atomic_load_acquire_int(&stub_b_frames) > 0
+         && !retro_atomic_load_acquire_int(&stub_a_frames),
+         "stub-frame lane: after the stub, B drew %d frames and A %d",
+         retro_atomic_load_acquire_int(&stub_b_frames),
+         retro_atomic_load_acquire_int(&stub_a_frames));
+   CHECK(av & RETRO_AV_ENABLE_VIDEO,
+         "stub-frame lane: video reported disabled after the stub");
+   video_st->current_video = (video_driver_t*)stub_from;
+
+   /* Under the wrapper, rebuilt while stubbed: the wrapper's vtable
+    * keeps its frame and the driver behind it draws nothing */
+   set_threaded_via_setting(true);
+   run_frames(3);
+   expect_wrapper(true, "stub-frame lane");
+   wrapper_frame = video_st->current_video->frame;
+   video_driver_set_stub_frame();
+   CHECK(video_st->current_video->frame == wrapper_frame,
+         "stub-frame lane: the wrapper's frame was replaced");
+   command_event(CMD_EVENT_REINIT, &flags);
+   run_frames(1);
+   expect_wrapper(true, "stub-frame lane, after reinit");
+   thr                     = (thread_video_t*)video_st->data;
+   stub_inner              = thr->driver;
+   stub_inner_driver       = *thr->driver;
+   stub_inner_driver.frame = stub_inner_frame;
+   set_driver(thr, &stub_inner_driver);
+   retro_atomic_store_release_int(&stub_inner_frames, 0);
+   run_frames(3);
+   video_thread_wait_idle();
+#ifdef ANDROID
+   CHECK(!retro_atomic_load_acquire_int(&stub_inner_frames),
+         "stub-frame lane: %d frames drew behind a wrapper rebuilt "
+         "while stubbed",
+         retro_atomic_load_acquire_int(&stub_inner_frames));
+#endif
+   video_driver_unset_stub_frame();
+   run_frames(5);
+   video_thread_wait_idle();
+   CHECK(retro_atomic_load_acquire_int(&stub_inner_frames) > 0,
+         "stub-frame lane: nothing drew behind the wrapper after the stub");
+   CHECK(video_st->current_video->frame == wrapper_frame,
+         "stub-frame lane: the rebuilt wrapper's frame was replaced");
+   set_driver(thr, stub_inner);
+   set_threaded_via_setting(false);
+   expect_wrapper(false, "stub-frame lane");
+
+   if (reopen_menu)
+      command_event(CMD_EVENT_MENU_TOGGLE, NULL);
+   if (failures == had)
+      fprintf(stderr, "[pass] stub-frame lane (driver switch, wrapper rebuild)\n");
+}
+
+/* ------------------------------------------------------------------ */
 /* Lane: toggle with the menu closed                                  */
 /*   Setting written while the core is running, no menu in between,  */
 /*   as a hotkey or override would do it.                            */
@@ -471,6 +793,578 @@ static void lane_toggle_in_game(unsigned cycles)
 
    if (failures == had)
       fprintf(stderr, "[pass] toggle-in-game lane (%u cycles)\n", cycles);
+}
+
+
+/* ------------------------------------------------------------------ */
+/* Lane: driver pacing                                                */
+/*   The runloop's side of Driver Pacing against a fake backend in    */
+/*   the driver's poke slots: one wait a content frame with a fresh   */
+/*   identity, the input and simulation markers on that identity in   */
+/*   order, the mode asked for while owned and taken off once when    */
+/*   not - the menu, threaded video, BFI, a backend that fails - and  */
+/*   the pacing record saying so. On a real driver without the       */
+/*   extension (lavapipe) the device reason is reported and nothing   */
+/*   is released.                                                     */
+/* ------------------------------------------------------------------ */
+
+static video_poke_interface_t         dplane_poke;
+static const video_poke_interface_t  *dplane_saved_poke;
+static unsigned dplane_sets, dplane_last_mode, dplane_set_answer;
+static unsigned dplane_waits, dplane_last_interval, dplane_last_max;
+static uint64_t dplane_last_id, dplane_wait_answer_from;
+static unsigned dplane_marks;
+/* (id, marker) of the last few markers, oldest first */
+static uint64_t dplane_mark_id[8];
+static unsigned dplane_mark_kind[8];
+
+static unsigned dplane_set(void *data, unsigned mode)
+{
+   (void)data;
+   dplane_sets++;
+   dplane_last_mode = mode;
+   if (!mode)
+      return VIDEO_DRIVER_PACING_REASON_OFF;
+   return dplane_set_answer;
+}
+
+/* The identity the frame loop waits for: the frame it handed over
+ * last, which its next release names plus one */
+static uint64_t dplane_last_wait_id, dplane_last_next_id;
+/* On the video thread, the identities the frames arrive with */
+static retro_atomic_size_t dplane_seen_id, dplane_seen_frames, dplane_seen_interval;
+
+static bool dplane_wait(void *data, uint64_t frame_id, uint64_t next_id,
+      unsigned max_wait_us)
+{
+   (void)data;
+   dplane_last_next_id = next_id;
+   dplane_waits++;
+   dplane_last_wait_id  = frame_id;
+   dplane_last_max      = max_wait_us;
+   if (dplane_wait_answer_from)
+      return false;
+   dplane_last_id = frame_id + 1;
+   return true;
+}
+
+static void dplane_mark(void *data, uint64_t id, unsigned marker)
+{
+   (void)data;
+   memmove(dplane_mark_id,   dplane_mark_id + 1,   7 * sizeof(dplane_mark_id[0]));
+   memmove(dplane_mark_kind, dplane_mark_kind + 1, 7 * sizeof(dplane_mark_kind[0]));
+   dplane_mark_id[7]   = id;
+   dplane_mark_kind[7] = marker;
+   dplane_marks++;
+}
+
+static bool dplane_focus(void *data)
+{
+   (void)data;
+   return true;
+}
+
+/* The fake driver under the wrapper: the null driver with the
+ * pacing pokes, and a frame that notes what the packet carried */
+static const video_driver_t          *dplane_inner;
+static video_driver_t                 dplane_driver;
+static const video_poke_interface_t  *dplane_inner_poke;
+static video_poke_interface_t         dplane_thread_poke;
+
+static bool dplane_frame(void *data, const void *frame, unsigned dims,
+      uint64_t frame_count, unsigned pitch, const char *msg,
+      video_frame_info_t *video_info)
+{
+   if (video_info && video_info->driver_pacing_id)
+   {
+      retro_atomic_store_release_size(&dplane_seen_id,
+            (size_t)video_info->driver_pacing_id);
+      retro_atomic_store_release_size(&dplane_seen_interval,
+            (size_t)video_info->driver_pacing_interval_us);
+      retro_atomic_fetch_add_size(&dplane_seen_frames, 1);
+   }
+   /* The synthetic display must not inherit a real backend's swap clock. */
+   if (retro_atomic_load_acquire_int(&dplane_grid_period))
+      return true;
+   return dplane_inner->frame(data, frame, dims, frame_count, pitch, msg,
+         video_info);
+}
+
+/* A display that reports its vblank, on a grid from dplane_grid_base,
+ * while dplane_grid_period is set; none otherwise, whatever the driver
+ * underneath can say, so the hold's grid is the clock's. */
+static retro_atomic_int_t dplane_fresh_timestamp;
+
+static retro_time_t dplane_last_vblank(void *data)
+{
+   retro_time_t now = cpu_features_get_time_usec();
+   int period = retro_atomic_load_acquire_int(&dplane_grid_period);
+   (void)data;
+   if (retro_atomic_load_acquire_int(&dplane_fresh_timestamp))
+   {
+      /* Model a callback preempted across a display tick. Test only. */
+      retro_sleep(2);
+      return cpu_features_get_time_usec();
+   }
+   if (!period)
+      return 0;
+   return dplane_grid_base
+      + (now - dplane_grid_base) / period * period;
+}
+
+static float dplane_refresh(void *data)
+{
+   int period = retro_atomic_load_acquire_int(&dplane_grid_period);
+   (void)data;
+   return period ? 1000000.0f / (float)period : 0.0f;
+}
+
+static void dplane_get_poke(void *data, const video_poke_interface_t **iface)
+{
+   dplane_inner->poke_interface(data, &dplane_inner_poke);
+   dplane_thread_poke                    = *dplane_inner_poke;
+   dplane_thread_poke.driver_pacing_set  = dplane_set;
+   dplane_thread_poke.driver_pacing_wait = dplane_wait;
+   dplane_thread_poke.driver_pacing_mark = dplane_mark;
+   dplane_thread_poke.get_last_present_time = dplane_last_vblank;
+   if (retro_atomic_load_acquire_int(&dplane_grid_period))
+      dplane_thread_poke.get_refresh_rate = dplane_refresh;
+   *iface                                = &dplane_thread_poke;
+}
+
+typedef struct
+{
+   retro_time_t phase, core, render, extra, elapsed, due;
+} dplane_phase_sample_t;
+static dplane_phase_sample_t dplane_phase_samples[2][30];
+
+/* Read the presenter-owned phase flag between frames on its owner. */
+static uintptr_t dplane_read_phase(void *data)
+{
+   thread_video_t *thr = (thread_video_t*)data;
+   return thr->phase_from_display ? 1 : 0;
+}
+
+static void dplane_phase_report(void)
+{
+   unsigned pass, i;
+   for (pass = 0; pass < 2; pass++)
+      for (i = 0; i < 30; i++)
+      {
+         const dplane_phase_sample_t *s = &dplane_phase_samples[pass][i];
+         fprintf(stderr, "phase sample %u/%u: phase=%ld core=%ld render=%ld"
+               " extra=%ld elapsed=%ld due_phase=%ld us\n", pass, i,
+               (long)s->phase, (long)s->core, (long)s->render,
+               (long)s->extra, (long)s->elapsed, (long)s->due);
+      }
+}
+
+/* Where 30 driver-released frames started against the display's grid:
+ * how many of them within a millisecond of their median phase, which a
+ * loaded machine's odd late wake does not move, that median, and how
+ * long they took. */
+static void dplane_phase_measure(thread_video_t *thr, unsigned pass,
+      unsigned *on_phase, retro_time_t *median, retro_time_t *took)
+{
+   retro_time_t p = retro_atomic_load_acquire_int(&dplane_grid_period);
+   retro_time_t d[30], first = 0, t0, m;
+   unsigned i, j;
+   t0 = cpu_features_get_time_usec();
+   for (i = 0; i < 30; i++)
+   {
+      retro_time_t ph, reported_core;
+      retro_time_t began = cpu_features_get_time_usec();
+      bool pacing;
+      dplane_phase_sample_t *sample = &dplane_phase_samples[pass][i];
+      run_frames(1);
+      ph = (thr->run_start - dplane_grid_base) % p;
+      sample->phase = ph;
+      sample->core = thr->core_time;
+      sample->extra = retro_atomic_load_acquire_int(&thr->margin_extra_us);
+      sample->elapsed = cpu_features_get_time_usec() - began;
+      sample->due = (thr->content_due - dplane_grid_base) % p;
+      video_thread_pacing_stats(&pacing, &reported_core, &sample->render);
+      if (!i)
+         first = ph;
+      d[i] = ph - first;
+      while (d[i] > p / 2)
+         d[i] -= p;
+      while (d[i] <= -p / 2)
+         d[i] += p;
+   }
+   *took = cpu_features_get_time_usec() - t0;
+   for (i = 1; i < 30; i++)
+      for (j = i; j > 0 && d[j - 1] > d[j]; j--)
+      {
+         retro_time_t t = d[j];
+         d[j]     = d[j - 1];
+         d[j - 1] = t;
+      }
+   m     = d[15];
+   *on_phase = 0;
+   for (i = 0; i < 30; i++)
+      if (d[i] - m <= 1000 && m - d[i] <= 1000)
+         (*on_phase)++;
+   *median = ((first + m) % p + p) % p;
+}
+
+static void lane_driver_pacing(void)
+{
+   video_driver_state_t *video_st = video_state_get_ptr();
+   runloop_state_t *runloop_st    = runloop_state_get_ptr();
+   settings_t *settings           = config_get_ptr();
+   unsigned had                   = failures;
+   unsigned saved_bfi             = settings->uints.video_black_frame_insertion;
+   enum poll_type_override_t saved_poll = runloop_st->core_poll_type_override;
+   unsigned waits;
+   video_driver_t *saved_driver;
+   video_driver_t focused_driver;
+
+   command_event(CMD_EVENT_MENU_TOGGLE, NULL);
+   CHECK(!menu_is_up(), "driver pacing lane: menu still up");
+   /* The harness core never polls itself: early polling puts the
+    * frame's input sample where the runloop makes it. */
+   runloop_st->core_poll_type_override = POLL_TYPE_OVERRIDE_EARLY;
+   set_threaded_via_setting(false);
+   run_frames(3);
+   expect_wrapper(false, "driver pacing lane");
+   /* This lane tests pacing policy with a focused game. Desktop focus
+    * may change asynchronously while the synthetic backend runs. */
+   saved_driver         = video_st->current_video;
+   focused_driver       = *saved_driver;
+   focused_driver.focus = dplane_focus;
+   video_st->current_video = &focused_driver;
+
+   /* Explicitly remove the backend: capable hardware may otherwise
+    * satisfy this request through the real driver's pacing hooks. */
+   dplane_saved_poke = video_st->poke;
+   dplane_poke       = *video_st->poke;
+   dplane_poke.driver_pacing_set  = NULL;
+   dplane_poke.driver_pacing_wait = NULL;
+   dplane_poke.driver_pacing_mark = NULL;
+   video_st->poke = &dplane_poke;
+   settings->uints.video_driver_pacing = VIDEO_DRIVER_PACING_ON;
+   run_frames(5);
+   CHECK(video_st->driver_pacing_reason == VIDEO_DRIVER_PACING_REASON_DRIVER,
+         "no backend: reason %u", video_st->driver_pacing_reason);
+   CHECK(!(runloop_st->pace & RUNLOOP_PACE_DRIVER), "no backend: paced by the driver");
+   CHECK(runloop_st->driver_pacing_frame_id == 0, "no backend: a frame identity");
+
+   /* A backend that answers */
+   dplane_poke.driver_pacing_set  = dplane_set;
+   dplane_poke.driver_pacing_wait = dplane_wait;
+   dplane_poke.driver_pacing_mark = dplane_mark;
+   video_st->poke     = &dplane_poke;
+   dplane_sets = dplane_waits = dplane_marks = 0;
+   dplane_last_id = dplane_wait_answer_from = 0;
+   dplane_set_answer  = VIDEO_DRIVER_PACING_REASON_NONE;
+
+   run_frames(20);
+   CHECK(dplane_last_wait_id == 19,
+         "backend up: the last wait named the frame handed over, %llu",
+         (unsigned long long)dplane_last_wait_id);
+   CHECK(dplane_last_next_id == runloop_st->driver_pacing_frame_id,
+         "backend up: the wait named the identity it released, %llu vs %llu",
+         (unsigned long long)dplane_last_next_id,
+         (unsigned long long)runloop_st->driver_pacing_frame_id);
+   CHECK(video_st->driver_pacing_reason == VIDEO_DRIVER_PACING_REASON_NONE,
+         "backend up: reason %u", video_st->driver_pacing_reason);
+   CHECK(video_st->driver_pacing_mode == VIDEO_DRIVER_PACING_ON, "backend up: mode");
+   CHECK(dplane_last_mode == VIDEO_DRIVER_PACING_ON, "backend up: asked for On");
+   CHECK(runloop_st->pace & RUNLOOP_PACE_DRIVER, "backend up: the pacing record");
+   CHECK(dplane_waits == 20, "backend up: %u waits for 20 frames", dplane_waits);
+   CHECK(dplane_last_id == 20 && runloop_st->driver_pacing_frame_id == 20,
+         "backend up: identity %llu, runloop holds %llu",
+         (unsigned long long)dplane_last_id,
+         (unsigned long long)runloop_st->driver_pacing_frame_id);
+   CHECK(dplane_last_max >= 20000 && dplane_last_max <= 210000,
+         "backend up: the wait bound %u us", dplane_last_max);
+   /* The last frame: released (SIMULATION_START on 20) after the
+    * frame before it sampled input on 19 */
+   CHECK(dplane_mark_kind[7] == VIDEO_DRIVER_PACING_MARK_SIMULATION_START
+         && dplane_mark_id[7] == 20,
+         "the release marks the start of frame 20 (got %u on %llu)",
+         dplane_mark_kind[7], (unsigned long long)dplane_mark_id[7]);
+   CHECK(dplane_mark_kind[6] == VIDEO_DRIVER_PACING_MARK_INPUT_SAMPLE
+         && dplane_mark_id[6] == 19,
+         "frame 19 sampled its input before frame 20 was released (got %u on %llu)",
+         dplane_mark_kind[6], (unsigned long long)dplane_mark_id[6]);
+   CHECK(dplane_mark_kind[5] == VIDEO_DRIVER_PACING_MARK_SIMULATION_START
+         && dplane_mark_id[5] == 19,
+         "frame 19 was released before it sampled input");
+   {
+      char pbuf[64];
+      runloop_pace_string(pbuf, sizeof(pbuf));
+      CHECK(strstr(pbuf, "Driver") != NULL, "pacing string: %s", pbuf);
+      runloop_driver_pacing_string(pbuf, sizeof(pbuf));
+      CHECK(!strcmp(pbuf, "On"), "status string: %s", pbuf);
+   }
+
+   /* The menu up: the mode is taken off, once, and nothing released */
+   waits       = dplane_waits;
+   dplane_sets = 0;
+   command_event(CMD_EVENT_MENU_TOGGLE, NULL);
+   run_frames(5);
+   CHECK(video_st->driver_pacing_reason == VIDEO_DRIVER_PACING_REASON_SUSPENDED,
+         "menu: reason %u", video_st->driver_pacing_reason);
+   CHECK(dplane_sets == 1 && dplane_last_mode == VIDEO_DRIVER_PACING_OFF,
+         "menu: the mode taken off once (%u sets, last %u)",
+         dplane_sets, dplane_last_mode);
+   CHECK(dplane_waits == waits, "menu: a release");
+   CHECK(runloop_st->driver_pacing_frame_id == 0, "menu: an identity kept");
+   CHECK(!(runloop_st->pace & RUNLOOP_PACE_DRIVER), "menu: the pacing record");
+   command_event(CMD_EVENT_MENU_TOGGLE, NULL);
+   run_frames(5);
+   CHECK(dplane_waits == waits + 5 && dplane_last_mode == VIDEO_DRIVER_PACING_ON,
+         "back in game: releases resume");
+
+   /* Black Frame Insertion: its extra presents go out of band on the
+    * same frame, so the release stays owned */
+   waits = dplane_waits;
+   settings->uints.video_black_frame_insertion = 1;
+   run_frames(3);
+   CHECK(video_st->driver_pacing_reason == VIDEO_DRIVER_PACING_REASON_NONE
+         && dplane_waits == waits + 3,
+         "BFI: reason %u, %u releases", video_st->driver_pacing_reason,
+         dplane_waits - waits);
+   settings->uints.video_black_frame_insertion = saved_bfi;
+   /* Scanline Sync paces the present itself */
+   waits = dplane_waits;
+   settings->bools.video_scanline_sync = true;
+   run_frames(3);
+   CHECK(video_st->driver_pacing_reason == VIDEO_DRIVER_PACING_REASON_MODE
+         && dplane_waits == waits && dplane_last_mode == VIDEO_DRIVER_PACING_OFF,
+         "Scanline Sync: reason %u, %u releases", video_st->driver_pacing_reason,
+         dplane_waits - waits);
+   settings->bools.video_scanline_sync = false;
+   run_frames(3);
+   CHECK(dplane_waits == waits + 3, "Scanline Sync off: releases resume");
+
+   /* A release the backend could not give: that frame paces as
+    * before, the next is asked again */
+   waits = dplane_waits;
+   dplane_wait_answer_from = 1;
+   run_frames(3);
+   CHECK(dplane_waits == waits + 3, "failed releases: still asked");
+   CHECK(!(runloop_st->pace & RUNLOOP_PACE_DRIVER)
+         && runloop_st->driver_pacing_frame_id == 0,
+         "failed release: paced as before, no identity");
+   dplane_wait_answer_from = 0;
+
+   /* A backend that refuses the mode */
+   dplane_set_answer = VIDEO_DRIVER_PACING_REASON_FAILED;
+   waits = dplane_waits;
+   run_frames(3);
+   CHECK(video_st->driver_pacing_reason == VIDEO_DRIVER_PACING_REASON_FAILED
+         && dplane_waits == waits,
+         "backend failed: reason %u, %u releases",
+         video_st->driver_pacing_reason, dplane_waits - waits);
+   dplane_set_answer = VIDEO_DRIVER_PACING_REASON_NONE;
+   run_frames(2);
+
+   /* Off: taken off once, then left alone */
+   dplane_sets = 0;
+   settings->uints.video_driver_pacing = VIDEO_DRIVER_PACING_OFF;
+   run_frames(5);
+   CHECK(video_st->driver_pacing_reason == VIDEO_DRIVER_PACING_REASON_OFF
+         && video_st->driver_pacing_mode == VIDEO_DRIVER_PACING_OFF,
+         "off: reason %u mode %u", video_st->driver_pacing_reason,
+         video_st->driver_pacing_mode);
+   CHECK(dplane_sets == 1 && dplane_last_mode == VIDEO_DRIVER_PACING_OFF,
+         "off: taken off once (%u sets)", dplane_sets);
+
+   video_st->poke = dplane_saved_poke;
+   video_st->current_video = saved_driver;
+
+   /* Threaded video: the pokes cross the wrapper to the driver, the
+    * identity rides the frame packet to the video thread, and the
+    * wait names the frame handed over */
+   settings->uints.video_driver_pacing = VIDEO_DRIVER_PACING_ON;
+   set_threaded_via_setting(true);
+   run_frames(3);
+   expect_wrapper(true, "driver pacing lane, threaded");
+   {
+      thread_video_t *thr = (thread_video_t*)video_st->data;
+      if (thr)
+      {
+         size_t seen_id, seen_frames;
+         /* Focus held, as above: the wrapper is the current driver now */
+         video_thread_wait_idle();
+         saved_driver            = video_st->current_video;
+         focused_driver          = *saved_driver;
+         focused_driver.focus    = dplane_focus;
+         video_st->current_video = &focused_driver;
+         dplane_inner                 = thr->driver;
+         dplane_driver                = *thr->driver;
+         dplane_driver.frame          = dplane_frame;
+         dplane_driver.poke_interface = dplane_get_poke;
+         dplane_grid_base = cpu_features_get_time_usec();
+         set_driver(thr, &dplane_driver);
+         set_poke_from(thr, &dplane_driver);
+         retro_atomic_store_release_size(&dplane_seen_id, 0);
+         retro_atomic_store_release_size(&dplane_seen_frames, 0);
+         dplane_sets = dplane_waits = dplane_marks = 0;
+         dplane_last_id = dplane_last_wait_id = 0;
+         run_frames(20);
+         video_thread_wait_idle();
+         seen_id     = retro_atomic_load_acquire_size(&dplane_seen_id);
+         seen_frames = retro_atomic_load_acquire_size(&dplane_seen_frames);
+         CHECK(video_st->driver_pacing_reason == VIDEO_DRIVER_PACING_REASON_NONE,
+               "threaded: reason %u", video_st->driver_pacing_reason);
+         CHECK(runloop_st->pace & RUNLOOP_PACE_DRIVER, "threaded: the pacing record");
+         CHECK(dplane_waits >= 19 && dplane_last_wait_id + 1 == runloop_st->driver_pacing_frame_id,
+               "threaded: %u waits, the last for frame %llu with %llu released",
+               dplane_waits, (unsigned long long)dplane_last_wait_id,
+               (unsigned long long)runloop_st->driver_pacing_frame_id);
+         /* The fake backend releases at once, so the loop runs ahead
+          * and a slow presenter (lavapipe) drops frames: what it draws
+          * carries an identity the loop released, never one ahead */
+         CHECK(seen_frames >= 1 && seen_id <= runloop_st->driver_pacing_frame_id,
+               "threaded: the video thread saw %u frames with an identity, last %u, loop at %llu",
+               (unsigned)seen_frames, (unsigned)seen_id,
+               (unsigned long long)runloop_st->driver_pacing_frame_id);
+         CHECK(dplane_mark_kind[7] == VIDEO_DRIVER_PACING_MARK_SIMULATION_START
+               && dplane_mark_id[7] == runloop_st->driver_pacing_frame_id,
+               "threaded: the release marked the start of the released frame");
+         /* Display pacing: the driver's sleep is the hold's release.
+          * Every frame is released by the driver, at the content's
+          * period, and the presenter's hold stands aside for each
+          * rather than sleep a second time. */
+         {
+            uint64_t stood  = thr->driver_released;
+            unsigned before = dplane_waits;
+            unsigned content = (unsigned)runloop_content_frame_time_us(
+                  video_st->core_hz);
+            settings->bools.video_threaded_display_pacing = true;
+            run_frames(5);
+            video_thread_wait_idle();
+            CHECK(video_st->driver_pacing_reason == VIDEO_DRIVER_PACING_REASON_NONE
+                  && (runloop_st->pace & RUNLOOP_PACE_DRIVER)
+                  && (runloop_st->pace & RUNLOOP_PACE_DISPLAY),
+                  "display pacing on: reason %u, pace 0x%x",
+                  video_st->driver_pacing_reason, runloop_st->pace);
+            CHECK(dplane_waits - before >= 5,
+                  "display pacing on: %u releases for 5 frames",
+                  dplane_waits - before);
+            CHECK(thr->driver_released - stood >= 4,
+                  "display pacing on: the hold stood aside for %u of 5 frames",
+                  (unsigned)(thr->driver_released - stood));
+            CHECK(video_st->driver_pacing_interval_us == content
+                  && retro_atomic_load_acquire_size(&dplane_seen_interval)
+                     == content,
+                  "display pacing on: the content's period %u us to the"
+                  " driver (asked %u, presenter saw %u)", content,
+                  video_st->driver_pacing_interval_us,
+                  (unsigned)retro_atomic_load_acquire_size(
+                     &dplane_seen_interval));
+            /* A release the driver could not give: the hold holds. The
+             * first frame pushed was released before the answer turned. */
+            stood                   = thr->driver_released;
+            dplane_wait_answer_from = 1;
+            run_frames(3);
+            CHECK(thr->driver_released - stood <= 1,
+                  "display pacing, failed releases: the hold stood aside"
+                  " %u times", (unsigned)(thr->driver_released - stood));
+            dplane_wait_answer_from = 0;
+            settings->bools.video_threaded_display_pacing = false;
+            run_frames(5);
+            CHECK((runloop_st->pace & RUNLOOP_PACE_DRIVER)
+                  && !(runloop_st->pace & RUNLOOP_PACE_DISPLAY),
+                  "display pacing off: the driver alone, pace 0x%x",
+                  runloop_st->pace);
+         }
+         /* With the display's vblank in hand, the driver's interval
+          * keeps the rate and the hold keeps the phase: the released
+          * frames start where the display wants them, after a hitch
+          * (a state load at start-up) as after display pacing is
+          * turned off and on again, and are not run unthrottled by a
+          * release that does not sleep. */
+         if (getenv("HARNESS_SKIP_PHASE_GRID"))
+            fprintf(stderr, "[skip] synthetic display phase grid (host timer jitter)\n");
+         else
+         {
+            float saved_hz  = settings->floats.video_refresh_rate;
+            bool saved_ask  = settings->bools.video_present_timing_from_display;
+            bool saved_vs   = settings->bools.video_vsync;
+            unsigned content = (unsigned)runloop_content_frame_time_us(
+                  video_st->core_hz);
+            retro_time_t mean0, took0, mean1, took1, d;
+            retro_time_t period = 8333;
+            unsigned on_phase0, on_phase1;
+            unsigned phase_failures = failures;
+            settings->floats.video_refresh_rate = 120.0f;
+            settings->bools.video_present_timing_from_display = true;
+            settings->bools.video_vsync = false;
+            command_event(CMD_EVENT_VIDEO_SET_BLOCKING_STATE, NULL);
+            retro_atomic_store_release_int(&dplane_grid_period, 8333);
+            video_thread_wait_idle();
+            set_poke_from(thr, &dplane_driver);
+            settings->bools.video_threaded_display_pacing = true;
+            run_frames(10);
+            retro_atomic_store_release_int(&dplane_fresh_timestamp, 1);
+            run_frames(5);
+            video_thread_wait_idle();
+            CHECK(video_thread_run_blocking(dplane_read_phase, thr) == 1,
+                  "phase: a timestamp sampled during the callback is past");
+            retro_atomic_store_release_int(&dplane_fresh_timestamp, 0);
+            /* The hitch's frame reads as core time to reserve, which
+             * the average sheds over a few dozen frames */
+            retro_sleep(30);
+            run_frames(40);
+            dplane_phase_measure(thr, 0, &on_phase0, &mean0, &took0);
+            CHECK((runloop_st->pace & RUNLOOP_PACE_DRIVER)
+                  && (runloop_st->pace & RUNLOOP_PACE_DISPLAY),
+                  "phase: Display+Driver, pace 0x%x", runloop_st->pace);
+            CHECK(took0 >= (retro_time_t)content * 30 * 3 / 4,
+                  "phase: 30 released frames in %.1f ms, run unthrottled"
+                  " (content %.1f ms)", took0 / 1000.0, content / 1000.0);
+            CHECK(on_phase0 >= 24,
+                  "phase: %u of 30 released frames started on one phase"
+                  " of the display's grid after a hitch", on_phase0);
+            settings->bools.video_threaded_display_pacing = false;
+            run_frames(5);
+            settings->bools.video_threaded_display_pacing = true;
+            run_frames(40);
+            dplane_phase_measure(thr, 1, &on_phase1, &mean1, &took1);
+            d = mean1 - mean0;
+            while (d > period / 2)
+               d -= period;
+            while (d <= -period / 2)
+               d += period;
+            if (d < 0)
+               d = -d;
+            CHECK(on_phase1 >= 24 && d <= 1500,
+                  "phase: after the toggle %u of 30 on one phase, %.2f ms"
+                  " from the start-up phase", on_phase1, d / 1000.0);
+            fprintf(stderr, "   driver pacing phase: start-up %u/30 on phase"
+                  " in %.1f ms, toggled %u/30, %.2f ms apart\n",
+                  on_phase0, took0 / 1000.0, on_phase1, d / 1000.0);
+            if (failures != phase_failures)
+               dplane_phase_report();
+            retro_atomic_store_release_int(&dplane_grid_period, 0);
+            video_thread_wait_idle();
+            set_poke_from(thr, &dplane_driver);
+            settings->bools.video_threaded_display_pacing = false;
+            settings->bools.video_vsync = saved_vs;
+            command_event(CMD_EVENT_VIDEO_SET_BLOCKING_STATE, NULL);
+            settings->bools.video_present_timing_from_display = saved_ask;
+            settings->floats.video_refresh_rate = saved_hz;
+         }
+         video_thread_wait_idle();
+         set_driver(thr, dplane_inner);
+         set_poke(thr, dplane_inner_poke);
+         video_st->current_video = saved_driver;
+      }
+   }
+   settings->uints.video_driver_pacing = VIDEO_DRIVER_PACING_OFF;
+   run_frames(2);
+   set_threaded_via_setting(false);
+   run_frames(2);
+   runloop_st->core_poll_type_override = saved_poll;
+
+   command_event(CMD_EVENT_MENU_TOGGLE, NULL);
+   if (failures == had)
+      fprintf(stderr, "[pass] driver pacing lane\n");
 }
 
 /* ------------------------------------------------------------------ */
@@ -555,7 +1449,11 @@ static uintptr_t worker_install_run(void *data)
    if (w->set_driver)
       w->thr->driver = w->driver;
    if (w->set_poke)
+   {
       w->thr->poke   = w->poke;
+      retro_atomic_store_release_int(&w->thr->movie_capable,
+            w->poke && w->poke->import_movie_frame ? 1 : 0);
+   }
    return 0;
 }
 
@@ -1062,6 +1960,7 @@ static unsigned                      hslane_eye_h    = 1920;
 
 /* Out of order, and fewer than any fallback list. Twice the harness
  * core's 60 fps, so the headset would pace it. */
+static float hslane_hz = 120.0f;
 static float hslane_refresh(void *data, float *rates, unsigned cap,
       unsigned *count)
 {
@@ -1073,7 +1972,7 @@ static float hslane_refresh(void *data, float *rates, unsigned cap,
       rates[1] = 80.0f;
       *count   = 2;
    }
-   return 120.0f;
+   return hslane_hz;
 }
 
 static void hslane_get_poke(void *data, const video_poke_interface_t **iface)
@@ -1085,6 +1984,18 @@ static void hslane_get_poke(void *data, const video_poke_interface_t **iface)
 }
 
 #ifdef HAVE_OPENXR
+static uint32_t hslane_views_flags(void *data)
+{
+   (void)data;
+   return 1u << GFX_CTX_FLAGS_VIDEO_VIEWS;
+}
+
+static uint32_t hslane_inline_flags(void *data)
+{
+   (void)data;
+   return 1u << GFX_CTX_FLAGS_HEADSET_INLINE;
+}
+
 static unsigned hslane_host_state(void *user)
 {
    (void)user;
@@ -1102,7 +2013,9 @@ static bool hslane_set_info(void *data, const video_vr_content_info_t *info)
    return !hslane_info_fail;
 }
 
-static bool hslane_eye_state(void *user, struct retro_vr_eye_state out[2])
+static unsigned hslane_tokens;
+static bool hslane_eye_state(void *user, struct retro_vr_eye_state out[2],
+      unsigned *token)
 {
    (void)user;
    hslane_pose_calls++;
@@ -1110,7 +2023,64 @@ static bool hslane_eye_state(void *user, struct retro_vr_eye_state out[2])
    memset(out, 0, 2 * sizeof(*out));
    out[0].position[0] = -0.032f;
    out[1].position[0] =  0.032f;
+   /* Which eyes these are, for the give check */
+   out[0].position[1] = (float)hslane_tokens;
+   *token             = hslane_tokens++;
    return !hslane_sample_fail;
+}
+
+/* The video thread parked in a command posted from another thread, as
+ * the shader params lane does */
+static retro_atomic_int_t hslane_parked;
+static retro_atomic_int_t hslane_sampled;
+static bool               hslane_sampled_while_parked;
+
+static uintptr_t hslane_park(void *data)
+{
+   unsigned waited;
+   (void)data;
+   retro_atomic_store_release_int(&hslane_parked, 1);
+   for (waited = 0; waited < 2000
+         && !retro_atomic_load_acquire_int(&hslane_sampled); waited++)
+      retro_sleep(1);
+   hslane_sampled_while_parked =
+      retro_atomic_load_acquire_int(&hslane_sampled) != 0;
+   return 0;
+}
+
+static void hslane_poster(void *data)
+{
+   (void)data;
+   video_thread_run_blocking(hslane_park, NULL);
+}
+
+/* Everything queued for the video thread has run: a blocking command
+ * runs behind it */
+static uintptr_t hslane_noop(void *data) { (void)data; return 0; }
+static void hslane_barrier(void)
+{
+   video_thread_run_blocking(hslane_noop, NULL);
+}
+
+/* A frame drawn: the video thread samples after it, past the release
+ * wait_idle returns on, so a command behind it waits for the sample */
+static void hslane_frame(void)
+{
+   run_frames(1);
+   video_thread_wait_idle();
+   hslane_barrier();
+}
+
+/* The eyes a frame was drawn from: which, and on which thread */
+static unsigned  hslane_give_calls;
+static unsigned  hslane_give_token;
+static uintptr_t hslane_give_thread;
+static void hslane_give(void *user, unsigned token)
+{
+   (void)user;
+   hslane_give_calls++;
+   hslane_give_token  = token;
+   hslane_give_thread = sthread_get_current_thread_id();
 }
 
 static bool hslane_set_space(void *user, enum retro_vr_reference_space *space,
@@ -1124,12 +2094,33 @@ static bool hslane_set_space(void *user, enum retro_vr_reference_space *space,
    return true;
 }
 
-static bool hslane_sample(void *user, uint32_t *frame_flags)
+static bool hslane_sample(void *user, unsigned ahead, uint32_t *frame_flags)
 {
    (void)user;
+   (void)ahead;
    hslane_sample_calls++;
    *frame_flags |= hslane_sample_flags;
    return !hslane_sample_fail;
+}
+
+/* The hands: located where, how often, and on which thread. */
+static unsigned  hslane_hands_calls;
+static uintptr_t hslane_hands_thread;
+static bool hslane_locate_hands(void *user)
+{
+   (void)user;
+   hslane_hands_calls++;
+   hslane_hands_thread = sthread_get_current_thread_id();
+   return true;
+}
+
+static bool hslane_controller_poses(void *user,
+      struct retro_vr_controller_poses *out)
+{
+   (void)user;
+   memset(out, 0, sizeof(*out));
+   out->hands[1].flags = RETRO_VR_HAND_ACTIVE;
+   return true;
 }
 
 static bool hslane_eye_size(void *user, unsigned *w, unsigned *h)
@@ -1140,6 +2131,122 @@ static bool hslane_eye_size(void *user, unsigned *w, unsigned *h)
    return true;
 }
 #endif
+
+/* ------------------------------------------------------------------ */
+/* Lane: shader parameter writes                                      */
+/*   The frontend sets a parameter of the driver's own shader with one */
+/*   atomic store, without waiting on the video thread that reads it  */
+/*   each frame: parked in a command, the video thread sees the value */
+/*   at once. Each write was a blocking round trip before.            */
+/* ------------------------------------------------------------------ */
+
+static video_driver_t                splane_driver;
+static const video_driver_t         *splane_inner;
+static video_poke_interface_t        splane_poke;
+static const video_poke_interface_t *splane_inner_poke;
+static struct video_shader          *splane_live;
+static retro_atomic_int_t            splane_held;
+static retro_atomic_int_t            splane_written;
+static bool                          splane_written_while_parked;
+static float                         splane_live_seen;
+
+static struct video_shader *splane_get_shader(void *data)
+{
+   (void)data;
+   return splane_live;
+}
+
+static void splane_get_poke(void *data, const video_poke_interface_t **iface)
+{
+   splane_inner->poke_interface(data, &splane_inner_poke);
+   splane_poke                    = *splane_inner_poke;
+   splane_poke.get_current_shader = splane_get_shader;
+   *iface                         = &splane_poke;
+}
+
+/* The video thread parked in a command posted from another thread,
+ * until the main thread has written or 2 s have passed: a write that
+ * waited for the video thread fails the check rather than the run */
+static uintptr_t splane_park(void *data)
+{
+   unsigned waited;
+   (void)data;
+   retro_atomic_store_release_int(&splane_held, 1);
+   for (waited = 0; waited < 2000
+         && !retro_atomic_load_acquire_int(&splane_written); waited++)
+      retro_sleep(1);
+   splane_written_while_parked =
+      retro_atomic_load_acquire_int(&splane_written) != 0;
+   splane_live_seen = video_shader_param_get(&splane_live->parameters[1]);
+   return 0;
+}
+
+static void splane_poster(void *data)
+{
+   (void)data;
+   video_thread_run_blocking(splane_park, NULL);
+}
+
+static void lane_shader_params(void)
+{
+   unsigned had = failures;
+   video_driver_state_t *video_st = video_state_get_ptr();
+   video_shader_ctx_t    shader_info;
+   thread_video_t       *thr;
+   sthread_t            *poster;
+
+   set_threaded_via_setting(true);
+   run_frames(4);
+   expect_wrapper(true, "shader params lane");
+   if (!(thr = (thread_video_t*)video_st->data))
+      return;
+   if (!(splane_live = (struct video_shader*)calloc(1, sizeof(*splane_live))))
+      return;
+   splane_live->num_parameters = 2;
+   video_shader_param_set(&splane_live->parameters[0], 0.25f);
+   video_shader_param_set(&splane_live->parameters[1], 0.5f);
+
+   video_thread_wait_idle();
+   splane_inner                 = thr->driver;
+   splane_driver                = *thr->driver;
+   splane_driver.poke_interface = splane_get_poke;
+   set_driver(thr, &splane_driver);
+   set_poke_from(thr, &splane_driver);
+
+   CHECK(     video_shader_driver_get_current_shader(&shader_info)
+         && shader_info.data == splane_live,
+         "shader params lane: the frontend was not given the driver's "
+         "shader");
+
+   retro_atomic_store_release_int(&splane_held, 0);
+   retro_atomic_store_release_int(&splane_written, 0);
+   if ((poster = sthread_create(splane_poster, NULL)))
+   {
+      while (!retro_atomic_load_acquire_int(&splane_held))
+         retro_sleep(1);
+      video_shader_driver_set_parameter(splane_live, 1, 0.75f);
+      retro_atomic_store_release_int(&splane_written, 1);
+      sthread_join(poster);
+   }
+   CHECK(poster && splane_written_while_parked,
+         "shader params lane: the write waited for the video thread");
+   CHECK(splane_live_seen == 0.75f,
+         "shader params lane: the video thread read %.2f, not the value "
+         "written", (double)splane_live_seen);
+   CHECK(video_shader_param_get(&splane_live->parameters[0]) == 0.25f,
+         "shader params lane: a parameter not written changed");
+
+   video_thread_wait_idle();
+   set_driver(thr, splane_inner);
+   set_poke_from(thr, splane_inner);
+   free(splane_live);
+   splane_live = NULL;
+   run_frames(2);
+
+   if (failures == had)
+      fprintf(stderr, "[pass] shader params lane: written without "
+            "waiting, read by the video thread\n");
+}
 
 static void lane_headset_calls(void)
 {
@@ -1202,18 +2309,46 @@ static void lane_headset_calls(void)
       run_frames(2);
    }
 
+   CHECK(video_driver_headset_view_toggle() == VIDEO_HEADSET_VIEW_LAST
+         && video_st->headset_view == VIDEO_HEADSET_VIEW_IMMERSIVE,
+         "headset lane: the Headset View changed without a headset");
+
    {
       video_xr_host_t host;
       memset(&host, 0, sizeof(host));
       host.state     = hslane_host_state;
       host.eye_state = hslane_eye_state;
+      host.give      = hslane_give;
       host.set_space = hslane_set_space;
       host.sample    = hslane_sample;
       host.eye_size  = hslane_eye_size;
+      host.locate_hands     = hslane_locate_hands;
+      host.controller_poses = hslane_controller_poses;
       video_driver_set_xr_host(&host);
    }
    CHECK(video_driver_views_status() & RETRO_VIDEO_VIEWS_STATUS_HMD,
          "headset lane: the views status did not carry the host's HMD");
+
+   /* Headset View: Stereoscopic drops HMD, Flat also STEREO. */
+   {
+      unsigned view   = video_driver_headset_view_toggle();
+      unsigned status = video_driver_views_status();
+      CHECK(view == VIDEO_HEADSET_VIEW_STEREOSCOPIC
+            && !(status & RETRO_VIDEO_VIEWS_STATUS_HMD)
+            &&  (status & RETRO_VIDEO_VIEWS_STATUS_STEREO),
+            "headset lane: Stereoscopic view %u gave status 0x%x",
+            view, status);
+      view   = video_driver_headset_view_toggle();
+      status = video_driver_views_status();
+      CHECK(view == VIDEO_HEADSET_VIEW_FLAT
+            && !(status & (RETRO_VIDEO_VIEWS_STATUS_HMD
+                         | RETRO_VIDEO_VIEWS_STATUS_STEREO)),
+            "headset lane: Flat view %u gave status 0x%x", view, status);
+      view   = video_driver_headset_view_toggle();
+      CHECK(view == VIDEO_HEADSET_VIEW_IMMERSIVE
+            && (video_driver_views_status() & RETRO_VIDEO_VIEWS_STATUS_HMD),
+            "headset lane: Immersive view %u did not give HMD back", view);
+   }
 
    hslane_focused = false;
    CHECK(!video_driver_headset_focused(),
@@ -1240,18 +2375,57 @@ static void lane_headset_calls(void)
             "headset lane: the stereo request ran off the video thread");
    }
 
+   /* The video thread samples after each frame it draws; the core reads
+    * the newest without waiting on it, and the eyes it drew from are
+    * given there before its frame is drawn */
    {
       struct retro_vr_frame_state fs;
+      unsigned calls;
       bool ok;
       memset(&fs, 0, sizeof(fs));
       hslane_pose_calls = 0;
-      ok = video_driver_get_vr_frame_state(&fs);
-      CHECK(ok && hslane_pose_calls == 1 && fs.eyes[1].position[0] == 0.032f,
-            "headset lane: the eye poses reached the host %u times "
-            "(answer %d)", hslane_pose_calls, ok);
-      CHECK(!hslane_pose_calls
+      video_driver_vr_sample_tracking();
+      run_frames(2);
+      video_thread_wait_idle();
+      video_driver_vr_sample_tracking();
+      calls = hslane_pose_calls;
+      ok    = video_driver_get_vr_frame_state(&fs);
+      CHECK(ok && calls >= 1 && fs.eyes[1].position[0] == 0.032f,
+            "headset lane: the eye poses were sampled %u times "
+            "(answer %d)", calls, ok);
+      CHECK(hslane_pose_calls == calls,
+            "headset lane: reading the frame state asked the host");
+      CHECK(!calls
             || hslane_pose_thread == sthread_get_thread_id(thr->thread),
             "headset lane: the eye poses were read off the video thread");
+      hslane_give_calls = 0;
+      run_frames(1);
+      video_thread_wait_idle();
+      CHECK(     hslane_give_calls == 1
+            && hslane_give_token == (unsigned)fs.eyes[0].position[1]
+            && hslane_give_thread == sthread_get_thread_id(thr->thread),
+            "headset lane: the eyes the core drew from were given %u "
+            "times (token %u)", hslane_give_calls, hslane_give_token);
+   }
+
+   /* Sampling does not wait for the video thread: parked in a command
+    * from another thread, it finds the sample taken */
+   {
+      sthread_t *poster;
+      retro_atomic_store_release_int(&hslane_parked, 0);
+      retro_atomic_store_release_int(&hslane_sampled, 0);
+      if ((poster = sthread_create(hslane_poster, NULL)))
+      {
+         struct retro_vr_frame_state fs;
+         while (!retro_atomic_load_acquire_int(&hslane_parked))
+            retro_sleep(1);
+         video_driver_vr_sample_tracking();
+         video_driver_get_vr_frame_state(&fs);
+         retro_atomic_store_release_int(&hslane_sampled, 1);
+         sthread_join(poster);
+      }
+      CHECK(poster && hslane_sampled_while_parked,
+            "headset lane: sampling waited for the video thread");
    }
 
    /* A core sends its map every frame: the same one is applied once. */
@@ -1312,14 +2486,34 @@ static void lane_headset_calls(void)
             "headset lane: a map after a refusal was answered from the cache (%u)",
             hslane_info_calls);
 
-      /* The core going drops its content on the video thread, once. */
-      hslane_info_calls = 0;
-      video_driver_vr_content_clear();
+      /* The core going drops its content on the video thread, once,
+       * queued there rather than waited for: parked, the video thread
+       * has not had it when the call returns. */
+      {
+         sthread_t *poster;
+         hslane_info_calls = 0;
+         retro_atomic_store_release_int(&hslane_parked, 0);
+         retro_atomic_store_release_int(&hslane_sampled, 0);
+         if ((poster = sthread_create(hslane_poster, NULL)))
+         {
+            while (!retro_atomic_load_acquire_int(&hslane_parked))
+               retro_sleep(1);
+            video_driver_vr_content_clear();
+            CHECK(hslane_info_calls == 0,
+                  "headset lane: the core's going ran off the video thread");
+            retro_atomic_store_release_int(&hslane_sampled, 1);
+            sthread_join(poster);
+         }
+         CHECK(poster && hslane_sampled_while_parked,
+               "headset lane: the core's going waited for the video thread");
+      }
+      hslane_barrier();
       CHECK(hslane_info_calls == 1 && !hslane_info_stereo
             && hslane_info_thread == sthread_get_thread_id(thr->thread),
             "headset lane: the core's going reached the driver %u times",
             hslane_info_calls);
       video_driver_vr_content_clear();
+      hslane_barrier();
       CHECK(hslane_info_calls == 1,
             "headset lane: a second clear reached the driver");
       views.num_views = 0;
@@ -1495,11 +2689,13 @@ static void lane_headset_calls(void)
             "track (flags %u)", (unsigned)fs.flags);
       hslane_sample_flags = RETRO_VR_FRAME_RECENTERED;
       hslane_sample_fail  = true;
+      hslane_frame();
       video_driver_vr_sample_tracking();
       CHECK(!video_driver_get_vr_frame_state(&fs),
             "headset lane: the poses of a failed sample answered");
       hslane_sample_flags = 0;
       hslane_sample_fail  = false;
+      hslane_frame();
       video_driver_vr_sample_tracking();
       memset(&fs, 0, sizeof(fs));
       CHECK(     video_driver_get_vr_frame_state(&fs)
@@ -1515,15 +2711,54 @@ static void lane_headset_calls(void)
       hslane_eye_h        = 1920;
       hslane_sample_flags = RETRO_VR_FRAME_RECENTERED;
       hslane_sample_fail  = true;
+      hslane_frame();
       video_driver_vr_sample_tracking();
       hslane_sample_flags = 0;
       hslane_sample_fail  = false;
       video_driver_vr_content_clear();
       video_driver_vr_sample_tracking();
+      hslane_frame();
+      video_driver_vr_sample_tracking();
       memset(&fs, 0, sizeof(fs));
       CHECK(video_driver_get_vr_frame_state(&fs) && !fs.flags,
             "headset lane: flags outlived the core's content (%u)",
             (unsigned)fs.flags);
+   }
+
+   /* The hands: not located until a core asks, then with each sample,
+    * on the video thread - under the wrapper the first ask answers from
+    * the next sample rather than locating them here; not for the next
+    * core. */
+   {
+      struct retro_vr_controller_poses hands;
+      unsigned calls;
+      hslane_hands_calls = 0;
+      video_driver_vr_sample_tracking();
+      hslane_frame();
+      video_driver_vr_sample_tracking();
+      CHECK(hslane_hands_calls == 0,
+            "headset lane: the hands were located %u times unasked",
+            hslane_hands_calls);
+      memset(&hands, 0, sizeof(hands));
+      CHECK(     !video_driver_get_vr_controller_poses(&hands)
+            && hslane_hands_calls == 0,
+            "headset lane: the first ask located the hands off the video "
+            "thread (%u)", hslane_hands_calls);
+      hslane_frame();
+      video_driver_vr_sample_tracking();
+      CHECK(     video_driver_get_vr_controller_poses(&hands)
+            && hslane_hands_calls >= 1
+            && hands.hands[1].flags == RETRO_VR_HAND_ACTIVE,
+            "headset lane: asked hands were located %u times by the next "
+            "sample", hslane_hands_calls);
+      CHECK(hslane_hands_thread == sthread_get_thread_id(thr->thread),
+            "headset lane: the hands were located off the video thread");
+      video_driver_vr_content_clear();
+      calls = hslane_hands_calls;
+      video_driver_vr_sample_tracking();
+      hslane_frame();
+      CHECK(hslane_hands_calls == calls,
+            "headset lane: the hands outlived the core's content");
    }
 
 #endif
@@ -1546,6 +2781,25 @@ static void lane_headset_calls(void)
    CHECK(!video_driver_xr_headset(),
          "headset lane: the host outlived its driver");
    video_driver_set_xr_host(NULL);
+   /* A view left at Flat narrows nothing once the headset is gone:
+    * a desktop Stereo Mode keeps STEREO. */
+   {
+      settings_t *settings  = config_get_ptr();
+      unsigned stereo       = settings->uints.video_stereo_mode;
+      uint32_t (*get_flags)(void*) =
+         video_st->current_video_context.get_flags;
+      unsigned status;
+      video_st->current_video_context.get_flags = hslane_views_flags;
+      settings->uints.video_stereo_mode = VIDEO_STEREO_MODE_ANAGLYPH;
+      video_st->headset_view            = VIDEO_HEADSET_VIEW_FLAT;
+      status                            = video_driver_views_status();
+      CHECK(status & RETRO_VIDEO_VIEWS_STATUS_STEREO,
+            "headset lane: Flat took STEREO from a desktop Stereo Mode "
+            "(status 0x%x)", status);
+      video_st->headset_view            = VIDEO_HEADSET_VIEW_IMMERSIVE;
+      settings->uints.video_stereo_mode = stereo;
+      video_st->current_video_context.get_flags = get_flags;
+   }
 #endif
 
    if (failures == had)
@@ -1559,6 +2813,147 @@ static void lane_headset_calls(void)
 /*   core must not stall the display: the worker keeps presenting at  */
 /*   the refresh period, each repeat advancing swap_count by one and  */
 /*   never counting as a rendered frame for the idle barrier.         */
+/* ------------------------------------------------------------------ */
+/* Lane: GET_TARGET_REFRESH_RATE with a headset                       */
+/*   The headset's rate is the target only while the runloop runs at  */
+/*   it: a headset's own context (the Quest's) with no fit. A fitting */
+/*   headset paces the core at its own rate, a window paces at the    */
+/*   configured one, and the wrapper holds the core at its own, so    */
+/*   each of those targets the configured rate. A core following the  */
+/*   answer at 120 on a 60 Hz config rendered twice the frames.       */
+/* ------------------------------------------------------------------ */
+
+#ifdef HAVE_OPENXR
+static float hslane_target(void)
+{
+   float hz = 0.0f;
+   CHECK(runloop_environment_cb(RETRO_ENVIRONMENT_GET_TARGET_REFRESH_RATE,
+         &hz), "target rate lane: the environment refused the rate");
+   return hz;
+}
+#endif
+
+static void lane_headset_target_rate(void)
+{
+#ifdef HAVE_OPENXR
+   unsigned had = failures;
+   video_driver_state_t *video_st = video_state_get_ptr();
+   settings_t *settings           = config_get_ptr();
+   float saved_hz                 = settings->floats.video_refresh_rate;
+   bool saved_vsync               = settings->bools.video_vsync;
+   uint32_t (*get_flags)(void*)   = video_st->current_video_context.get_flags;
+   const video_poke_interface_t *saved_poke;
+   thread_video_t *thr;
+   video_xr_host_t host;
+
+   settings->floats.video_refresh_rate = 60.0f;
+   settings->bools.video_vsync         = true;
+   memset(&host, 0, sizeof(host));
+   host.state     = hslane_host_state;
+   host.eye_state = hslane_eye_state;
+   host.give      = hslane_give;
+   host.set_space = hslane_set_space;
+   host.sample    = hslane_sample;
+   host.eye_size  = hslane_eye_size;
+
+   /* Threaded: the wrapper holds the core at its own rate, whatever
+    * the headset's. A driver's free forgets the host, so it is set
+    * after each reinit. */
+   set_threaded_via_setting(true);
+   run_frames(2);
+   expect_wrapper(true, "target rate lane");
+   if (!(thr = (thread_video_t*)video_st->data))
+      return;
+   video_driver_set_xr_host(&host);
+   CHECK(video_driver_xr_headset() & VIDEO_XR_HEADSET_PRESENTING,
+         "target rate lane: the host is not presenting");
+   video_thread_wait_idle();
+   hslane_inner                 = thr->driver;
+   hslane_driver                = *thr->driver;
+   hslane_driver.poke_interface = hslane_get_poke;
+   set_driver(thr, &hslane_driver);
+   set_poke_from(thr, &hslane_driver);
+   hslane_hz = 120.0f;
+   video_st->current_video_context.get_flags = hslane_inline_flags;
+   run_frames(2);
+   CHECK(video_st->headset_hz == 120.0f && !video_st->headset_interval,
+         "target rate lane: threaded took %.1f Hz, interval %u",
+         (double)video_st->headset_hz, video_st->headset_interval);
+   CHECK(hslane_target() == 60.0f,
+         "target rate lane: threaded video targeted %.1f Hz on a 120 Hz "
+         "headset", (double)hslane_target());
+   hslane_hz = 90.0f;
+   run_frames(2);
+   CHECK(hslane_target() == 60.0f,
+         "target rate lane: threaded video targeted %.1f Hz on a 90 Hz "
+         "headset", (double)hslane_target());
+   video_thread_wait_idle();
+   set_driver(thr, hslane_inner);
+   set_poke(thr, hslane_inner_poke);
+   video_st->current_video_context.get_flags = get_flags;
+   hslane_hz = 120.0f;
+   run_frames(2);
+   set_threaded_via_setting(false);
+   run_frames(2);
+   expect_wrapper(false, "target rate lane");
+   video_driver_set_xr_host(&host);
+   CHECK(video_driver_xr_headset() & VIDEO_XR_HEADSET_PRESENTING,
+         "target rate lane: the host is not presenting (direct)");
+
+   /* Direct: the poke is the driver's own. */
+   saved_poke                      = video_st->poke;
+   hslane_poke                     = *saved_poke;
+   hslane_poke.get_headset_refresh = hslane_refresh;
+   video_st->poke                  = &hslane_poke;
+   get_flags = video_st->current_video_context.get_flags;
+
+   /* A headset's own context: the fit paces at 60, so 60 is targeted;
+    * with no fit the core runs at the headset's rate. */
+   video_st->current_video_context.get_flags = hslane_inline_flags;
+   run_frames(2);
+   CHECK(video_st->headset_hz == 120.0f && video_st->headset_interval == 2,
+         "target rate lane: the headset took %.1f Hz, interval %u",
+         (double)video_st->headset_hz, video_st->headset_interval);
+   CHECK(hslane_target() == 60.0f,
+         "target rate lane: a fitting headset targeted %.1f Hz",
+         (double)hslane_target());
+   hslane_hz = 90.0f;
+   run_frames(2);
+   CHECK(video_st->headset_interval == 0 && hslane_target() == 90.0f,
+         "target rate lane: a headset with no fit targeted %.1f Hz "
+         "(interval %u)", (double)hslane_target(), video_st->headset_interval);
+
+   /* A window: its vsync paces at the configured rate either way. The
+    * rates are adjusted as the headset's rate changes. */
+   video_st->current_video_context.get_flags = hslane_views_flags;
+   hslane_hz = 120.0f;
+   run_frames(2);
+   CHECK(video_st->headset_interval == 2 && hslane_target() == 60.0f,
+         "target rate lane: a window with a 120 Hz headset targeted %.1f Hz",
+         (double)hslane_target());
+   hslane_hz = 90.0f;
+   run_frames(2);
+   CHECK(video_st->headset_interval == 0 && hslane_target() == 60.0f,
+         "target rate lane: a window with a 90 Hz headset targeted %.1f Hz",
+         (double)hslane_target());
+
+   video_st->current_video_context.get_flags = get_flags;
+   video_st->poke                            = saved_poke;
+   video_driver_set_xr_host(NULL);
+   run_frames(2);
+   CHECK(video_st->headset_hz == 0.0f && hslane_target() == 60.0f,
+         "target rate lane: without a headset %.1f Hz, targeted %.1f Hz",
+         (double)video_st->headset_hz, (double)hslane_target());
+   settings->floats.video_refresh_rate = saved_hz;
+   settings->bools.video_vsync         = saved_vsync;
+   run_frames(2);
+
+   if (failures == had)
+      fprintf(stderr, "[pass] target rate lane: a headset is the target "
+            "only while the runloop runs at its rate\n");
+#endif
+}
+
 /* ------------------------------------------------------------------ */
 
 static void lane_present_repeat(void)
@@ -1792,6 +3187,141 @@ static void lane_second_ring_waiter(void)
 
    if (failures == had)
       fprintf(stderr, "[pass] second-ring-waiter lane (%u idle waits)\n", idle_waits);
+}
+
+typedef struct
+{
+   thread_video_t *thr;
+   video_frame_info_t *info;
+   uint64_t expected, seen[2], after[2];
+   unsigned current;
+   bool returned[2];
+#ifdef HAVE_GFX_WIDGETS
+   bool replay_widgets_visible[2];
+   bool inactive_widgets_visible, retired_widgets_visible;
+   bool retired_widgets_checked;
+#endif
+} replay_swap_t;
+
+static replay_swap_t *replay_swap;
+
+static bool replay_swap_frame(void *data, const void *frame,
+      unsigned dims, uint64_t count, unsigned pitch, const char *msg,
+      video_frame_info_t *info)
+{
+   (void)data;
+   (void)frame;
+   (void)dims;
+   (void)count;
+   (void)pitch;
+   (void)msg;
+   replay_swap->seen[replay_swap->current] = info->swap_count;
+#ifdef HAVE_GFX_WIDGETS
+   replay_swap->replay_widgets_visible[replay_swap->current] =
+         info->widgets_visible;
+#endif
+   return true;
+}
+
+static uintptr_t replay_swap_run(void *data)
+{
+   replay_swap_t *t = (replay_swap_t*)data;
+   thread_video_t *thr = t->thr;
+   const video_driver_t *inner = thr->driver;
+   video_driver_t driver = *inner;
+   uint64_t saved = thr->video_st->swap_count;
+   unsigned i;
+#ifdef HAVE_GFX_WIDGETS
+   dispgfx_widget_t *widgets;
+   int saved_worker;
+#endif
+
+   replay_swap = t;
+   driver.frame = replay_swap_frame;
+   thr->driver = &driver;
+   thr->video_st->swap_count = t->expected;
+#ifdef HAVE_GFX_WIDGETS
+   widgets = dispwidget_get_ptr();
+   saved_worker = retro_atomic_load_acquire_int(&widgets->worker);
+   retro_atomic_store_release_int(&widgets->worker, 1);
+   t->info->widgets_userdata = widgets;
+   t->info->fps_show = true;
+#endif
+   for (i = 0; i < 2; i++)
+   {
+      t->current = i;
+      t->seen[i] = 0;
+      t->info->swap_count = i ? UINT64_MAX : 0;
+#ifdef HAVE_GFX_WIDGETS
+      t->info->widgets_active = i == 0;
+      t->info->widgets_visible = i != 0;
+#endif
+      t->returned[i] = thr->video_st->current_video->frame(thr, NULL,
+            VIDEO_SCALE_PACK(1, 1), 0, 0, NULL, t->info);
+      t->after[i] = thr->video_st->swap_count;
+   }
+#ifdef HAVE_GFX_WIDGETS
+   retro_atomic_store_release_int(&widgets->worker, saved_worker);
+   t->info->widgets_active = false;
+   t->inactive_widgets_visible = gfx_widgets_visible(t->info);
+   t->retired_widgets_checked = widgets->video_st != NULL;
+   t->retired_widgets_visible = false;
+   if (t->retired_widgets_checked)
+   {
+      saved_worker = retro_atomic_load_acquire_int(&widgets->worker);
+      retro_atomic_store_release_int(&widgets->worker, 0);
+      t->info->widgets_active = true;
+      t->retired_widgets_visible = gfx_widgets_visible(t->info);
+      retro_atomic_store_release_int(&widgets->worker, saved_worker);
+   }
+#endif
+   thr->video_st->swap_count = saved;
+   thr->driver = inner;
+   replay_swap = NULL;
+   return 0;
+}
+
+static void lane_replay_swap_count(void)
+{
+   unsigned had = failures;
+   video_driver_state_t *video_st = video_state_get_ptr();
+   replay_swap_t t;
+   unsigned i;
+
+   set_threaded_via_setting(true);
+   run_frames(3);
+   expect_wrapper(true, "replay swap counter lane");
+   t.thr = (thread_video_t*)video_st->data;
+   t.info = (video_frame_info_t*)calloc(1, sizeof(*t.info));
+   CHECK(t.info != NULL, "replay frame info allocation failed");
+   if (!t.info)
+      return;
+   t.expected = (uint64_t)UINT32_MAX + 19;
+   video_thread_run_blocking(replay_swap_run, &t);
+   for (i = 0; i < 2; i++)
+   {
+      CHECK(t.returned[i], "inline replay was refused");
+      CHECK(t.seen[i] == t.expected,
+            "inline replay carried a stale swap counter");
+      CHECK(t.after[i] == t.expected,
+            "inline replay counted an extra present");
+   }
+#ifdef HAVE_GFX_WIDGETS
+   CHECK(t.replay_widgets_visible[0],
+         "inline replay did not detect visible widgets");
+   CHECK(!t.replay_widgets_visible[1],
+         "inline replay retained stale widget visibility");
+   CHECK(!t.inactive_widgets_visible,
+         "inline replay treated inactive widgets as visible");
+   CHECK(!t.retired_widgets_visible,
+         "inline replay treated retired widgets as visible");
+   if (!t.retired_widgets_checked)
+      fprintf(stderr, "[skip] retired widget visibility (no widget context)\n");
+#endif
+   free(t.info);
+   set_threaded_via_setting(false);
+   if (failures == had)
+      fprintf(stderr, "[pass] replay swap counter lane\n");
 }
 
 /* ------------------------------------------------------------------ */
@@ -2121,6 +3651,133 @@ static void lane_async_done_main_thread(void)
 }
 
 /* ------------------------------------------------------------------ */
+/* Lane: async load of a compressed payload                            */
+/*   A still posted with only its GPU-native blocks (a DDS overlay     */
+/*   image) is loaded through load_texture_compressed on the video     */
+/*   thread. A format the driver does not sample comes back 0, for the */
+/*   poster to decode - never load_texture with no pixels to read.     */
+/* ------------------------------------------------------------------ */
+
+static video_driver_t        bcnload_driver;
+static const video_driver_t *bcnload_inner;
+static video_poke_interface_t bcnload_poke;
+static const video_poke_interface_t *bcnload_inner_poke;
+static unsigned  bcnload_plain;
+static unsigned  bcnload_compressed;
+static unsigned  bcnload_done;
+static uintptr_t bcnload_handle[3];
+
+static uintptr_t bcnload_load(void *data, void *img, bool threaded,
+      enum texture_filter_type filter)
+{
+   (void)data; (void)img; (void)threaded; (void)filter;
+   return 0x4000 + ++bcnload_plain;
+}
+
+static uintptr_t bcnload_load_compressed(void *data,
+      const struct texture_compressed *tc, bool threaded,
+      enum texture_filter_type filter)
+{
+   (void)data; (void)tc; (void)threaded; (void)filter;
+   return 0x5000 + ++bcnload_compressed;
+}
+
+static bool bcnload_supports(void *data, enum texture_gpu_format fmt)
+{
+   (void)data;
+   return fmt == TEXTURE_GPU_FORMAT_BC1;
+}
+
+static void bcnload_unload(void *data, bool threaded, uintptr_t id)
+{
+   if (id > 0x4000 && id <= 0x6000)
+      return;
+   if (bcnload_inner_poke && bcnload_inner_poke->unload_texture)
+      bcnload_inner_poke->unload_texture(data, threaded, id);
+}
+
+static void bcnload_get_poke(void *data, const video_poke_interface_t **iface)
+{
+   bcnload_inner->poke_interface(data, &bcnload_inner_poke);
+   bcnload_poke = *bcnload_inner_poke;
+   bcnload_poke.load_texture            = bcnload_load;
+   bcnload_poke.load_texture_compressed = bcnload_load_compressed;
+   bcnload_poke.supports_texture_format = bcnload_supports;
+   bcnload_poke.unload_texture          = bcnload_unload;
+   *iface = &bcnload_poke;
+}
+
+static void bcnload_done_cb(void *user, uintptr_t handle)
+{
+   bcnload_handle[(uintptr_t)user] = handle;
+   bcnload_done++;
+}
+
+static void lane_async_compressed_load(void)
+{
+   unsigned had = failures;
+   video_driver_state_t *video_st = video_state_get_ptr();
+   thread_video_t *thr;
+   static struct texture_image img[3];
+   static struct texture_compressed tc[2];
+   static video_thread_async_load_t nodes[3];
+   static uint32_t px[16];
+   unsigned i, posted = 0;
+
+   bcnload_plain = bcnload_compressed = bcnload_done = 0;
+   memset(bcnload_handle, 0, sizeof(bcnload_handle));
+   memset(img, 0, sizeof(img));
+   memset(tc, 0, sizeof(tc));
+   tc[0].format      = TEXTURE_GPU_FORMAT_BC1;
+   tc[1].format      = TEXTURE_GPU_FORMAT_BC7;
+   for (i = 0; i < 3; i++)
+      img[i].width = img[i].height = 4;
+   img[0].compressed = &tc[0];
+   img[1].compressed = &tc[1];
+   img[2].pixels     = px;
+
+   set_threaded_via_setting(true);
+   run_frames(3);
+   expect_wrapper(true, "async compressed load lane");
+   thr = (thread_video_t*)video_st->data;
+
+   video_thread_wait_idle();
+   bcnload_inner                  = thr->driver;
+   bcnload_driver                 = *thr->driver;
+   bcnload_driver.poke_interface  = bcnload_get_poke;
+   set_driver(thr, &bcnload_driver);
+   set_poke_from(thr, &bcnload_driver);
+
+   for (i = 0; i < 3; i++)
+      if (async_post_load(&nodes[i], &img[i], bcnload_done_cb,
+               (void*)(uintptr_t)i, NULL))
+         posted++;
+   run_frames(2);
+   video_thread_wait_idle();
+   run_frames(2);
+
+   CHECK(posted == 3 && bcnload_done == 3, "%u of %u loads answered",
+         bcnload_done, posted);
+   CHECK(bcnload_compressed == 1 && bcnload_handle[0] > 0x5000,
+         "a sampled payload did not go through load_texture_compressed "
+         "(%u calls)", bcnload_compressed);
+   CHECK(bcnload_handle[1] == 0,
+         "a payload the driver does not sample made a texture");
+   CHECK(bcnload_plain == 1 && bcnload_handle[2] > 0x4000
+         && bcnload_handle[2] <= 0x5000,
+         "load_texture ran %u times; only the pixel still takes it",
+         bcnload_plain);
+
+   set_driver(thr, bcnload_inner);
+   set_poke_from(thr, bcnload_inner);
+   set_threaded_via_setting(false);
+   run_frames(2);
+
+   if (failures == had)
+      fprintf(stderr, "[pass] async compressed load lane\n");
+}
+
+/* ------------------------------------------------------------------ */
 /* Lane: display-phase scheduling with a stale report                  */
 /*   The presenter schedules the next repeat from the driver's display */
 /*   timestamp. A driver whose report lags well behind the clock must  */
@@ -2252,17 +3909,8 @@ static bool menutex_frame(void *data, const void *frame,
    return true;
 }
 
-/* The receiving end. A real driver uploads or copies here and does not
- * keep the pointer, which is what lets the worker drop the lock as soon
- * as this returns; reading the whole buffer is how this one checks the
- * bytes it was handed belong to a single push.
- *
- * The menu is up in this harness and RGUI pushes its own framebuffer
- * through the same entry point, so only this lane's own pushes are
- * checked: they are MENUTEX_W x MENUTEX_H and every pixel carries
- * MENUTEX_MARK. The lock is what keeps the two producers from
- * interleaving, so a buffer is wholly one push's or wholly the other's -
- * a marked buffer holding two generations is the tear this looks for. */
+/* Check one immutable publication. RGUI also publishes here, so only
+ * this lane's dimensions and pixel marker identify a checked image. */
 static void menutex_set_texture_frame(void *data, const void *frame,
       bool rgb32, unsigned dims, float alpha)
 {
@@ -2327,15 +3975,28 @@ static void lane_menu_texture(void)
    retro_atomic_store_release_int(&menutex_frames, 0);
    menutex_slow = true;
 
+   CHECK(!video_thread_get_menu_framebuffer(0, false, NULL),
+         "empty menu framebuffer was lent");
+
    for (gen = 1; gen <= MENUTEX_PUSHES; gen++)
    {
       unsigned pending;
       bool     busy;
+      uint16_t *pixels = buf;
+
+      if (gen & 1)
+      {
+         pixels = (uint16_t*)video_thread_get_menu_framebuffer(
+               VIDEO_SCALE_PACK(MENUTEX_W, MENUTEX_H), false, NULL);
+         CHECK(pixels != NULL, "menu framebuffer loan refused");
+         if (!pixels)
+            pixels = buf;
+      }
 
       for (i = 0; i < MENUTEX_W * MENUTEX_H; i++)
-         buf[i] = (uint16_t)(MENUTEX_MARK | gen);
+         pixels[i] = (uint16_t)(MENUTEX_MARK | gen);
 
-      video_st->poke->set_texture_frame(video_st->data, buf, false,
+      video_st->poke->set_texture_frame(video_st->data, pixels, false,
             VIDEO_SCALE_PACK(MENUTEX_W, MENUTEX_H), 1.0f);
 
       /* One frame through the real path, then the drain the menu
@@ -2372,6 +4033,10 @@ static void lane_menu_texture(void)
    set_driver(thr, menutex_inner);
    set_poke(thr, menutex_inner_poke);
    set_threaded_via_setting(false);
+
+   CHECK(!video_thread_get_menu_framebuffer(
+            VIDEO_SCALE_PACK(MENUTEX_W, MENUTEX_H), false, NULL),
+         "inactive wrapper lent a menu framebuffer");
 
    if (failures == had)
       fprintf(stderr, "[pass] menu-texture handoff lane (%d handed over, "
@@ -3511,15 +5176,29 @@ static retro_time_t prlane_last_present(void *data)
       : prlane_last_out - prlane_period;
 }
 
+/* The paced rate, from the gaps between the core's frames. A gap of two
+ * periods or more is the box taking the CPU away (a busy CI runner),
+ * which no pacing can make up; it is left out with its frames, and
+ * counted in @stalls. Every hold pattern a case has (120 on 144 is one
+ * or two panel periods) stays under it, so a wrong period still shows. */
 static double pacing_rate_measure(thread_video_t *thr, float display_hz,
-      double panel_hz, double content_fps, bool timestamps)
+      double panel_hz, double content_fps, bool timestamps,
+      unsigned *stalls)
 {
    settings_t *settings = config_get_ptr();
    video_driver_state_t *video_st = video_state_get_ptr();
    unsigned n = (unsigned)(content_fps * 2.0);
-   uint64_t f0;
-   retro_time_t t0, took;
+   retro_time_t stall_us = (retro_time_t)(2000000.0 / content_fps);
+   retro_time_t took     = 0;
+   uint64_t frames       = 0;
+   uint64_t f_last;
+   retro_time_t t_last;
+   unsigned i;
 
+   /* The fake driver reads the panel's timing on the video thread:
+    * changed only with that thread idle, as the frame handed over next
+    * orders it after these writes. */
+   video_thread_wait_idle();
    settings->floats.video_refresh_rate               = display_hz;
    settings->bools.video_present_timing_from_display = timestamps;
    video_st->av_info.timing.fps                      = content_fps;
@@ -3531,12 +5210,30 @@ static double pacing_rate_measure(thread_video_t *thr, float display_hz,
    /* Settle: the period, render and core estimates */
    run_frames(n / 4);
    video_thread_wait_idle();
-   f0 = core_frames();
-   t0 = cpu_features_get_time_usec();
-   run_frames(n);
-   took = cpu_features_get_time_usec() - t0;
-   return took > 0
-      ? (double)(core_frames() - f0) * 1000000.0 / (double)took : 0.0;
+   *stalls = 0;
+   f_last  = core_frames();
+   t_last  = cpu_features_get_time_usec();
+   for (i = 0; i < n; i++)
+   {
+      uint64_t f;
+      retro_time_t t, gap;
+      run_frames(1);
+      f   = core_frames();
+      t   = cpu_features_get_time_usec();
+      gap = t - t_last;
+      if (f == f_last)
+         continue;
+      if (gap >= stall_us * (retro_time_t)(f - f_last))
+         (*stalls)++;
+      else
+      {
+         took   += gap;
+         frames += f - f_last;
+      }
+      f_last = f;
+      t_last = t;
+   }
+   return took > 0 ? (double)frames * 1000000.0 / (double)took : 0.0;
 }
 
 static void lane_pacing_rate(void)
@@ -3599,11 +5296,11 @@ static void lane_pacing_rate(void)
       for (ts = 0; ts < 2; ts++)
       {
          double best = 0.0, fps;
-         unsigned t;
+         unsigned t, stalls = 0;
          for (t = 0; t < 3; t++)
          {
             fps = pacing_rate_measure(thr, cases[c].display_hz,
-                  cases[c].panel_hz, cases[c].content_fps, ts != 0);
+                  cases[c].panel_hz, cases[c].content_fps, ts != 0, &stalls);
             if (fabs(fps - cases[c].expect) < fabs(best - cases[c].expect))
                best = fps;
             if (fabs(best - cases[c].expect) <= cases[c].expect * 0.02)
@@ -3616,9 +5313,10 @@ static void lane_pacing_rate(void)
                cases[c].display_hz,
                ts ? "present timestamps" : "no timestamps (vsync off)",
                best, cases[c].expect);
-         fprintf(stderr, "   pacing rate: %5.1f fps on %8.3f Hz, %-13s %.2f fps\n",
+         fprintf(stderr, "   pacing rate: %5.1f fps on %8.3f Hz, %-13s %.2f fps"
+               " (%u stalls left out)\n",
                cases[c].content_fps, cases[c].panel_hz,
-               ts ? "timestamps:" : "clock grid:", best);
+               ts ? "timestamps:" : "clock grid:", best, stalls);
       }
 
    run_us(0);
@@ -3724,6 +5422,68 @@ static void lane_window_answers(void)
 
    if (failures == had)
       fprintf(stderr, "[pass] window answers lane\n");
+}
+
+/* ------------------------------------------------------------------ */
+/* "Nothing to present to" is asked again without a frame              */
+/*                                                                    */
+/*   The runloop reads presentable from the word the video thread     */
+/*   published after its last frame, and on false sleeps a content    */
+/*   frame ("Pacing: NoWindow"). A presenter rebuilt, or a window     */
+/*   shown again, after that frame was not seen until another frame   */
+/*   came - and with none coming the loop sat in NoWindow for good.   */
+/*   Here the context says false for a frame, then true, and no frame */
+/*   is run: the runloop's read alone has to bring the true answer.   */
+/* ------------------------------------------------------------------ */
+
+static volatile int prlane_presentable;
+
+static bool prlane_presentable_cb(void *data)
+{
+   (void)data;
+   return prlane_presentable != 0;
+}
+
+static void lane_presentable_refresh(void)
+{
+   unsigned had = failures;
+   video_driver_state_t *video_st;
+   bool (*saved)(void *);
+   uint64_t frames;
+   int i;
+
+   set_threaded_via_setting(true);
+   run_frames(3);
+   expect_wrapper(true, "presentable refresh lane");
+   video_st = video_state_get_ptr();
+   video_thread_wait_idle();
+   saved    = video_st->current_video_context.presentable;
+
+   /* The context goes away for a frame, which publishes it. */
+   prlane_presentable = 0;
+   video_st->current_video_context.presentable = prlane_presentable_cb;
+   run_frames(2);
+   video_thread_wait_idle();
+   CHECK(!video_context_driver_presentable(),
+         "presentable refresh lane: a context that said false read true");
+
+   /* It is back, and no frame comes. */
+   prlane_presentable = 1;
+   frames = core_frames();
+   for (i = 0; i < 1000 && !video_context_driver_presentable(); i++)
+      retro_sleep(1);
+   CHECK(video_context_driver_presentable(),
+         "presentable refresh lane: still not presentable %d ms after "
+         "the context came back, with no frame to refresh it", i);
+   CHECK(core_frames() == frames,
+         "presentable refresh lane: a frame ran during the no-frame wait");
+
+   video_thread_wait_idle();
+   video_st->current_video_context.presentable = saved;
+   run_frames(2);
+
+   if (failures == had)
+      fprintf(stderr, "[pass] presentable refresh lane\n");
 }
 
 /* ------------------------------------------------------------------ */
@@ -4051,6 +5811,395 @@ static void lane_dupe_under_wrapper(void)
    run_frames(2);
    if (failures == had)
       fprintf(stderr, "[pass] dupe lane (NULL reaches the driver as NULL)\n");
+}
+
+/* ------------------------------------------------------------------ */
+/* Lane: a view count shrink behind queued frames                     */
+/*   A frame queued before the count shrinks draws with the views its */
+/*   map names, as it would have without the wrapper: the driver      */
+/*   takes the smaller count after that frame, and set_view_count     */
+/*   answers without waiting for it. A grow reaches the driver at     */
+/*   once.                                                            */
+/* ------------------------------------------------------------------ */
+
+#define VSHRINK_FRAME 7000
+#define VSHRINK_LOG   16
+/* A pass never takes this long, even under a sanitizer on a busy host */
+#define VSHRINK_HOLD_USEC 10000000
+
+typedef struct
+{
+   char     kind;  /* 'F' a frame drawn, 'S' a count set */
+   unsigned value; /* the frame's count, or the count set */
+   unsigned views; /* the frame's map */
+   unsigned count; /* the driver's count as the frame drew */
+} vshrink_event_t;
+
+static video_driver_t                vshrink_driver;
+static const video_driver_t         *vshrink_inner;
+static video_poke_interface_t        vshrink_poke;
+static const video_poke_interface_t *vshrink_inner_poke;
+static thread_video_t               *vshrink_thr;
+static vshrink_event_t               vshrink_log[VSHRINK_LOG];
+static retro_atomic_int_t            vshrink_logged;
+static unsigned                      vshrink_count; /* the video thread's */
+/* The frame that holds until a count is in the mailbox, and the one
+ * that holds until vshrink_release; the count plus one whose set raises
+ * vshrink_set_held when it reaches the driver. VSHRINK_HOLD_USEC at
+ * most. */
+static retro_atomic_int_t            vshrink_hold_cmd;
+static retro_atomic_int_t            vshrink_hold_release;
+static retro_atomic_int_t            vshrink_release;
+static retro_atomic_int_t            vshrink_held;
+static retro_atomic_int_t            vshrink_hold_set;
+static retro_atomic_int_t            vshrink_set_held;
+static retro_atomic_int_t            vshrink_between;
+
+static void vshrink_note(char kind, unsigned value, unsigned views)
+{
+   int n = retro_atomic_load_acquire_int(&vshrink_logged);
+   if (n >= VSHRINK_LOG)
+      return;
+   vshrink_log[n].kind  = kind;
+   vshrink_log[n].value = value;
+   vshrink_log[n].views = views;
+   vshrink_log[n].count = vshrink_count;
+   retro_atomic_store_release_int(&vshrink_logged, n + 1);
+}
+
+static void vshrink_wait_cmd(void)
+{
+   retro_time_t until = cpu_features_get_time_usec() + VSHRINK_HOLD_USEC;
+   while (     retro_atomic_load_acquire_int(&vshrink_thr->send_cmd)
+               != CMD_POKE_SET_VIEW_COUNT
+         && cpu_features_get_time_usec() < until)
+      retro_sleep(1);
+}
+
+/* Main thread: whether the flag went up within VSHRINK_HOLD_USEC */
+static bool vshrink_wait_flag(retro_atomic_int_t *flag)
+{
+   retro_time_t until = cpu_features_get_time_usec() + VSHRINK_HOLD_USEC;
+   while (     !retro_atomic_load_acquire_int(flag)
+         && cpu_features_get_time_usec() < until)
+      retro_sleep(1);
+   return retro_atomic_load_acquire_int(flag) != 0;
+}
+
+static void vshrink_set_view_count(void *data, unsigned count)
+{
+   (void)data;
+   if ((int)count + 1 == retro_atomic_load_acquire_int(&vshrink_hold_set))
+   {
+      retro_atomic_store_release_int(&vshrink_hold_set, 0);
+      retro_atomic_store_release_int(&vshrink_set_held, 1);
+   }
+   vshrink_count = count;
+   /* Whether a frame's slot was still held when it reached the driver */
+   vshrink_note('S', count, VIDEO_THREAD_RING_BUSY_OF(
+            retro_atomic_load_acquire_int(&vshrink_thr->frame.state)));
+}
+
+static void vshrink_get_poke(void *data, const video_poke_interface_t **iface)
+{
+   vshrink_inner->poke_interface(data, &vshrink_inner_poke);
+   vshrink_poke                = *vshrink_inner_poke;
+   vshrink_poke.set_view_count = vshrink_set_view_count;
+   *iface                      = &vshrink_poke;
+}
+
+static bool vshrink_frame(void *data, const void *frame,
+      unsigned dims, uint64_t frame_count,
+      unsigned pitch, const char *msg, video_frame_info_t *video_info)
+{
+   if ((int)frame_count == retro_atomic_load_acquire_int(&vshrink_hold_cmd))
+   {
+      retro_atomic_store_release_int(&vshrink_held, 1);
+      vshrink_wait_cmd();
+   }
+   else if ((int)frame_count
+         == retro_atomic_load_acquire_int(&vshrink_hold_release))
+   {
+      retro_time_t until = cpu_features_get_time_usec() + VSHRINK_HOLD_USEC;
+      while (     !retro_atomic_load_acquire_int(&vshrink_release)
+            && cpu_features_get_time_usec() < until)
+         retro_sleep(1);
+   }
+   vshrink_note('F', (unsigned)frame_count,
+         video_info ? video_info->views.num_views : 0);
+   return vshrink_inner->frame(data, NULL, dims, frame_count, pitch, msg,
+         video_info);
+}
+
+static uintptr_t vshrink_noop(void *data) { (void)data; return 0; }
+
+/* Video thread, queued: holds a pass between frames - its ring free,
+ * nothing claimed - until a count is in the mailbox. The pass read the
+ * mailbox before it ran this, so the count is taken on the next pass,
+ * after that pass claims the oldest frame pushed meanwhile. */
+static uintptr_t vshrink_hold_between(void *data)
+{
+   (void)data;
+   retro_atomic_store_release_int(&vshrink_between, 1);
+   vshrink_wait_cmd();
+   return 0;
+}
+
+/* The log's index of an event, or -1 */
+static int vshrink_find(char kind, unsigned value)
+{
+   int i;
+   int n = retro_atomic_load_acquire_int(&vshrink_logged);
+   for (i = 0; i < n; i++)
+      if (vshrink_log[i].kind == kind && vshrink_log[i].value == value)
+         return i;
+   return -1;
+}
+
+static void vshrink_push(video_frame_info_t *info, uint32_t *pixels,
+      unsigned frame, unsigned views)
+{
+   video_driver_state_t *video = video_state_get_ptr();
+   info->views.num_views = views;
+   video->current_video->frame(video->data, pixels,
+         VIDEO_SCALE_PACK(8, 8), frame, 32, NULL, info);
+}
+
+/* Frame 'first' draws and holds, 'queued' frames are pushed behind it
+ * (a third push takes back the second), then the count goes 'from' to
+ * 'to', and one frame follows. A grow reaches the driver before the
+ * queued frame, which then draws at the larger count. */
+static void vshrink_case(const char *name, video_frame_info_t *info,
+      uint32_t *pixels, unsigned first, unsigned queued,
+      unsigned from, unsigned to)
+{
+   video_driver_state_t *video = video_state_get_ptr();
+   unsigned last = first + queued;
+   unsigned want = to > from ? to : from;
+   unsigned i;
+   int s, f;
+
+   video->poke->set_view_count(video->data, from);
+   video_thread_run_blocking(vshrink_noop, NULL);
+   CHECK(vshrink_count == from,
+         "%s: a grow to %u with nothing queued reached the driver as %u",
+         name, from, vshrink_count);
+
+   retro_atomic_store_release_int(&vshrink_logged, 0);
+   retro_atomic_store_release_int(&vshrink_held, 0);
+   retro_atomic_store_release_int(&vshrink_release, 0);
+   retro_atomic_store_release_int(&vshrink_hold_cmd, (int)first);
+   retro_atomic_store_release_int(&vshrink_hold_release, (int)last);
+   vshrink_push(info, pixels, first, from);
+   CHECK(vshrink_wait_flag(&vshrink_held),
+         "%s: the first frame never drew", name);
+   for (i = 1; i <= queued; i++)
+      vshrink_push(info, pixels, first + i, from);
+
+   video->poke->set_view_count(video->data, to);
+   CHECK(vshrink_find('F', last) < 0,
+         "%s: set_view_count waited for the frame queued before it", name);
+   if (to > from)
+      CHECK(vshrink_find('S', to) >= 0,
+            "%s: set_view_count returned before the grow to %u reached "
+            "the driver", name, to);
+   retro_atomic_store_release_int(&vshrink_release, 1);
+   video_thread_wait_idle();
+   vshrink_push(info, pixels, last + 1, to);
+   video_thread_wait_idle();
+   video_thread_run_blocking(vshrink_noop, NULL);
+   retro_atomic_store_release_int(&vshrink_hold_cmd, 0);
+   retro_atomic_store_release_int(&vshrink_hold_release, 0);
+
+   s = vshrink_find('S', to);
+   f = vshrink_find('F', last);
+   CHECK(f >= 0 && vshrink_log[f].views == from
+         && vshrink_log[f].count == want,
+         "%s: the frame queued before the count changed drew %u views "
+         "at count %u, wanted %u at %u", name,
+         f >= 0 ? vshrink_log[f].views : 0,
+         f >= 0 ? vshrink_log[f].count : 0, from, want);
+   if (to > from)
+      CHECK(s >= 0 && s < f, "%s: the grow to %u reached the driver at "
+            "%d, after the frame queued ahead of it (%d)", name, to, s, f);
+   else
+   {
+      CHECK(s > f, "%s: the shrink to %u reached the driver at %d, "
+            "before the frame queued ahead of it (%d)", name, to, s, f);
+      CHECK(s >= 0 && vshrink_log[s].views,
+            "%s: the shrink to %u reached the driver after its frame's "
+            "slot was released, with the ring already reading idle",
+            name, to);
+   }
+   f = vshrink_find('F', last + 1);
+   CHECK(f >= 0 && vshrink_log[f].count == to,
+         "%s: the frame after the count change drew at count %u, wanted %u",
+         name, f >= 0 ? vshrink_log[f].count : 0, to);
+   if (queued > 1)
+      CHECK(vshrink_find('F', first + 1) < 0,
+            "%s: the frame taken back was drawn", name);
+}
+
+/* A shrink 3 -> 1 handled with one frame claimed and one pending:
+ * once the shrink 3 -> 2 that waits for 'first + 1' has reached the
+ * driver, a pass between frames holds until 'first + 2' and
+ * 'first + 3' fill the ring and the count is in the mailbox. The shrink
+ * reaches the driver before 'first + 1' gives back its slot, so the
+ * hold cannot be there: the ring would have room for only one of the
+ * two. With 'grow', 'first + 2' holds until a grow to 3 is in
+ * the mailbox, which cancels the shrink still waiting for 'first + 3'. */
+static void vshrink_older_case(const char *name, video_frame_info_t *info,
+      uint32_t *pixels, unsigned first, bool grow)
+{
+   video_driver_state_t *video = video_state_get_ptr();
+   unsigned p1   = first + 2;
+   unsigned p2   = first + 3;
+   unsigned next = first + 4;
+   unsigned end  = grow ? 3 : 1;
+   int s, f;
+
+   video->poke->set_view_count(video->data, 3);
+   video_thread_run_blocking(vshrink_noop, NULL);
+   CHECK(vshrink_count == 3,
+         "%s: a grow to 3 with nothing queued reached the driver as %u",
+         name, vshrink_count);
+
+   retro_atomic_store_release_int(&vshrink_logged, 0);
+   retro_atomic_store_release_int(&vshrink_held, 0);
+   retro_atomic_store_release_int(&vshrink_set_held, 0);
+   retro_atomic_store_release_int(&vshrink_between, 0);
+   retro_atomic_store_release_int(&vshrink_release, 0);
+   retro_atomic_store_release_int(&vshrink_hold_cmd, (int)first);
+   retro_atomic_store_release_int(&vshrink_hold_release,
+         grow ? 0 : (int)p2);
+   retro_atomic_store_release_int(&vshrink_hold_set, 2 + 1);
+   vshrink_push(info, pixels, first, 3);
+   CHECK(vshrink_wait_flag(&vshrink_held),
+         "%s: the first frame never drew", name);
+   if (grow)
+      retro_atomic_store_release_int(&vshrink_hold_cmd, (int)p1);
+   vshrink_push(info, pixels, first + 1, 3);
+   video->poke->set_view_count(video->data, 2);
+   CHECK(vshrink_wait_flag(&vshrink_set_held),
+         "%s: the shrink to 2 never reached the driver", name);
+   video_thread_wait_idle();
+   CHECK(video_thread_run_queued(vshrink_hold_between, NULL)
+         && vshrink_wait_flag(&vshrink_between),
+         "%s: the video thread never held between frames", name);
+   vshrink_push(info, pixels, p1, 2);
+   vshrink_push(info, pixels, p2, 2);
+   video->poke->set_view_count(video->data, 1);
+   if (grow)
+   {
+      video->poke->set_view_count(video->data, 3);
+      CHECK(vshrink_find('S', 3) >= 0,
+            "%s: set_view_count returned before the grow to 3 reached "
+            "the driver", name);
+   }
+   else
+      CHECK(vshrink_find('F', p2) < 0,
+            "%s: set_view_count waited for the frames queued before it",
+            name);
+   retro_atomic_store_release_int(&vshrink_release, 1);
+   video_thread_wait_idle();
+   vshrink_push(info, pixels, next, end);
+   video_thread_wait_idle();
+   video_thread_run_blocking(vshrink_noop, NULL);
+   retro_atomic_store_release_int(&vshrink_hold_cmd, 0);
+   retro_atomic_store_release_int(&vshrink_hold_release, 0);
+   retro_atomic_store_release_int(&vshrink_hold_set, 0);
+
+   f = vshrink_find('F', p1);
+   CHECK(f >= 0 && vshrink_log[f].views == 2 && vshrink_log[f].count == 2,
+         "%s: the first frame queued before the shrink drew %u views at "
+         "count %u, wanted 2 at 2", name,
+         f >= 0 ? vshrink_log[f].views : 0,
+         f >= 0 ? vshrink_log[f].count : 0);
+   f = vshrink_find('F', p2);
+   CHECK(f >= 0 && vshrink_log[f].views == 2
+         && vshrink_log[f].count == (grow ? 3u : 2u),
+         "%s: the second frame queued before the shrink drew %u views at "
+         "count %u, wanted 2 at %u", name,
+         f >= 0 ? vshrink_log[f].views : 0,
+         f >= 0 ? vshrink_log[f].count : 0, grow ? 3 : 2);
+   s = vshrink_find('S', 1);
+   if (grow)
+      CHECK(s < 0, "%s: the shrink to 1 reached the driver after the "
+            "grow cancelled it (%d)", name, s);
+   else
+      CHECK(s > f, "%s: the shrink to 1 reached the driver at %d, before "
+            "the second frame queued ahead of it (%d)", name, s, f);
+   f = vshrink_find('F', next);
+   CHECK(f >= 0 && vshrink_log[f].count == end,
+         "%s: the frame after the count changed drew at count %u, wanted "
+         "%u", name, f >= 0 ? vshrink_log[f].count : 0, end);
+   CHECK(vshrink_count == end, "%s: the driver ended at count %u, wanted "
+         "%u", name, vshrink_count, end);
+}
+
+static void lane_view_count_shrink(void)
+{
+   video_driver_state_t *video = video_state_get_ptr();
+   thread_video_t *thr;
+   video_frame_info_t info;
+   uint32_t pixels[64];
+   unsigned had = failures;
+
+   set_threaded_via_setting(true);
+   run_frames(3);
+   expect_wrapper(true, "view count lane");
+   if (!(thr = (thread_video_t*)video->data))
+      return;
+   if (menu_is_up())
+      command_event(CMD_EVENT_MENU_TOGGLE, NULL);
+   run_frames(2);
+   video_thread_wait_idle();
+
+   vshrink_thr                   = thr;
+   vshrink_inner                 = thr->driver;
+   vshrink_driver                = *thr->driver;
+   vshrink_driver.frame          = vshrink_frame;
+   vshrink_driver.poke_interface = vshrink_get_poke;
+   vshrink_count                 = 0;
+   set_driver(thr, &vshrink_driver);
+   set_poke_from(thr, &vshrink_driver);
+
+   memset(pixels, 0, sizeof(pixels));
+   memset(&info, 0, sizeof(info));
+   video_driver_build_info(&info);
+   info.threaded_display_pacing     = false;
+   info.input_driver_nonblock_state = true;
+   info.views.views[0].width        = 8;
+   info.views.views[0].height       = 4;
+   info.views.views[1]              = info.views.views[0];
+   info.views.views[1].y            = 4;
+   info.views.views[1].screen       = 1;
+
+   /* A core closing: two screens to none */
+   vshrink_case("view count lane, close", &info, pixels,
+         VSHRINK_FRAME, 1, 2, 0);
+   /* A core's map shrinking, with a frame taken back from the ring */
+   vshrink_case("view count lane, take-back", &info, pixels,
+         VSHRINK_FRAME + 10, 2, 2, 1);
+   /* A grow behind a queued frame: at once, while main waits */
+   vshrink_case("view count lane, grow", &info, pixels,
+         VSHRINK_FRAME + 20, 1, 1, 2);
+   /* A shrink behind a claimed frame and a pending one */
+   vshrink_older_case("view count lane, two queued", &info, pixels,
+         VSHRINK_FRAME + 30, false);
+   /* A grow while a shrink still waits for a frame cancels it */
+   vshrink_older_case("view count lane, shrink then grow", &info, pixels,
+         VSHRINK_FRAME + 40, true);
+
+   video->poke->set_view_count(video->data, 0);
+   video_thread_wait_idle();
+   set_driver(thr, vshrink_inner);
+   set_poke_from(thr, vshrink_inner);
+   if (!menu_is_up())
+      command_event(CMD_EVENT_MENU_TOGGLE, NULL);
+   run_frames(2);
+   if (failures == had)
+      fprintf(stderr, "[pass] view count lane (a shrink waits for the frames queued before it)\n");
 }
 
 /* ------------------------------------------------------------------ */
@@ -4654,11 +6803,17 @@ static void lane_frame_mem_mode(int mode, const uint8_t *ref,
 #ifdef HAVE_GFX_INSTRUMENT
    gfx_instrument_reset();
 #endif
-   /* Measure frame storage without replacing queued frames. */
+   /* Measure frame storage without replacing queued frames, a display
+    * period apart. The video thread hands a buffer back on the pass
+    * after the GPU is done with it, so frames pushed back to back on
+    * a slow GPU (the macOS runners' paravirtual one) find every one of
+    * the driver's in flight and are copied from host memory: that is
+    * the GPU's latency, not the path under test. */
    for (i = 0; i < 60; i++)
    {
       run_frames(1);
       video_thread_wait_idle();
+      retro_sleep(17);
    }
 #ifdef HAVE_GFX_INSTRUMENT
    {
@@ -4964,6 +7119,35 @@ static void lane_pacing_flag_follows_wrapper(void)
    if (failures == had)
       fprintf(stderr, "[pass] pacing-flag lane\n");
 }
+
+#if defined(HAVE_OPENGL) && defined(HAVE_GLSL)
+/* gl2 reports views from its init as its frames do: a frame laid out
+ * before its first draw took views and windows for gone */
+static void lane_gl2_views_from_init(void)
+{
+   unsigned had = failures;
+   gfx_ctx_flags_t flags;
+   bool at_init;
+
+   set_threaded_via_setting(false);
+   run_frames(2);
+   expect_wrapper(false, "gl2 views lane");
+   video_driver_reinit(DRIVER_VIDEO_MASK | DRIVER_INPUT_MASK);
+   flags.flags = 0;
+   video_context_driver_get_flags(&flags);
+   at_init     = BIT32_GET(flags.flags, GFX_CTX_FLAGS_VIDEO_VIEWS) != 0;
+   run_frames(2);
+   flags.flags = 0;
+   video_context_driver_get_flags(&flags);
+   CHECK(at_init == (BIT32_GET(flags.flags, GFX_CTX_FLAGS_VIDEO_VIEWS) != 0),
+         "gl2 views lane: views %d from init, %d after a frame",
+         at_init ? 1 : 0,
+         (int)BIT32_GET(flags.flags, GFX_CTX_FLAGS_VIDEO_VIEWS));
+
+   if (failures == had)
+      fprintf(stderr, "[pass] gl2 views-from-init lane\n");
+}
+#endif
 
 /* ------------------------------------------------------------------ */
 /* Lane: zero-copy with the ring full                                  */
@@ -5395,9 +7579,40 @@ static void lane_upload_batch(void)
  * glcore uploads bytes R,G,B,A and swizzles at sampling, gl uploads
  * the words as BGRA unless the frontend asked for RGBA. */
 static bool lend_gl_readback(const char *drv, uintptr_t id, bool rgba,
-      uint32_t *out)
+      unsigned width, unsigned height, uint32_t *out)
 {
    bool core = !strcmp(drv, "glcore");
+#ifdef HAVE_OPENGLES3
+   GLint read_fbo, draw_fbo, pack_buffer;
+   GLuint fbo;
+   bool ok;
+   size_t i;
+   glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &read_fbo);
+   glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &draw_fbo);
+   glGetIntegerv(GL_PIXEL_PACK_BUFFER_BINDING, &pack_buffer);
+   glGenFramebuffers(1, &fbo);
+   glBindFramebuffer(GL_FRAMEBUFFER, fbo);
+   glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
+         GL_TEXTURE_2D, (GLuint)id, 0);
+   glBindBuffer(GL_PIXEL_PACK_BUFFER, 0);
+   glPixelStorei(GL_PACK_ALIGNMENT, 4);
+   ok = glCheckFramebufferStatus(GL_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE;
+   if (ok) glReadPixels(0, 0, width, height, GL_RGBA, GL_UNSIGNED_BYTE, out);
+   ok = glGetError() == GL_NO_ERROR && ok;
+   glBindBuffer(GL_PIXEL_PACK_BUFFER, (GLuint)pack_buffer);
+   glBindFramebuffer(GL_READ_FRAMEBUFFER, (GLuint)read_fbo);
+   glBindFramebuffer(GL_DRAW_FRAMEBUFFER, (GLuint)draw_fbo);
+   glDeleteFramebuffers(1, &fbo);
+   if (ok && !core && !rgba)
+      for (i = 0; i < (size_t)width * height; i++)
+      {
+         uint8_t *p = (uint8_t*)&out[i];
+         uint8_t r = p[0]; p[0] = p[2]; p[2] = r;
+      }
+   return ok;
+#else
+   (void)width;
+   (void)height;
    glBindTexture(GL_TEXTURE_2D, (GLuint)id);
    glPixelStorei(GL_PACK_ALIGNMENT, 4);
    glGetTexImage(GL_TEXTURE_2D, 0,
@@ -5406,6 +7621,7 @@ static bool lend_gl_readback(const char *drv, uintptr_t id, bool rgba,
          out);
    glBindTexture(GL_TEXTURE_2D, 0);
    return glGetError() == GL_NO_ERROR;
+#endif
 }
 #endif
 
@@ -5421,9 +7637,27 @@ static void surf_release_cb(void *user, gfx_surface_t *s, unsigned slot)
 
 static void surf_fill(gfx_surface_t *s, unsigned slot, unsigned seed)
 {
-   unsigned i, n = VIDEO_SCALE_AREA(s->dims);
-   for (i = 0; i < n; i++)
-      s->slots[slot][i] = 0xff000000u | ((i * 7u + seed * 31u) & 0xffffffu);
+   unsigned x, y;
+   unsigned w = VIDEO_SCALE_W(s->dims), h = VIDEO_SCALE_H(s->dims);
+   uint32_t *pixels;
+   int64_t deadline = cpu_features_get_time_usec() + 2000000;
+   bool writable = gfx_surface_slot_writable(s, slot);
+   while (!writable && cpu_features_get_time_usec() < deadline)
+   {
+      run_frames(1);
+      writable = gfx_surface_slot_writable(s, slot);
+   }
+   CHECK(writable, "surface fill: slot not writable within two seconds");
+   if (!writable)
+      return;
+   pixels = gfx_surface_slot_begin(s, slot);
+   for (y = 0; y < h; y++)
+   {
+      uint32_t *row = (uint32_t*)((uint8_t*)pixels + (size_t)y * s->pitch[slot]);
+      for (x = 0; x < w; x++)
+         row[x] = 0xff000000u | (((y * w + x) * 7u + seed * 31u) & 0xffffffu);
+   }
+   gfx_surface_slot_end(s, slot);
 }
 
 /* A texture back end for the null driver, which has none at all. Up to
@@ -6061,9 +8295,14 @@ static void lane_gl2_linear(void)
 
       if (!(out = (float*)malloc((size_t)w * h * 4 * sizeof(float))))
          break;
+#ifdef HAVE_OPENGLES3
+      (void)layer;
+      glReadPixels(0, 0, w, h, GL_RGBA, GL_FLOAT, out);
+#else
       glBindTexture(GL_TEXTURE_2D, layer);
       glGetTexImage(GL_TEXTURE_2D, 0, GL_RGBA, GL_FLOAT, out);
       glBindTexture(GL_TEXTURE_2D, 0);
+#endif
       glBindFramebuffer(GL_FRAMEBUFFER, 0);
       {
          const float *p = out + ((size_t)(h / 2) * w + w / 2) * 4;
@@ -6089,7 +8328,8 @@ static void lane_gl2_linear(void)
 }
 #endif
 
-#ifdef HAVE_GL_TEXTURE_LEND
+/* Fence injection uses the desktop GL symbol table. */
+#if defined(HAVE_GL_TEXTURE_LEND) && !defined(HAVE_OPENGLES)
 static GLsync APIENTRY lend_fence_refused(GLenum cond, GLbitfield flags)
 {
    (void)cond;
@@ -6249,7 +8489,7 @@ static void lane_surface_lend(void)
             if (got && drv && (!strcmp(drv, "gl") || !strcmp(drv, "glcore")))
             {
                size_t bad = n;
-               CHECK(lend_gl_readback(drv, s->handle, rgba, got),
+               CHECK(lend_gl_readback(drv, s->handle, rgba, 64, 48, got),
                      "surface lend lane: texture read back failed");
                for (i = 0; i < n && bad == n; i++)
                   if (got[i] != (0xff000000u
@@ -6301,6 +8541,7 @@ static void lane_surface_lend(void)
 #ifdef HAVE_GL_TEXTURE_LEND
                     || !strcmp(drv, "gl")     || !strcmp(drv, "glcore")
 #endif
+                    || !strcmp(drv, "d3d11")
                     || !strcmp(drv, "metal")))
       {
          CHECK(lent_any, "surface lend lane: %s lent no slot", drv);
@@ -6312,7 +8553,7 @@ static void lane_surface_lend(void)
                "one-slot surface nothing under threaded video", drv);
       }
    }
-#ifdef HAVE_GL_TEXTURE_LEND
+#if defined(HAVE_GL_TEXTURE_LEND) && !defined(HAVE_OPENGLES)
    {
       const char *drv = getenv("HARNESS_VIDEO_DRIVER");
       if (drv && (!strcmp(drv, "gl") || !strcmp(drv, "glcore")))
@@ -7076,10 +9317,27 @@ static void lane_surface_4k(void)
    for (i = 0; i < 60; i++)
    {
       unsigned slot = i & 1;
-      int64_t t0, t1;
+      int64_t t0, t1, deadline;
       unsigned before = surf_releases;
       unsigned waited = 0;
       enum gfx_surface_submit_result r;
+
+      /* A released descriptor can still name a GPU-owned lent slot.
+       * Unpaced frontend iterations do not bound GPU completion time. */
+      deadline = cpu_features_get_time_usec() + 2000000;
+      while ((s->inflight || !gfx_surface_slot_writable(s, slot))
+            && cpu_features_get_time_usec() < deadline)
+      {
+         run_frames(1);
+         waited++;
+      }
+      CHECK(!s->inflight && gfx_surface_slot_writable(s, slot),
+            "4K frame %u: slot not writable within two seconds (%u frames)",
+            i, waited);
+      if (s->inflight || !gfx_surface_slot_writable(s, slot))
+         break;
+      waited = 0;
+      before = surf_releases;
 
       /* Only the top-left tile is touched: what is measured is the
        * hand-off, not the fill. */
@@ -7087,21 +9345,25 @@ static void lane_surface_4k(void)
       t0 = thread_cpu_usec();
       r  = gfx_surface_submit(s, slot, rgba);
       t1 = thread_cpu_usec();
-      if (r == GFX_SURFACE_SUBMIT_BUSY)
-      {
-         run_frames(1);
+      CHECK(r == GFX_SURFACE_SUBMIT_QUEUED,
+            "4K frame %u: submit returned %d", i, r);
+      if (r != GFX_SURFACE_SUBMIT_QUEUED)
          continue;
-      }
-      CHECK(r == GFX_SURFACE_SUBMIT_QUEUED, "4K frame %u: submit returned %d", i, r);
       submit_us[n_sub++] = t1 - t0;
       submit_total      += t1 - t0;
-      while (surf_releases == before && waited < 8)
+      deadline = cpu_features_get_time_usec() + 2000000;
+      while (surf_releases == before
+            && cpu_features_get_time_usec() < deadline)
       {
          run_frames(1);
          waited++;
       }
-      CHECK(waited < 8, "4K frame %u: slot not released within 8 frames", i);
+      CHECK(surf_releases != before,
+            "4K frame %u: slot not released within two seconds (%u frames)",
+            i, waited);
       release_frames[n_rel++] = waited;
+      if (surf_releases == before)
+         break;
       if (!first)
          first = s->handle;
    }
@@ -7136,7 +9398,7 @@ static void lane_surface_4k(void)
             (long long)(submit_total / n_sub));
 #endif
    }
-   CHECK(n_sub >= 30, "only %u of 60 4K submits were accepted", n_sub);
+   CHECK(n_sub == 60, "only %u of 60 4K submits were accepted", n_sub);
    if (s->handle && video_driver_texture_can_update())
       CHECK(s->handle == first, "4K in-place driver replaced the texture");
 
@@ -7530,11 +9792,10 @@ static void readback_once(bool threaded)
 /* Lane: a GPU recording's frames keep the format it was opened for   */
 /*   A GPU recording opened unthreaded on a driver with the 32-bit    */
 /*   readback takes B,G,R,X frames. Threaded Video switched on during */
-/*   it puts the wrapper's readback in charge, which hands over BGR24 */
-/*   from a buffer of its own: those frames were pushed as 32-bit,    */
-/*   reading a third more than the wrapper's buffer holds and showing */
-/*   garbage. The recorder must get 32-bit rows of its own buffer     */
-/*   either way, every row of them readable.                          */
+/*   it puts the wrapper's readback in charge: 32-bit rows straight   */
+/*   from its read when the driver has a record reader, else BGR24    */
+/*   widened into the recording's own buffer. The recorder must get   */
+/*   32-bit rows either way, every row of them readable.              */
 /* ------------------------------------------------------------------ */
 
 static unsigned       reclane_pushes;
@@ -7634,11 +9895,165 @@ static void record_format_once(bool threaded)
             || reclane_pitch == -(int)VIDEO_SCALE_W(vp.dims) * 4,
             "record format lane (%s): rows of %d bytes for a %u wide "
             "32-bit recording", mode, reclane_pitch, VIDEO_SCALE_W(vp.dims));
-      CHECK(reclane_data >= buf && reclane_data < buf + area * 4,
-            "record format lane (%s): the frame is not in the recording's "
-            "own buffer", mode);
+      if (!threaded || !video_thread_record_has_reader(video_st->data))
+         CHECK(reclane_data >= buf && reclane_data < buf + area * 4,
+               "record format lane (%s): the frame is not in the "
+               "recording's own buffer", mode);
    }
    free(buf);
+}
+
+/* A recording stopped while a frame that reads it back is drawing:
+ * the stop hands the buffers back to be freed once no frame names
+ * them, and does not wait for the frame */
+static const video_driver_t *rstop_inner;
+static video_driver_t        rstop_driver;
+static retro_atomic_int_t    rstop_hold;
+static retro_atomic_int_t    rstop_held;
+
+static bool rstop_frame(void *data, const void *frame,
+      unsigned dims, uint64_t frame_count,
+      unsigned pitch, const char *msg, video_frame_info_t *video_info)
+{
+   if (retro_atomic_load_acquire_int(&rstop_hold))
+   {
+      retro_time_t until = cpu_features_get_time_usec() + 1000000;
+      retro_atomic_store_release_int(&rstop_held, 1);
+      while (     retro_atomic_load_acquire_int(&rstop_hold)
+            &&  cpu_features_get_time_usec() < until) { }
+   }
+   if (video_info->recording_gpu) return true;
+   return rstop_inner->frame(data, frame, dims, frame_count,
+         pitch, msg, video_info);
+}
+
+static void record_stop_in_flight(void)
+{
+   struct video_viewport vp;
+   video_driver_state_t *video_st = video_state_get_ptr();
+   recording_state_t    *rec_st   = recording_state_get_ptr();
+   recording_state_t saved;
+   uint8_t *saved_buf;
+   uint8_t *buf;
+   thread_video_t *thr;
+   retro_time_t took;
+   size_t   area;
+   unsigned i;
+
+   set_threaded_via_setting(true);
+   run_frames(4);
+   expect_wrapper(true, "record stop lane");
+   if (menu_is_up())
+      command_event(CMD_EVENT_MENU_TOGGLE, NULL);
+   run_frames(2);
+   video_thread_wait_idle();
+   memset(&vp, 0, sizeof(vp));
+   video_driver_get_viewport_info(&vp);
+   area = VIDEO_SCALE_AREA(vp.dims);
+   if (!area || !(buf = (uint8_t*)malloc(area * 4)))
+      return;
+
+   saved                       = *rec_st;
+   saved_buf                   = video_st->record_gpu_buffer;
+   reclane_pushes              = 0;
+   reclane_rows                = VIDEO_SCALE_H(vp.dims);
+   rec_st->driver              = &reclane_driver;
+   rec_st->gpu_dims            = vp.dims;
+   rec_st->gpu_bgrx            = true;
+   rec_st->enable              = true;
+   video_st->record_gpu_buffer = buf;
+   rec_st->data                = (void*)&reclane_driver;
+   for (i = 0; i < 32 && !reclane_pushes; i++)
+      run_frames(1);
+
+   thr                 = (thread_video_t*)video_st->data;
+   rstop_inner        = thr->driver;
+   rstop_driver       = *thr->driver;
+   rstop_driver.frame = rstop_frame;
+   set_driver(thr, &rstop_driver);
+   retro_atomic_store_release_int(&rstop_held, 0);
+   retro_atomic_store_release_int(&rstop_hold, 1);
+   /* A recorded frame drawing, then the recording stopped */
+   run_frames(1);
+   for (i = 0; i < 1000 && !retro_atomic_load_acquire_int(&rstop_held); i++)
+      retro_sleep(1);
+   took = cpu_features_get_time_usec();
+   recording_deinit();
+   took = cpu_features_get_time_usec() - took;
+   retro_atomic_store_release_int(&rstop_hold, 0);
+   video_thread_wait_idle();
+   set_driver(thr, rstop_inner);
+   run_frames(4);
+
+   CHECK(retro_atomic_load_acquire_int(&rstop_held),
+         "record stop lane: no recorded frame was in flight");
+   CHECK(took < 200000,
+         "record stop lane: the stop waited %lld us for the frame",
+         (long long)took);
+   CHECK(!rec_st->data && !video_st->record_gpu_buffer,
+         "record stop lane: the recording is still open");
+
+   /* recording_deinit() freed buf as the recording's buffer */
+   *rec_st                     = saved;
+   video_st->record_gpu_buffer = saved_buf;
+}
+
+static void record_gpu_stop_in_flight(void)
+{
+   video_driver_state_t *video = video_state_get_ptr();
+   thread_video_t *thr;
+   video_frame_info_t info;
+   uint32_t pixels[64] = {0};
+   unsigned i, had = failures;
+   bool was_menu = menu_is_up();
+   bool was_threaded = video_driver_thread_wrapper_active();
+   set_threaded_via_setting(true);
+   if (menu_is_up())
+      command_event(CMD_EVENT_MENU_TOGGLE, NULL);
+   run_frames(2);
+   video_thread_wait_idle();
+   thr = (thread_video_t*)video->data;
+   rstop_inner = thr->driver;
+   rstop_driver = *thr->driver;
+   rstop_driver.frame = rstop_frame;
+   set_driver(thr, &rstop_driver);
+   memset(&info, 0, sizeof(info));
+   video_driver_build_info(&info);
+   info.threaded_display_pacing = false;
+   info.input_driver_nonblock_state = true;
+   info.recording_gpu = &rstop_driver;
+   retro_atomic_store_release_int(&rstop_held, 0);
+   retro_atomic_store_release_int(&rstop_hold, 1);
+   video->current_video->frame(video->data, pixels, VIDEO_SCALE_PACK(8, 8),
+         0, 32, NULL, &info);
+   for (i = 0; i < 1000 && !retro_atomic_load_acquire_int(&rstop_held); i++)
+      retro_sleep(1);
+   CHECK(retro_atomic_load_acquire_int(&rstop_held), "GPU lease: no drawing frame");
+   CHECK(video_thread_record_gpu_in_flight(thr, &rstop_driver),
+         "GPU lease: drawing frame was missed (state %d, slots %p/%p, want %p)",
+         retro_atomic_load_acquire_int(&thr->frame.state),
+         thr->frame.slot[0].video_info.recording_gpu,
+         thr->frame.slot[1].video_info.recording_gpu, (void*)&rstop_driver);
+   info.recording_gpu = &rstop_hold;
+   video->current_video->frame(video->data, pixels, VIDEO_SCALE_PACK(8, 8),
+         1, 32, NULL, &info);
+   CHECK(video_thread_record_gpu_in_flight(thr, &rstop_hold),
+         "GPU lease: queued frame was missed");
+   CHECK(!video_thread_record_gpu_in_flight(thr, &rstop_held)
+         && !video_thread_record_gpu_in_flight(thr, NULL),
+         "GPU lease: unrelated recorder matched");
+   retro_atomic_store_release_int(&rstop_hold, 0);
+   video_thread_wait_idle();
+   CHECK(!video_thread_record_gpu_in_flight(thr, &rstop_driver)
+         && !video_thread_record_gpu_in_flight(thr, &rstop_hold),
+         "GPU lease: stale idle slot retained recorder");
+   set_driver(thr, rstop_inner);
+   set_threaded_via_setting(was_threaded);
+   if (was_menu != menu_is_up())
+      command_event(CMD_EVENT_MENU_TOGGLE, NULL);
+   run_frames(2);
+   if (failures == had)
+      fprintf(stderr, "[pass] GPU recording frame leases (drawing, queued, idle)\n");
 }
 
 static void lane_record_format(void)
@@ -7647,11 +10062,385 @@ static void lane_record_format(void)
 
    record_format_once(false);
    record_format_once(true);
+   record_stop_in_flight();
    set_threaded_via_setting(false);
    run_frames(2);
 
    if (failures == had)
-      fprintf(stderr, "[pass] gpu record format lane\n");
+      fprintf(stderr, "[pass] gpu record format lane (and a stop in flight)\n");
+}
+
+/* ------------------------------------------------------------------ */
+/* Lane: a core's 0RGB1555 and XRGB2101010 frames, converted          */
+/*   A driver gets 0RGB1555 frames as RGB565 and XRGB2101010 ones     */
+/*   narrowed to XRGB8888, converted on the main thread without the   */
+/*   wrapper and on the video thread with it. Either way every pixel  */
+/*   of the frame's first row must be the converted core pixel, at   */
+/*   the converted format's pitch.                                    */
+/* ------------------------------------------------------------------ */
+
+#define PIXLANE_W     320
+#define PIXLANE_FROZE 0x1234u
+
+static video_driver_t      pixlane_driver;
+static const video_driver_t *pixlane_inner;
+static uint32_t            pixlane_row[PIXLANE_W];
+static unsigned            pixlane_pitch;
+static unsigned            pixlane_dims;
+/* Frames captured; stored with release after the row */
+static retro_atomic_int_t  pixlane_frames;
+static bool                pixlane_wide; /* the row is 32-bit */
+
+static bool pixlane_frame(void *data, const void *frame, unsigned dims,
+      uint64_t frame_count, unsigned pitch, const char *msg,
+      video_frame_info_t *video_info)
+{
+   if (frame && VIDEO_SCALE_W(dims) == PIXLANE_W)
+   {
+      unsigned x;
+      for (x = 0; x < PIXLANE_W; x++)
+         pixlane_row[x] = pixlane_wide
+            ? ((const uint32_t*)frame)[x]
+            : ((const uint16_t*)frame)[x];
+      pixlane_pitch = pitch;
+      pixlane_dims  = dims;
+      retro_atomic_inc_int(&pixlane_frames);
+   }
+   return pixlane_inner->frame(data, frame, dims, frame_count, pitch, msg,
+         video_info);
+}
+
+static void pixlane_once(unsigned fmt, bool threaded)
+{
+   video_driver_state_t *video_st = video_state_get_ptr();
+   dylib_t lib = runloop_state_get_ptr()->lib_handle;
+   bool (*set_format)(unsigned) = lib
+      ? (bool (*)(unsigned))dylib_proc(lib, "harness_core_set_format") : NULL;
+   void (*freeze)(unsigned) = lib
+      ? (void (*)(unsigned))dylib_proc(lib, "harness_core_freeze") : NULL;
+   const char *name = fmt == RETRO_PIXEL_FORMAT_0RGB1555
+      ? "0RGB1555" : "XRGB2101010";
+   const char *mode = threaded ? "threaded" : "unthreaded";
+   int flags        = DRIVER_VIDEO_MASK;
+   unsigned i, bad;
+
+   CHECK(set_format && freeze, "harness core lacks the format exports");
+   if (!set_format || !freeze)
+      return;
+   CHECK(set_format(fmt), "pixel format lane: %s refused", name);
+
+   /* The converters are made with the driver */
+   set_threaded_via_setting(threaded);
+   command_event(CMD_EVENT_REINIT, &flags);
+   run_frames(4);
+   expect_wrapper(threaded, "pixel format lane");
+   if (threaded)
+      video_thread_wait_idle();
+
+   pixlane_wide = fmt == RETRO_PIXEL_FORMAT_XRGB2101010;
+   retro_atomic_store_release_int(&pixlane_frames, 0);
+   if (threaded)
+   {
+      thread_video_t *thr = (thread_video_t*)video_st->data;
+      pixlane_inner        = thr->driver;
+      pixlane_driver       = *thr->driver;
+      pixlane_driver.frame = pixlane_frame;
+      set_driver(thr, &pixlane_driver);
+   }
+   else
+   {
+      pixlane_inner          = video_st->current_video;
+      pixlane_driver         = *video_st->current_video;
+      pixlane_driver.frame   = pixlane_frame;
+      video_st->current_video = &pixlane_driver;
+   }
+
+   freeze(PIXLANE_FROZE);
+   for (i = 0; i < 64
+         && retro_atomic_load_acquire_int(&pixlane_frames) < 2; i++)
+   {
+      run_frames(1);
+      if (threaded)
+         video_thread_wait_idle();
+   }
+   freeze(0);
+
+   if (threaded)
+      set_driver((thread_video_t*)video_st->data, pixlane_inner);
+   else
+      video_st->current_video = (video_driver_t*)pixlane_inner;
+
+   CHECK(retro_atomic_load_acquire_int(&pixlane_frames) >= 2,
+         "pixel format lane (%s, %s): no frame reached the driver", name,
+         mode);
+   if (retro_atomic_load_acquire_int(&pixlane_frames) >= 2)
+   {
+      for (bad = 0, i = 0; i < PIXLANE_W; i++)
+      {
+         uint32_t v = PIXLANE_FROZE + i;
+         uint32_t want;
+         if (pixlane_wide)
+            want = 0xff000000u
+                 | ((v >> 22) & 0xff) << 16
+                 | ((v >> 12) & 0xff) << 8
+                 | ((v >>  2) & 0xff);
+         else
+         {
+            uint16_t src = (uint16_t)v, out;
+            conv_0rgb1555_rgb565(&out, &src, 1, 1, 2, 2);
+            want = out;
+         }
+         if (pixlane_row[i] != want)
+            bad++;
+      }
+      CHECK(!bad, "pixel format lane (%s, %s): %u of %u pixels not "
+            "converted (first %08x, dims %ux%u)", name, mode, bad, PIXLANE_W,
+            (unsigned)pixlane_row[0], VIDEO_SCALE_W(pixlane_dims),
+            VIDEO_SCALE_H(pixlane_dims));
+      CHECK(pixlane_pitch == PIXLANE_W * (pixlane_wide ? 4u : 2u),
+            "pixel format lane (%s, %s): pitch %u", name, mode,
+            pixlane_pitch);
+   }
+}
+
+static void lane_pixel_format(void)
+{
+   unsigned had = failures;
+   dylib_t lib  = runloop_state_get_ptr()->lib_handle;
+   bool (*set_format)(unsigned) = lib
+      ? (bool (*)(unsigned))dylib_proc(lib, "harness_core_set_format") : NULL;
+   bool menu_was_up = menu_is_up();
+   int flags        = DRIVER_VIDEO_MASK;
+   enum retro_pixel_format was = video_state_get_ptr()->pix_fmt;
+
+   if (menu_was_up)
+      command_event(CMD_EVENT_MENU_TOGGLE, NULL);
+   pixlane_once(RETRO_PIXEL_FORMAT_0RGB1555,    false);
+   pixlane_once(RETRO_PIXEL_FORMAT_0RGB1555,    true);
+   pixlane_once(RETRO_PIXEL_FORMAT_XRGB2101010, false);
+   pixlane_once(RETRO_PIXEL_FORMAT_XRGB2101010, true);
+
+   /* Back to the core's own format, the driver made for it */
+   if (set_format)
+      set_format((unsigned)was);
+   set_threaded_via_setting(false);
+   command_event(CMD_EVENT_REINIT, &flags);
+   run_frames(2);
+   if (menu_was_up)
+      command_event(CMD_EVENT_MENU_TOGGLE, NULL);
+   run_frames(2);
+
+   if (failures == had)
+      fprintf(stderr, "[pass] pixel format lane\n");
+}
+
+/* ------------------------------------------------------------------ */
+/* Lane: the wrapper reads back in the recording's own format         */
+/*   A driver whose poke has record_read is read back on the video    */
+/*   thread, and a GPU recording opened for 32-bit frames gets them   */
+/*   from that read as B,G,R,X, in the row order the driver wrote -   */
+/*   never as BGR24 widened on the main thread. A BGR24 recording     */
+/*   gets BGR24, bottom row first.                                    */
+/* ------------------------------------------------------------------ */
+
+#define RECREAD_W 64
+#define RECREAD_H 48
+
+static video_driver_t                recread_driver;
+static const video_driver_t         *recread_inner;
+static video_poke_interface_t        recread_poke;
+static retro_atomic_int_t            recread_bgrx_reads;
+static retro_atomic_int_t            recread_bgr24_reads;
+
+static void recread_viewport_info(void *data, struct video_viewport *vp)
+{
+   (void)data;
+   vp->pos       = VIDEO_POS_PACK(0, 0);
+   vp->dims      = VIDEO_SCALE_PACK(RECREAD_W, RECREAD_H);
+   vp->full_dims = vp->dims;
+}
+
+/* B = x, G = the row from the top, R = 0x5a: B,G,R,X top row first, or
+ * BGR24 bottom row first. */
+static bool recread_read(void *data, uint8_t *buffer, bool bgrx,
+      bool *bottom_up)
+{
+   unsigned x, y;
+   (void)data;
+   for (y = 0; y < RECREAD_H; y++)
+      for (x = 0; x < RECREAD_W; x++)
+      {
+         if (bgrx)
+         {
+            uint8_t *p = buffer + ((size_t)y * RECREAD_W + x) * 4;
+            p[0] = (uint8_t)x;
+            p[1] = (uint8_t)y;
+            p[2] = 0x5a;
+            p[3] = 0xff;
+         }
+         else
+         {
+            uint8_t *p = buffer
+               + ((size_t)(RECREAD_H - 1 - y) * RECREAD_W + x) * 3;
+            p[0] = (uint8_t)x;
+            p[1] = (uint8_t)y;
+            p[2] = 0x5a;
+         }
+      }
+   *bottom_up = !bgrx;
+   retro_atomic_inc_int(bgrx ? &recread_bgrx_reads : &recread_bgr24_reads);
+   return true;
+}
+
+static void recread_get_poke(void *data, const video_poke_interface_t **iface)
+{
+   const video_poke_interface_t *inner = NULL;
+   if (recread_inner->poke_interface)
+      recread_inner->poke_interface(data, &inner);
+   if (inner)
+      recread_poke = *inner;
+   else
+      memset(&recread_poke, 0, sizeof(recread_poke));
+   recread_poke.record_read = recread_read;
+   *iface                   = &recread_poke;
+}
+
+static int            recread_pitch;
+static const uint8_t *recread_data;
+static unsigned       recread_pushes;
+static unsigned       recread_bad;
+
+static bool recread_push_video(void *data,
+      const struct record_video_data *v)
+{
+   unsigned x, y;
+   unsigned bpp;
+   (void)data;
+   if (v->is_dupe || !v->data)
+      return true;
+   recread_pushes++;
+   recread_pitch = v->pitch;
+   recread_data  = (const uint8_t*)v->data;
+   bpp           = (unsigned)((v->pitch < 0 ? -v->pitch : v->pitch)
+         / RECREAD_W);
+   /* Every pixel, walked with the pitch the encoder is handed */
+   for (y = 0; y < RECREAD_H; y++)
+      for (x = 0; x < RECREAD_W; x++)
+      {
+         const uint8_t *p = (const uint8_t*)v->data
+            + (ptrdiff_t)y * v->pitch + (ptrdiff_t)x * bpp;
+         if (p[0] != (uint8_t)x || p[1] != (uint8_t)y || p[2] != 0x5a)
+            recread_bad++;
+      }
+   return true;
+}
+
+static const record_driver_t recread_rec_driver = {
+   NULL, NULL, recread_push_video, reclane_push_audio, NULL, "recread"
+};
+
+static void record_reader_once(thread_video_t *thr, bool bgrx)
+{
+   video_driver_state_t *video_st = video_state_get_ptr();
+   recording_state_t    *rec_st   = recording_state_get_ptr();
+   const char *mode               = bgrx ? "BGRX" : "BGR24";
+   size_t      size               = (size_t)RECREAD_W * RECREAD_H * 4;
+   recording_state_t saved;
+   uint8_t *saved_buf;
+   uint8_t *buf;
+   unsigned i;
+
+   if (!(buf = (uint8_t*)malloc(size)))
+      return;
+   memset(buf, 0, size);
+   retro_atomic_store_release_int(&recread_bgrx_reads, 0);
+   retro_atomic_store_release_int(&recread_bgr24_reads, 0);
+   recread_pushes = 0;
+   recread_bad    = 0;
+
+   saved                       = *rec_st;
+   saved_buf                   = video_st->record_gpu_buffer;
+   rec_st->driver              = &recread_rec_driver;
+   rec_st->gpu_dims            = VIDEO_SCALE_PACK(RECREAD_W, RECREAD_H);
+   rec_st->gpu_bgrx            = bgrx;
+   rec_st->enable              = true;
+   video_st->record_gpu_buffer = buf;
+   rec_st->data                = (void*)&recread_rec_driver;
+
+   /* The wrapper's readback starts a few frames behind */
+   for (i = 0; i < 64 && !recread_pushes; i++)
+      run_frames(1);
+
+   rec_st->data                = NULL;
+   video_thread_wait_idle();
+   video_thread_record_stop(thr);
+   *rec_st                     = saved;
+   video_st->record_gpu_buffer = saved_buf;
+
+   CHECK(recread_pushes > 0, "record reader lane (%s): no frame recorded",
+         mode);
+   if (recread_pushes)
+   {
+      int pitch = bgrx ? RECREAD_W * 4 : -(RECREAD_W * 3);
+      CHECK(recread_pitch == pitch,
+            "record reader lane (%s): rows of %d bytes, not %d", mode,
+            recread_pitch, pitch);
+      CHECK(!recread_bad,
+            "record reader lane (%s): %u pixels not as the driver read "
+            "them", mode, recread_bad);
+      CHECK(recread_data < buf || recread_data >= buf + size,
+            "record reader lane (%s): the frame went through the main "
+            "thread's buffer rather than straight from the read", mode);
+   }
+   CHECK(retro_atomic_load_acquire_int(bgrx
+            ? &recread_bgr24_reads : &recread_bgrx_reads) == 0,
+         "record reader lane (%s): the driver was asked for the other "
+         "format", mode);
+   free(buf);
+}
+
+static void lane_record_reader(void)
+{
+   unsigned had = failures;
+   video_driver_state_t *video_st = video_state_get_ptr();
+   thread_video_t *thr;
+   bool menu_was_up;
+
+   set_threaded_via_setting(true);
+   run_frames(4);
+   expect_wrapper(true, "record reader lane");
+   /* Frames the core makes are recorded; the menu's dupes are not */
+   if ((menu_was_up = menu_is_up()))
+      command_event(CMD_EVENT_MENU_TOGGLE, NULL);
+   if (!(thr = (thread_video_t*)video_st->data))
+      return;
+
+   CHECK(!video_thread_record_has_reader(thr) || real_driver(),
+         "record reader lane: the null driver reports a reader");
+
+   video_thread_wait_idle();
+   recread_inner                 = thr->driver;
+   recread_driver                = *thr->driver;
+   recread_driver.viewport_info  = recread_viewport_info;
+   recread_driver.poke_interface = recread_get_poke;
+   set_driver(thr, &recread_driver);
+   set_poke_from(thr, &recread_driver);
+
+   CHECK(video_thread_record_has_reader(thr),
+         "record reader lane: a poke with record_read is not a reader");
+   record_reader_once(thr, true);
+   record_reader_once(thr, false);
+
+   set_driver(thr, recread_inner);
+   set_poke_from(thr, recread_inner);
+   run_frames(2);
+   if (menu_was_up)
+      command_event(CMD_EVENT_MENU_TOGGLE, NULL);
+   set_threaded_via_setting(false);
+   run_frames(2);
+
+   if (failures == had)
+      fprintf(stderr, "[pass] gpu record reader lane\n");
 }
 
 /* ------------------------------------------------------------------ */
@@ -7681,6 +10470,9 @@ static void lane_record_game_only(bool full_read_has_ui)
    settings_t *settings           = config_get_ptr();
    video_driver_state_t *video_st = video_state_get_ptr();
    recording_state_t *rec_st      = recording_state_get_ptr();
+   dylib_t lib                    = runloop_state_get_ptr()->lib_handle;
+   void (*freeze)(unsigned)       = lib
+      ? (void (*)(unsigned))dylib_proc(lib, "harness_core_freeze") : NULL;
    bool saved_game_only           = settings->bools.video_record_game_only;
    bool saved_enable              = rec_st->enable;
    static const char msg[]        = "RECORD GAME ONLY LANE MESSAGE";
@@ -7688,6 +10480,9 @@ static void lane_record_game_only(bool full_read_has_ui)
    size_t len;
    bool ok;
 
+   CHECK(freeze != NULL, "game-only lane: harness core lacks harness_core_freeze");
+   if (!freeze)
+      return;
    set_threaded_via_setting(false);
    run_frames(4);
    if (menu_is_up())
@@ -7698,6 +10493,9 @@ static void lane_record_game_only(bool full_read_has_ui)
       fprintf(stderr, "[skip] game-only lane (no 32-bit readback)\n");
       return;
    }
+   /* Base-size frames only: the dupe of an oversize frame drops the
+    * cached frame, and the paused redraws then have no core image */
+   freeze(1);
    run_frames(2);
    command_event(CMD_EVENT_PAUSE, NULL);
    run_frames(2);
@@ -7733,6 +10531,7 @@ static void lane_record_game_only(bool full_read_has_ui)
    }
 
    command_event(CMD_EVENT_UNPAUSE, NULL);
+   freeze(0);
    run_frames(2);
    if (failures == had)
       fprintf(stderr, "[pass] record game only lane\n");
@@ -8050,6 +10849,164 @@ static void hwring_on_clear(uint64_t image)
       hwring_overlaps++;
 }
 
+
+#ifdef HAVE_TEMPORAL_UPSCALER
+/* ------------------------------------------------------------------ */
+/* Lane: the temporal upscaler's inputs ride with their frame.         */
+/*   A core sets the upscaler's inputs for a frame, then pushes it;    */
+/*   the driver takes them inside its frame call. Under the wrapper    */
+/*   that call is on the video thread, frames later, by which time the */
+/*   core has set the inputs of a newer frame, or they were taken for  */
+/*   the one before: the driver then upscaled with the wrong jitter    */
+/*   and motion, or showed the frame raw. Every hardware frame drawn   */
+/*   must take exactly the inputs its own frame was pushed with.       */
+/* ------------------------------------------------------------------ */
+
+/* The inputs the core sets: one struct rewritten every frame, as a
+ * core's is, jitter_x the serial of the image it is for */
+static struct retro_hw_upscaler_inputs hwupsc_inputs;
+static unsigned hwupsc_serial;
+static struct { uint64_t image; unsigned serial; } hwupsc_images[16];
+static unsigned hwupsc_drawn, hwupsc_wrong, hwupsc_missing;
+static const struct retro_hw_render_upscaler_interface *hwupsc_iface;
+
+static bool hwupsc_optimal(void *data, unsigned mode, unsigned out_dims,
+      unsigned *render_dims, unsigned *min_dims, unsigned *max_dims)
+{
+   (void)data; (void)mode; (void)out_dims;
+   (void)render_dims; (void)min_dims; (void)max_dims;
+   return false;
+}
+
+/* The core's thread, before it clears the image it then hands over */
+static void hwupsc_on_clear(uint64_t image)
+{
+   unsigned i;
+   if (!image || !hwupsc_iface)
+      return;
+   hwupsc_serial++;
+   for (i = 0; i < 16; i++)
+      if (hwupsc_images[i].image == image || !hwupsc_images[i].image)
+         break;
+   if (i < 16)
+   {
+      hwupsc_images[i].image  = image;
+      hwupsc_images[i].serial = hwupsc_serial;
+   }
+   memset(&hwupsc_inputs, 0, sizeof(hwupsc_inputs));
+   hwupsc_inputs.jitter_x = (float)hwupsc_serial;
+   hwupsc_iface->set_inputs(hwupsc_iface->handle, &hwupsc_inputs);
+}
+
+/* The video thread's frame call: a hardware frame takes its inputs.
+ * The wait comes first, between the frame's claim and the driver's
+ * take: the core pushes a frame or two more in it, with their inputs. */
+static bool hwupsc_frame(void *data, const void *frame,
+      unsigned dims, uint64_t frame_count,
+      unsigned pitch, const char *msg, video_frame_info_t *video_info)
+{
+   retro_sleep(hwring_present_ms);
+   if (frame == RETRO_HW_FRAME_BUFFER_VALID)
+   {
+      const struct retro_hw_upscaler_inputs *in = video_upscaler_take_inputs();
+      unsigned i, want = 0;
+      for (i = 0; i < 16; i++)
+         if (hwupsc_images[i].image == hwring_installed)
+            want = hwupsc_images[i].serial;
+      /* (a frame pushed before the hook was armed has no inputs to
+       * take, rightly) */
+      if (want)
+      {
+         hwupsc_drawn++;
+         if (!in)
+            hwupsc_missing++;
+         else if ((unsigned)in->jitter_x != want)
+            hwupsc_wrong++;
+      }
+   }
+   hwring_installed = 0;
+   return hwring_inner->frame(data, frame, dims, frame_count,
+         pitch, msg, video_info);
+}
+
+static void lane_hw_ring_upscaler(void)
+{
+   dylib_t lib = runloop_state_get_ptr()->lib_handle;
+   void (*ring)(int) = lib
+      ? (void (*)(int))dylib_proc(lib, "harness_core_hw_ring") : NULL;
+   void (*on_clear)(void (*)(uint64_t)) = lib
+      ? (void (*)(void (*)(uint64_t)))dylib_proc(lib,
+            "harness_core_hw_ring_on_clear") : NULL;
+   video_upscaler_backend_t backend;
+   thread_video_t *thr;
+
+   if (!ring || !on_clear)
+   {
+      CHECK(0, "hw ring upscaler: the harness core has no ring mode");
+      return;
+   }
+   set_threaded_via_setting(true);
+   if (menu_is_up())
+      command_event(CMD_EVENT_MENU_TOGGLE, NULL);
+   hwlane_pump(5);
+   expect_wrapper(true, "hw ring upscaler");
+   thr = (thread_video_t*)video_state_get_ptr()->data;
+   if (!thr || !thr->frame.hw_ring)
+   {
+      CHECK(0, "hw ring upscaler: the wrapper has no hardware ring for this driver");
+      set_threaded_via_setting(false);
+      hwlane_pump(5);
+      return;
+   }
+
+   /* (an upscaler session: the interface exists while one is attached) */
+   backend.data    = NULL;
+   backend.optimal = hwupsc_optimal;
+   video_upscaler_attach(&backend);
+   hwupsc_iface = video_upscaler_get_interface();
+   CHECK(hwupsc_iface != NULL, "hw ring upscaler: the upscaler interface is handed out");
+   memset(hwupsc_images, 0, sizeof(hwupsc_images));
+   hwupsc_serial = hwupsc_drawn = hwupsc_wrong = hwupsc_missing = 0;
+
+   hwring_inner        = thr->driver;
+   hwring_driver       = *thr->driver;
+   hwring_driver.frame = hwupsc_frame;
+   hwring_present_ms   = 30;
+   hwring_installed    = 0;
+   set_driver(thr, &hwring_driver);
+   hwring_inner_poke           = thr->poke;
+   hwring_poke                 = *thr->poke;
+   hwring_poke.hw_ring_install = hwring_install;
+   set_poke(thr, &hwring_poke);
+   on_clear(hwupsc_on_clear);
+   ring(3);
+   hwlane_pump(HWRING_SLOW_FRAMES);
+   video_thread_wait_idle();
+   ring(0);
+   on_clear(NULL);
+   set_poke(thr, hwring_inner_poke);
+   set_driver(thr, hwring_inner);
+   video_upscaler_take_inputs();
+   video_upscaler_detach();
+   hwupsc_iface = NULL;
+
+   CHECK(hwupsc_drawn >= HWRING_SLOW_FRAMES / 12,
+         "hw ring upscaler: %u hardware frames drawn behind a slow present:"
+         " the lane proved nothing", hwupsc_drawn);
+   CHECK(hwupsc_missing == 0,
+         "hw ring upscaler: %u of %u hardware frames drawn took no upscaler"
+         " inputs", hwupsc_missing, hwupsc_drawn);
+   CHECK(hwupsc_wrong == 0,
+         "hw ring upscaler: %u of %u hardware frames drawn took another"
+         " frame's upscaler inputs", hwupsc_wrong, hwupsc_drawn);
+   if (!hwupsc_missing && !hwupsc_wrong && hwupsc_drawn >= HWRING_SLOW_FRAMES / 12)
+      fprintf(stderr, "[pass] hw ring upscaler: %u hardware frames each took"
+            " their own upscaler inputs behind a slow present\n", hwupsc_drawn);
+   set_threaded_via_setting(false);
+   hwlane_pump(5);
+}
+#endif
+
 #ifdef HAVE_VULKAN
 /* The Vulkan context the driver is on now; the context driver's data
  * is replaced by a reinit, so it is fetched again after each. */
@@ -8244,6 +11201,7 @@ end:
 }
 #endif
 
+#if defined(HAVE_VULKAN) || (defined(HAVE_OPENGL) && defined(HAVE_GL_TEXTURE_LEND))
 /* Within @tol in each channel */
 static bool planar_close(uint32_t a, uint32_t b, unsigned tol)
 {
@@ -8256,6 +11214,7 @@ static bool planar_close(uint32_t a, uint32_t b, unsigned tol)
    }
    return true;
 }
+#endif
 
 /* Planar surfaces on the real driver, direct and threaded, I420 from
  * the caller's padded planes and NV12 from a slot, at an odd size. A
@@ -8391,7 +11350,7 @@ static void lane_surface_planar(void)
             bool core    = !strcmp(drv, "glcore");
             image_yuv_420_to_rgb32(want, PW, y, PS, u, PS, v, PS, 1,
                   PW, PH, flags | (core ? IMAGE_YUV_FLAG_RGBA : 0));
-            CHECK(lend_gl_readback(drv, s->handle, false, got),
+            CHECK(lend_gl_readback(drv, s->handle, false, PW, PH, got),
                   "surface planar lane: GL readback failed");
             for (i = 0; i < PW * PH && bad == PW * PH; i++)
                if (!planar_close(got[i], want[i], 2))
@@ -8446,9 +11405,11 @@ static void lane_surface_planar(void)
 /* ------------------------------------------------------------------ */
 
 #ifdef HAVE_VULKAN
+#include "../../../gfx/common/vulkan_video_planes.h"
 typedef struct
 {
    VkImage image;
+   VkImageView views[2];
    VkDeviceMemory mem;
    VkSemaphore wait, done;
    VkSubresourceLayout planes[2];
@@ -8481,24 +11442,29 @@ static VkSemaphore import_timeline(VkDevice dev)
    return sem;
 }
 
-/* A linear NV12 image the host writes; false where the device cannot
+/* A linear NV12/P010 image the host writes; false where the device cannot
  * have one, which is a skip rather than a failure */
 static bool import_producer_new(vulkan_context_t *ctx, unsigned w,
-      unsigned h, import_producer_t *p)
+      unsigned h, unsigned pixfmt, import_producer_t *p)
 {
    VkFormatProperties fp;
+   VkImageFormatProperties props;
+   bool sampled = getenv("HARNESS_SAMPLED_IMPORT") != NULL;
    VkImageCreateInfo info;
    VkMemoryRequirements req;
    VkMemoryAllocateInfo alloc;
    VkImageSubresource sub;
    video_device_info_t dev;
    uint32_t i;
+   VkFormat format = pixfmt == IMAGE_PIXFMT_P010
+      ? VK_FORMAT_G10X6_B10X6R10X6_2PLANE_420_UNORM_3PACK16
+      : VK_FORMAT_G8_B8R8_2PLANE_420_UNORM;
 
    memset(p, 0, sizeof(*p));
    if (!video_driver_get_device(&dev))
       return false;
    vkGetPhysicalDeviceFormatProperties((VkPhysicalDevice)dev.physical_device,
-         VK_FORMAT_G8_B8R8_2PLANE_420_UNORM, &fp);
+         format, &fp);
    if (!(fp.linearTilingFeatures & VK_FORMAT_FEATURE_TRANSFER_SRC_BIT))
       return false;
    p->signal = (PFN_vkSignalSemaphoreKHR)vkGetDeviceProcAddr(ctx->device,
@@ -8510,7 +11476,7 @@ static bool import_producer_new(vulkan_context_t *ctx, unsigned w,
    memset(&info, 0, sizeof(info));
    info.sType         = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
    info.imageType     = VK_IMAGE_TYPE_2D;
-   info.format        = VK_FORMAT_G8_B8R8_2PLANE_420_UNORM;
+   info.format        = format;
    info.extent.width  = w;
    info.extent.height = h;
    info.extent.depth  = 1;
@@ -8519,6 +11485,13 @@ static bool import_producer_new(vulkan_context_t *ctx, unsigned w,
    info.samples       = VK_SAMPLE_COUNT_1_BIT;
    info.tiling        = VK_IMAGE_TILING_LINEAR;
    info.usage         = VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
+   if (sampled)
+   {
+      info.flags = VK_IMAGE_CREATE_MUTABLE_FORMAT_BIT;
+      info.usage |= VK_IMAGE_USAGE_SAMPLED_BIT;
+      if (vkGetPhysicalDeviceImageFormatProperties(ctx->gpu, format, info.imageType,
+               info.tiling, info.usage, info.flags, &props) != VK_SUCCESS) return false;
+   }
    info.sharingMode   = VK_SHARING_MODE_EXCLUSIVE;
    info.initialLayout = VK_IMAGE_LAYOUT_PREINITIALIZED;
    if (vkCreateImage(ctx->device, &info, NULL, &p->image) != VK_SUCCESS)
@@ -8551,6 +11524,7 @@ static bool import_producer_new(vulkan_context_t *ctx, unsigned w,
    vkGetImageSubresourceLayout(ctx->device, p->image, &sub, &p->planes[0]);
    sub.aspectMask = VK_IMAGE_ASPECT_PLANE_1_BIT;
    vkGetImageSubresourceLayout(ctx->device, p->image, &sub, &p->planes[1]);
+   if (sampled && !vulkan_video_plane_views(ctx->device, p->image, pixfmt, p->views)) return false;
    p->wait = import_timeline(ctx->device);
    p->done = import_timeline(ctx->device);
    return p->wait != VK_NULL_HANDLE && p->done != VK_NULL_HANDLE;
@@ -8564,6 +11538,8 @@ static void import_producer_free(vulkan_context_t *ctx, import_producer_t *p)
       vkDestroySemaphore(ctx->device, p->wait, NULL);
    if (p->done)
       vkDestroySemaphore(ctx->device, p->done, NULL);
+   if (p->views[0]) vkDestroyImageView(ctx->device, p->views[0], NULL);
+   if (p->views[1]) vkDestroyImageView(ctx->device, p->views[1], NULL);
    if (p->image)
       vkDestroyImage(ctx->device, p->image, NULL);
    if (p->mem)
@@ -8638,7 +11614,7 @@ static void lane_surface_import(void)
             && dev.api == VIDEO_DEVICE_VULKAN
             && dev.device == (void*)ctx->device,
             "surface import lane: get_device named another device");
-      if (!import_producer_new(ctx, IW, IH, &p))
+      if (!import_producer_new(ctx, IW, IH, IMAGE_PIXFMT_NV12, &p))
       {
          import_producer_free(ctx, &p);
          CHECK(pass == 0, "surface import lane: the producer could not "
@@ -8666,6 +11642,8 @@ static void lane_surface_import(void)
          p.signal(ctx->device, &sig);
          memset(&f, 0, sizeof(f));
          memcpy(&f.image, &p.image, sizeof(p.image));
+         memcpy(&f.plane_views[0], &p.views[0], sizeof(VkImageView));
+         memcpy(&f.plane_views[1], &p.views[1], sizeof(VkImageView));
          memcpy(&f.wait, &p.wait, sizeof(p.wait));
          memcpy(&f.done, &p.done, sizeof(p.done));
          f.wait_value = value;
@@ -8734,6 +11712,188 @@ static void lane_surface_import(void)
    if (failures == had)
       fprintf(stderr, "[pass] surface import lane (%s)\n",
             checked ? "texels match the CPU's" : "not read back");
+#endif
+}
+
+#ifdef HAVE_VULKAN
+static retro_atomic_int_t movie_gpu_abandons;
+static void movie_gpu_abandon(void *owner, uint64_t done, uint64_t value)
+{
+   (void)owner; (void)done; (void)value;
+   retro_atomic_fetch_add_int(&movie_gpu_abandons, 1);
+}
+
+static void movie_gpu_read(uint32_t expected, bool threaded, unsigned index)
+{
+   video_driver_state_t *video_st = video_state_get_ptr();
+   struct video_viewport vp;
+   uint8_t *pixels;
+   unsigned w, h, i, j;
+   bool ok;
+   memset(&vp, 0, sizeof(vp));
+   video_driver_get_viewport_info(&vp);
+   w = VIDEO_SCALE_W(vp.dims); h = VIDEO_SCALE_H(vp.dims);
+   CHECK(w && h && video_st->current_video->read_viewport,
+         "movie GPU: no viewport reader");
+   if (!w || !h || !video_st->current_video->read_viewport) return;
+   pixels = (uint8_t*)malloc((size_t)w * h * 3);
+   CHECK(pixels != NULL, "movie GPU: readback allocation");
+   if (!pixels) return;
+   ok = video_st->current_video->read_viewport(video_st->data, pixels, false);
+   CHECK(ok, "movie GPU: %s frame %u readback", threaded ? "threaded" : "direct", index);
+   for (j = 1; ok && j <= 3; j++)
+      for (i = 1; i <= 3; i++)
+      {
+         size_t off = ((size_t)(j * h / 4) * w + i * w / 4) * 3;
+         uint32_t pixel = pixels[off + 2] | ((uint32_t)pixels[off + 1] << 8)
+            | ((uint32_t)pixels[off] << 16) | UINT32_C(0xff000000);
+         CHECK(planar_close(pixel, expected, 2),
+               "movie GPU: %s frame %u pixel %u,%u got %08x expected %08x",
+               threaded ? "threaded" : "direct", index, i, j,
+               (unsigned)pixel, (unsigned)expected);
+      }
+   free(pixels);
+}
+#endif
+
+static void lane_movie_gpu(void)
+{
+#ifdef HAVE_VULKAN
+   enum { MAX_W = 96, MAX_H = 64, FRAMES = 10 };
+   static uint8_t y[MAX_W * MAX_H], uv[MAX_W * MAX_H / 2];
+   static uint32_t expected[MAX_W * MAX_H];
+   const char *driver = getenv("HARNESS_VIDEO_DRIVER");
+   unsigned had = failures, pass, k, checked = 0;
+   bool menu_was_up = menu_is_up();
+   if (!real_driver() || !driver || strcmp(driver, "vulkan")) return;
+   if (menu_was_up) command_event(CMD_EVENT_MENU_TOGGLE, NULL);
+   for (pass = 0; pass < 2; pass++)
+   {
+      bool threaded = pass != 0;
+      vulkan_context_t *ctx;
+      video_device_info_t dev;
+      set_threaded_via_setting(threaded);
+      run_frames(3);
+      if (threaded) video_thread_wait_idle();
+      ctx = hwcached_context();
+      if (!ctx || !video_driver_get_device(&dev)
+            || !(dev.import_formats & IMAGE_PIXFMT_NV12)
+            || !video_driver_movie_refresh(NULL, NULL))
+      {
+         CHECK(false, "movie GPU: missing movie import capability");
+         break;
+      }
+#ifdef HAVE_GFX_INSTRUMENT
+      gfx_instrument_reset();
+#endif
+      for (k = 0; k < FRAMES; k++)
+      {
+         import_producer_t producer;
+         video_hw_frame_t hw;
+         VkSemaphoreSignalInfoKHR signal;
+         unsigned pixfmt = k & 1 ? IMAGE_PIXFMT_P010 : IMAGE_PIXFMT_NV12;
+         unsigned w = k < 8 ? 64 : MAX_W, h = k < 8 ? 48 : MAX_H;
+         unsigned flags = (k & 2 ? IMAGE_YUV_FLAG_BT709 : 0)
+            | (k & 4 ? IMAGE_YUV_FLAG_FULL_RANGE : 0);
+         unsigned row, col, plane, bps = pixfmt == IMAGE_PIXFMT_P010 ? 2 : 1;
+         unsigned tries;
+         uint64_t done = 0;
+         if (!(dev.import_formats & pixfmt))
+         {
+            fprintf(stderr, "[skip] movie GPU format %u unavailable\n", pixfmt);
+            continue;
+         }
+         if (!import_producer_new(ctx, w, h, pixfmt, &producer))
+         {
+            import_producer_free(ctx, &producer);
+            fprintf(stderr, "[skip] movie GPU format %u has no linear producer\n", pixfmt);
+            continue;
+         }
+         memset(y, 72 + k * 17, w * h);
+         for (col = 0; col < w * h / 2; col += 2)
+         { uv[col] = (uint8_t)(65 + k * 13); uv[col + 1] = (uint8_t)(190 - k * 11); }
+         for (plane = 0; plane < 2; plane++)
+            for (row = 0; row < (plane ? h / 2 : h); row++)
+               for (col = 0; col < w; col++)
+               {
+                  uint8_t *to = producer.map + producer.planes[plane].offset
+                     + row * producer.planes[plane].rowPitch + col * bps;
+                  unsigned sample = plane ? uv[row * w + col] : y[row * w + col];
+                  if (bps == 2)
+                  {
+                     uint16_t packed = (uint16_t)(sample << 8);
+                     memcpy(to, &packed, sizeof(packed));
+                  }
+                  else *to = (uint8_t)sample;
+               }
+         signal.sType = VK_STRUCTURE_TYPE_SEMAPHORE_SIGNAL_INFO_KHR;
+         signal.pNext = NULL; signal.semaphore = producer.wait; signal.value = 1;
+         CHECK(producer.signal(ctx->device, &signal) == VK_SUCCESS, "movie GPU: ready signal");
+         memset(&hw, 0, sizeof(hw));
+         memcpy(&hw.image, &producer.image, sizeof(producer.image));
+         memcpy(&hw.plane_views[0], &producer.views[0], sizeof(VkImageView));
+         memcpy(&hw.plane_views[1], &producer.views[1], sizeof(VkImageView));
+         memcpy(&hw.wait, &producer.wait, sizeof(producer.wait));
+         memcpy(&hw.done, &producer.done, sizeof(producer.done));
+         hw.wait_value = hw.done_value = 1;
+         hw.width = w; hw.height = h; hw.pixfmt = pixfmt;
+         hw.yuv = flags; hw.layout = VK_IMAGE_LAYOUT_PREINITIALIZED;
+         hw.abandon = movie_gpu_abandon;
+         retro_atomic_store_relaxed_int(&movie_gpu_abandons, 0);
+         CHECK(video_driver_movie_refresh(NULL, &hw), "movie GPU: frame not accepted");
+         video_driver_frame(NULL, w, h, 0);
+         if (threaded) video_thread_wait_idle();
+         for (tries = 0; tries < 2000 && !retro_atomic_load_acquire_int(&movie_gpu_abandons); tries++)
+         {
+            producer.value(ctx->device, producer.done, &done);
+            if (done >= 1) break;
+            retro_sleep(1);
+         }
+         CHECK(done >= 1, "movie GPU: no GPU done signal (%s %u)", threaded ? "threaded" : "direct", k);
+         image_yuv_420_to_rgb32(expected, w, y, w, uv, w, uv + 1, w, 2,
+               w, h, flags | IMAGE_YUV_FLAG_RGBA);
+         movie_gpu_read(expected[0], threaded, k);
+         /* A second screenshot redraws the cached hardware sentinel. */
+         movie_gpu_read(expected[0], threaded, k);
+         checked++;
+         import_producer_free(ctx, &producer);
+      }
+#ifdef HAVE_GFX_INSTRUMENT
+      CHECK(gfx_instrument_get(GFX_INSTR_FRAME_COPY_HOST) == 0,
+            "movie GPU: CPU frame copies during GPU playback");
+#endif
+      /* A real software frame must clear the imported movie source. */
+      {
+         static uint32_t software32[MAX_W * MAX_H];
+         static uint16_t software16[MAX_W * MAX_H];
+         enum retro_pixel_format format = video_state_get_ptr()->pix_fmt;
+         unsigned i;
+         const void *pixels;
+         unsigned pitch;
+         for (i = 0; i < MAX_W * MAX_H; i++)
+         {
+            software32[i] = format == RETRO_PIXEL_FORMAT_XRGB2101010
+               ? UINT32_C(0x3ff00000) : UINT32_C(0x00ff0000);
+            software16[i] = format == RETRO_PIXEL_FORMAT_0RGB1555 ? 0x7c00 : 0xf800;
+         }
+         pixels = (format == RETRO_PIXEL_FORMAT_RGB565 || format == RETRO_PIXEL_FORMAT_0RGB1555)
+            ? (const void*)software16 : (const void*)software32;
+         pitch = pixels == software16 ? MAX_W * 2 : MAX_W * 4;
+         video_driver_frame(pixels, MAX_W, MAX_H, pitch);
+         if (threaded) video_thread_wait_idle();
+         movie_gpu_read(UINT32_C(0xff0000ff), threaded, FRAMES);
+         movie_gpu_read(UINT32_C(0xff0000ff), threaded, FRAMES);
+      }
+      video_driver_movie_clear();
+      video_driver_frame(NULL, 64, 48, 0);
+      if (threaded) video_thread_wait_idle();
+   }
+   set_threaded_via_setting(false);
+   run_frames(3);
+   if (menu_was_up && !menu_is_up()) command_event(CMD_EVENT_MENU_TOGGLE, NULL);
+   if (failures == had && checked)
+      fprintf(stderr, "[pass] movie GPU presentation: %u direct/threaded cases, resize, cached redraw and software transition\n", checked);
+   else if (!checked) fprintf(stderr, "[skip] movie GPU presentation: no compatible producer\n");
 #endif
 }
 
@@ -8955,6 +12115,177 @@ static void lane_display_past_top(void)
             unthreaded, threaded);
 }
 
+#define MOVIE_RING_FRAMES 132
+static retro_atomic_int_t movie_ring_released[MOVIE_RING_FRAMES + 1];
+static retro_atomic_int_t movie_ring_errors;
+static retro_atomic_int_t movie_ring_geometry_errors;
+static video_driver_t movie_ring_driver;
+static video_poke_interface_t movie_ring_poke;
+static const video_driver_t *movie_ring_inner;
+static unsigned movie_ring_active;
+static void movie_ring_release(void *owner, uint64_t done, uint64_t value)
+{
+   (void)owner;
+   if (done != 88 || value > MOVIE_RING_FRAMES || !value
+         || !retro_atomic_cas_int(&movie_ring_released[value], 0, 2))
+      retro_atomic_fetch_add_int(&movie_ring_errors, 1);
+}
+static bool movie_ring_device(void *data, video_device_info_t *info)
+{
+   (void)data;
+   memset(info, 0, sizeof(*info));
+   info->import_formats = IMAGE_PIXFMT_NV12 | IMAGE_PIXFMT_P010;
+   return true;
+}
+static enum video_texture_update movie_ring_import(void *data,
+      const video_frame_import_t *frame)
+{
+   unsigned id;
+   (void)data;
+   if (!frame) { movie_ring_active = 0; return VIDEO_TEXTURE_UPDATE_DONE; }
+   id = (unsigned)frame->image;
+   if (sthread_get_thread_id(((thread_video_t*)video_state_get_ptr()->data)->thread)
+            != sthread_get_current_thread_id()
+         || frame->dims != VIDEO_SCALE_PACK(1920, 1080)
+         || frame->wait_value != id || frame->done_value != id
+         || frame->plane_views[0] != id + 1000 || frame->plane_views[1] != id + 2000
+         || frame->array_slice != 7 || frame->crop_x != 2 || frame->crop_y != 4
+         || frame->output_pixfmt != 0
+         || frame->color.primaries != 9 || frame->color.matrix != 9
+         || frame->color.transfer != (id % 2 ? 16 : 18)
+         || frame->color.range != 1 || frame->color.max_cll != id + 100
+         || frame->color.max_fall != id + 50
+         || frame->color.mastering.present != VIDEO_MASTERING_DISPLAY_COMPLETE
+         || frame->color.mastering.chromaticity[0] != 25000
+         || frame->color.mastering.luminance_max != 10240000
+         || frame->wait != 34 || frame->done != 88 || !id || id > MOVIE_RING_FRAMES)
+   {
+      retro_atomic_fetch_add_int(&movie_ring_errors, 1);
+      return VIDEO_TEXTURE_UPDATE_REFUSED;
+   }
+   if (!(id % 3)) return VIDEO_TEXTURE_UPDATE_DROPPED;
+   if (!(id % 5)) return VIDEO_TEXTURE_UPDATE_REFUSED;
+   if (!retro_atomic_cas_int(&movie_ring_released[id], 0, 1))
+      retro_atomic_fetch_add_int(&movie_ring_errors, 1);
+   movie_ring_active = id;
+   return VIDEO_TEXTURE_UPDATE_DONE;
+}
+static bool movie_ring_frame(void *data, const void *frame, unsigned dims,
+      uint64_t count, unsigned pitch, const char *msg, video_frame_info_t *info)
+{
+   if (movie_ring_active && (frame || dims != VIDEO_SCALE_PACK(1920, 1080)))
+      retro_atomic_fetch_add_int(&movie_ring_geometry_errors, 1);
+   return movie_ring_inner->frame(data, NULL, dims, count, pitch, msg, info);
+}
+static uintptr_t movie_ring_replay(void *data)
+{
+   (void)data;
+   video_driver_cached_frame();
+   return 0;
+}
+static void lane_movie_ring(void)
+{
+   unsigned had = failures;
+   unsigned i;
+   video_hw_frame_t hw;
+   thread_video_t *thr;
+   const video_poke_interface_t *inner_poke;
+   bool menu_was_up;
+   set_threaded_via_setting(true);
+   run_frames(3);
+   menu_was_up = menu_is_up();
+   if (menu_was_up) command_event(CMD_EVENT_MENU_TOGGLE, NULL);
+   run_frames(2);
+   video_thread_wait_idle();
+   thr = (thread_video_t*)video_state_get_ptr()->data;
+   if (!thr) return;
+   movie_ring_inner = thr->driver; inner_poke = thr->poke;
+   movie_ring_driver = *thr->driver; movie_ring_driver.frame = movie_ring_frame;
+   if (inner_poke) movie_ring_poke = *inner_poke;
+   else memset(&movie_ring_poke, 0, sizeof(movie_ring_poke));
+   movie_ring_poke.get_device = movie_ring_device;
+   movie_ring_poke.import_movie_frame = movie_ring_import;
+   set_driver(thr, &movie_ring_driver); set_poke(thr, &movie_ring_poke);
+   CHECK(video_driver_movie_refresh(NULL, NULL), "movie ring: capability missing");
+   memset(&hw, 0, sizeof(hw));
+   hw.width = 1920; hw.height = 1080; hw.pixfmt = IMAGE_PIXFMT_P010;
+   hw.wait = 34; hw.done = 88; hw.abandon = movie_ring_release;
+   hw.array_slice = 7; hw.crop_x = 2; hw.crop_y = 4;
+   hw.color.primaries = hw.color.matrix = 9; hw.color.range = 1;
+   hw.color.mastering.present = VIDEO_MASTERING_DISPLAY_COMPLETE;
+   hw.color.mastering.chromaticity[0] = 25000;
+   hw.color.mastering.luminance_max = 10240000;
+   for (i = 1; i <= MOVIE_RING_FRAMES - 6; i++)
+   {
+      hw.image = i; hw.wait_value = hw.done_value = i;
+      hw.color.transfer = i % 2 ? 16 : 18;
+      hw.color.max_cll = i + 100; hw.color.max_fall = i + 50;
+      hw.plane_views[0] = i + 1000; hw.plane_views[1] = i + 2000;
+      if (!video_driver_movie_refresh(NULL, NULL))
+         video_driver_movie_clear();
+      CHECK(video_driver_movie_refresh(NULL, &hw), "movie ring: staging refused %u", i);
+      if (thr->movie_next.pending)
+         CHECK(!video_driver_movie_refresh(NULL, &hw), "movie ring: staging overwrite %u", i);
+      else
+         CHECK(!video_driver_movie_refresh(NULL, NULL), "movie ring: refusal not latched");
+      video_driver_frame(NULL, 1920, 1080, 0);
+   }
+   video_thread_wait_idle();
+   video_driver_movie_clear();
+   for (i = MOVIE_RING_FRAMES - 5; i <= MOVIE_RING_FRAMES - 2; i++)
+   {
+      hw.image = hw.wait_value = hw.done_value = i;
+      hw.color.transfer = i % 2 ? 16 : 18;
+      hw.color.max_cll = i + 100; hw.color.max_fall = i + 50;
+      hw.plane_views[0] = i + 1000; hw.plane_views[1] = i + 2000;
+      CHECK(video_driver_movie_refresh(NULL, &hw), "movie ring: controlled stage %u", i);
+      video_driver_frame(NULL, 1920, 1080, 0);
+      video_thread_wait_idle();
+      CHECK(video_driver_movie_refresh(NULL, NULL) == (i % 3 == 0 || i % 5 != 0),
+            "movie ring: busy/refused readiness %u", i);
+   }
+   video_thread_run_blocking(movie_ring_replay, NULL);
+   /* The accepted image before the busy/refused imports remains active.
+    * A NULL repeat carries no CPU pixels and must retain movie geometry. */
+   video_driver_frame(NULL, 1920, 1080, 0);
+   video_thread_wait_idle();
+   video_driver_movie_clear();
+   CHECK(video_driver_movie_refresh(NULL, NULL), "movie ring: clear did not restore readiness");
+   /* Clear releases a staged lease before its frame is published. */
+   hw.image = hw.wait_value = hw.done_value = MOVIE_RING_FRAMES - 1;
+   hw.color.transfer = hw.image % 2 ? 16 : 18;
+   hw.color.max_cll = (unsigned)hw.image + 100;
+   hw.color.max_fall = (unsigned)hw.image + 50;
+   hw.plane_views[0] = hw.image + 1000; hw.plane_views[1] = hw.image + 2000;
+   CHECK(video_driver_movie_refresh(NULL, &hw), "movie ring: stage before clear");
+   video_driver_movie_clear();
+   video_driver_frame(NULL, 1920, 1080, 0);
+   video_thread_wait_idle();
+   /* Teardown releases a lease that never reached the frame ring. */
+   hw.image = hw.wait_value = hw.done_value = MOVIE_RING_FRAMES;
+   hw.color.transfer = hw.image % 2 ? 16 : 18;
+   hw.color.max_cll = (unsigned)hw.image + 100;
+   hw.color.max_fall = (unsigned)hw.image + 50;
+   hw.plane_views[0] = hw.image + 1000; hw.plane_views[1] = hw.image + 2000;
+   CHECK(video_driver_movie_refresh(NULL, &hw), "movie ring: stage before teardown");
+   set_driver(thr, movie_ring_inner); set_poke(thr, inner_poke);
+   set_threaded_via_setting(false);
+   for (i = 1; i <= MOVIE_RING_FRAMES; i++)
+      CHECK(retro_atomic_load_acquire_int(&movie_ring_released[i]) != 0,
+            "movie ring: lease %u not released", i);
+   CHECK(!retro_atomic_load_acquire_int(&movie_ring_errors), "movie ring: ordering or duplicate release");
+   CHECK(!retro_atomic_load_acquire_int(&movie_ring_geometry_errors),
+         "movie ring: duplicate changed image or geometry");
+   run_frames(2);
+   if (menu_was_up && !menu_is_up()) command_event(CMD_EVENT_MENU_TOGGLE, NULL);
+   if (failures == had) fprintf(stderr, "[pass] threaded movie ring: metadata, backpressure, refusal recovery, clear and teardown\n");
+}
+
+#include "hdr_surface.h"
+#include "still_surface.h"
+#include "surface_pitch.h"
+#include "preview_surface.h"
+
 int main(int argc, char *argv[])
 {
    char cfg_path[512];
@@ -8993,10 +12324,20 @@ int main(int argc, char *argv[])
       fprintf(cfg, "video_driver = \"%s\"\n",
             getenv("HARNESS_VIDEO_DRIVER")
             ? getenv("HARNESS_VIDEO_DRIVER") : "null");
+      if (getenv("HARNESS_HDR_MODE"))
+      {
+         fprintf(cfg, "video_hdr_enable = \"true\"\nvideo_hdr_mode = \"%s\"\n",
+               getenv("HARNESS_HDR_MODE"));
+         fprintf(cfg, "video_hdr_menu_nits = \"203\"\nvideo_hdr_expand_gamut = \"0\"\n");
+      }
       fprintf(cfg, "audio_driver = \"null\"\n");
       fprintf(cfg, "input_driver = \"null\"\n");
       fprintf(cfg, "input_joypad_driver = \"null\"\n");
-      fprintf(cfg, "menu_driver = \"rgui\"\n");
+      fprintf(cfg, "menu_driver = \"%s\"\n",
+            (getenv("HARNESS_STILL_ONLY") || getenv("HARNESS_PREVIEW_FILE")) ? "ozone" : "rgui");
+      if (getenv("HARNESS_MENU_UPSCALE"))
+         fprintf(cfg, "rgui_internal_upscale_level = \"%s\"\n",
+               getenv("HARNESS_MENU_UPSCALE"));
       fprintf(cfg, "video_threaded = \"false\"\n");
       fprintf(cfg, "video_vsync = \"false\"\n");
       fprintf(cfg, "menu_pause_libretro = \"true\"\n");
@@ -9076,6 +12417,14 @@ int main(int argc, char *argv[])
       }
    }
 
+   if (getenv("HARNESS_MENU_UPSCALE"))
+   {
+      unsigned requested = (unsigned)strtoul(getenv("HARNESS_MENU_UPSCALE"), NULL, 10);
+      CHECK(config_get_ptr()->uints.menu_rgui_internal_upscale_level == requested,
+            "requested RGUI upscale %u, initialized %u", requested,
+            config_get_ptr()->uints.menu_rgui_internal_upscale_level);
+   }
+
    /* The core starts without content and the menu closed. Run it,
     * then open the menu, which is the state the reported sequence
     * starts from. */
@@ -9088,6 +12437,49 @@ int main(int argc, char *argv[])
    CHECK(menu_is_up(), "menu did not open");
    expect_wrapper(false, "boot");
 
+   if (getenv("HARNESS_PREVIEW_FILE"))
+   {
+      lane_preview_surface(getenv("HARNESS_PREVIEW_FILE"));
+      goto shutdown;
+   }
+
+   if (getenv("HARNESS_SURFACE_4K_ONLY"))
+   {
+      lane_surface_4k();
+      goto shutdown;
+   }
+
+   if (getenv("HARNESS_SURFACE_PITCH_ONLY"))
+   {
+      lane_surface_pitch();
+      goto shutdown;
+   }
+
+   if (getenv("HARNESS_STILL_ONLY"))
+   {
+      lane_still_surface();
+      goto shutdown;
+   }
+
+   if (getenv("HARNESS_HDR_MODE"))
+   {
+      lane_hdr_surface();
+      goto shutdown;
+   }
+
+   if (getenv("HARNESS_MOVIE_GPU_ONLY"))
+   {
+      lane_surface_import();
+      lane_movie_gpu();
+      goto shutdown;
+   }
+
+   if (getenv("HARNESS_MOVIE_ONLY"))
+   {
+      lane_movie_ring();
+      goto shutdown;
+   }
+
    /* The harness core as a hardware core: its own lanes, alone. */
    if (getenv("HARNESS_CORE_HW_VULKAN"))
    {
@@ -9096,22 +12488,43 @@ int main(int argc, char *argv[])
       else
       {
          lane_hw_ring_sync();
+#ifdef HAVE_TEMPORAL_UPSCALER
+         lane_hw_ring_upscaler();
+#endif
          lane_hw_image_lifetime(core_path);
       }
       goto shutdown;
    }
 
+   if (getenv("HARNESS_RECORD_GPU_LEASE"))
+   {
+      record_gpu_stop_in_flight();
+      goto shutdown;
+   }
    lane_line_separation();
    lane_vp_params_publish();
    lane_toggle_cycle(cycles);
    lane_reinit_under_wrapper(cycles / 2 + 1);
+   lane_stub_frame_switch();
+#ifdef HAVE_GFX_WIDGETS
+   lane_threaded_off_in_flight();
+#endif
    lane_toggle_in_game(cycles);
+   lane_driver_pacing();
    lane_swap_count();
+   lane_replay_swap_count();
    lane_stats_snapshot();
    lane_stat_text_bounds();
    lane_viewport_publish();
+   if (!real_driver())
+      lane_record_reader();
+   record_gpu_stop_in_flight();
+   if (!real_driver())
+      lane_pixel_format();
    lane_context_api_behind_wrapper();
    lane_headset_calls();
+   lane_headset_target_rate();
+   lane_shader_params();
    lane_async_texture_load();
    if (!real_driver())
       lane_present_repeat();
@@ -9120,6 +12533,7 @@ int main(int argc, char *argv[])
    lane_reentrant_from_frame();
    lane_window_thread_present();
    lane_async_done_main_thread();
+   lane_async_compressed_load();
    if (!real_driver())
       lane_display_phase();
    lane_command_runs_once();
@@ -9160,11 +12574,17 @@ int main(int argc, char *argv[])
    lane_surface_update();
    lane_surface_external();
    lane_surface_lend();
+   lane_surface_pitch();
    lane_surface_planar();
    lane_surface_import();
+   lane_movie_gpu();
 #if defined(HAVE_OPENGL) && defined(HAVE_GL_TEXTURE_LEND)
    if (real_driver() && !strcmp(getenv("HARNESS_VIDEO_DRIVER"), "gl"))
       lane_gl2_linear();
+#endif
+#if defined(HAVE_OPENGL) && defined(HAVE_GLSL)
+   if (real_driver() && !strcmp(getenv("HARNESS_VIDEO_DRIVER"), "gl"))
+      lane_gl2_views_from_init();
 #endif
    if (real_driver())
       lane_surface_4k();
@@ -9202,8 +12622,11 @@ int main(int argc, char *argv[])
       lane_frame_path_heap();
       lane_resize_under_wrapper();
       lane_dupe_under_wrapper();
+      lane_view_count_shrink();
+      lane_movie_ring();
       lane_suppress_screensaver();
       lane_window_answers();
+      lane_presentable_refresh();
       lane_size_pair_round_trip();
    }
    else

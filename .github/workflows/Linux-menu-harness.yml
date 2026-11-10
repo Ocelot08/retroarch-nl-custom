@@ -26,6 +26,7 @@ on:
       - 'samples/menu/nav_repeat_stall/**'
       - 'samples/menu/mouse_click/**'
       - 'samples/menu/menu_icon_ownership/**'
+      - 'samples/menu/ozone_sublabel_scroll/**'
       - 'gfx/gfx_display.c'
       - 'runloop.c'
       - 'samples/menu/network_settings/**'
@@ -34,6 +35,7 @@ on:
       - 'samples/menu/resolution_reset/**'
       - 'samples/menu/setting_command/**'
       - 'samples/menu/core_info_page/**'
+      - 'samples/menu/load_content_filter/**'
       - 'samples/settings/packed_rows/**'
       - 'setting_list.h'
       - 'gfx/video_defines.h'
@@ -49,6 +51,7 @@ on:
       - 'samples/menu/nav_repeat_stall/**'
       - 'samples/menu/mouse_click/**'
       - 'samples/menu/menu_icon_ownership/**'
+      - 'samples/menu/ozone_sublabel_scroll/**'
       - 'gfx/gfx_display.c'
       - 'runloop.c'
       - 'samples/menu/network_settings/**'
@@ -57,6 +60,7 @@ on:
       - 'samples/menu/resolution_reset/**'
       - 'samples/menu/setting_command/**'
       - 'samples/menu/core_info_page/**'
+      - 'samples/menu/load_content_filter/**'
       - 'samples/settings/packed_rows/**'
       - 'setting_list.h'
       - 'gfx/video_defines.h'
@@ -71,67 +75,35 @@ jobs:
   menu-harness:
     name: Build and run the menu navigation harness
     runs-on: ubuntu-latest
+    env:
+      APT_PKGS: build-essential zlib1g-dev ccache
     timeout-minutes: 25
 
     steps:
-      - name: Install dependencies
-        timeout-minutes: 20
-        run: |
-          pkgs="build-essential zlib1g-dev"
-          if dpkg -s $pkgs >/dev/null 2>&1; then
-            echo "All packages already present on runner image; skipping apt."
-            exit 0
-          fi
-          for i in 1 2 3; do
-            sudo timeout 90 apt-get update -y \
-              -o Acquire::Retries=3 -o Acquire::http::Timeout=30 && break
-            echo "apt-get update failed (attempt $i); retrying in 10s"
-            sleep 10
-          done
-          # Fetch first, under a bound: a download is safe to stop and
-          # resumes, an install is not. A mirror that stalls is left for
-          # the main archive on the next attempt.
-          for i in 1 2 3; do
-            sudo timeout 240 apt-get install -y --download-only \
-              -o Acquire::Retries=3 -o Acquire::http::Timeout=30 \
-              $pkgs && break
-            [ $i = 3 ] && exit 1
-            echo "package download failed or stalled (attempt $i); retrying from archive.ubuntu.com"
-            if [ ! -d /etc/apt/ra-orig ]; then
-              sudo mkdir /etc/apt/ra-orig
-              sudo cp -a /etc/apt/sources.list.d /etc/apt/ra-orig/
-              [ ! -f /etc/apt/sources.list ] || sudo cp -a /etc/apt/sources.list /etc/apt/ra-orig/
-            fi
-            for f in /etc/apt/sources.list /etc/apt/sources.list.d/*; do
-              [ -f "$f" ] || continue
-              sudo sed -i -e 's#mirror+file:/etc/apt/apt-mirrors.txt#http://archive.ubuntu.com/ubuntu/#g' \
-                -e 's#http://azure\.archive\.ubuntu\.com/ubuntu#http://archive.ubuntu.com/ubuntu#g' "$f"
-            done
-            # A refresh cut short or refused leaves apt no package lists: it
-            # is retried, without translations or command-not-found data, and
-            # the mirror is put back when the archive will not answer either.
-            upd="-o Acquire::Retries=3 -o Acquire::http::Timeout=30
-              -o Acquire::Languages=none
-              -o Acquire::IndexTargets::deb::CNF::DefaultEnabled=false
-              -o APT::Update::Error-Mode=any"
-            ok=0
-            for j in 1 2; do
-              sudo timeout 120 apt-get update -y $upd && { ok=1; break; }
-            done
-            if [ $ok = 0 ]; then
-              sudo rm -rf /etc/apt/sources.list.d
-              sudo cp -a /etc/apt/ra-orig/sources.list.d /etc/apt/
-              [ ! -f /etc/apt/ra-orig/sources.list ] || sudo cp -a /etc/apt/ra-orig/sources.list /etc/apt/
-              sudo rm -rf /etc/apt/ra-orig
-              sudo timeout 120 apt-get update -y $upd || true
-            fi
-          done
-          sudo apt-get install -y \
-            -o Acquire::Retries=3 -o Acquire::http::Timeout=30 \
-            $pkgs
-
       - name: Checkout
         uses: actions/checkout@v5
+
+      - name: Apt cache key
+        id: apt
+        run: sh .github/workflows/scripts/apt-cache-key.sh "$APT_PKGS"
+
+      - name: Restore apt cache
+        uses: actions/cache/restore@v4
+        with:
+          path: ~/.apt-cache
+          key: ${{ steps.apt.outputs.key }}
+          restore-keys: ${{ steps.apt.outputs.prefix }}
+
+      - name: Install dependencies
+        timeout-minutes: 20
+        run: sh .github/workflows/scripts/apt-install.sh $APT_PKGS
+
+      - name: Save apt cache
+        if: env.APT_CACHE_SAVE == '1'
+        uses: actions/cache/save@v4
+        with:
+          path: ~/.apt-cache
+          key: ${{ steps.apt.outputs.key }}
 
       - name: Link with lld
         run: sh .github/workflows/scripts/use-lld.sh
@@ -147,7 +119,6 @@ jobs:
       - name: Enable ccache
         run: |
           set -eu
-          command -v ccache >/dev/null 2>&1 || sudo apt-get install -y -qq ccache
           export CCACHE_DIR="$HOME/.ccache"
           echo "CCACHE_DIR=$CCACHE_DIR" >> "$GITHUB_ENV"
           echo "/usr/lib/ccache" >> "$GITHUB_PATH"
@@ -266,6 +237,7 @@ jobs:
           # threaded video. MaterialUI's playlist icon array could be
           # rebuilt under a decode still in flight. The contentless
           # cores list's icons, fallback and per core, go at deinit.
+          # RGUI's framebuffer must reach the video driver a reinit made.
           # Shares the non-Qt build made above; one binary, one run per
           # lane.
           samples/menu/menu_icon_ownership/build.sh
@@ -273,7 +245,22 @@ jobs:
           ./samples/menu/menu_icon_ownership/menu_icon_ownership_test xmb
           ./samples/menu/menu_icon_ownership/menu_icon_ownership_test materialui
           ./samples/menu/menu_icon_ownership/menu_icon_ownership_test contentless
+          ./samples/menu/menu_icon_ownership/menu_icon_ownership_test rgui
           make -C samples/menu/menu_icon_ownership clean
+
+      - name: Build and run ozone_sublabel_scroll_test
+        shell: bash
+        run: |
+          set -eu
+          # Ozone with sublabels on the selected entry only: a selection
+          # change asking for no animation moves the list at once, an
+          # animated one tweens and fades the cursor once, the list
+          # behind the sidebar follows a new selection, and a selection
+          # past the end is not taken for a new one on every compute.
+          # Shares the non-Qt build made above.
+          samples/menu/ozone_sublabel_scroll/build.sh
+          ./samples/menu/ozone_sublabel_scroll/ozone_sublabel_scroll_test
+          make -C samples/menu/ozone_sublabel_scroll clean
 
       - name: Build and run menu_mouse_click_test
         shell: bash
@@ -370,6 +357,12 @@ jobs:
           # build has no Vulkan, so the Vulkan entries report SKIP.
           tools/lock_acquire_budget.sh
 
+      - name: Wait budget
+        run: |
+          # Main-thread waits on the video thread, per file, against
+          # tools/wait_budget.ref: a count that only comes down.
+          tools/wait_budget.sh
+
       - name: Build and run threaded_video_test
         shell: bash
         run: |
@@ -415,6 +408,10 @@ jobs:
           # all when the frames do not change.
           samples/gfx/video_filter_menu/build.sh
           ./samples/gfx/video_filter_menu/video_filter_menu_test
+          # Under the threaded wrapper too: a filter swapped without
+          # waiting for the video thread, the old one freed behind the
+          # frames staged with it
+          HARNESS_THREADED=1 ./samples/gfx/video_filter_menu/video_filter_menu_test
           make -C samples/gfx/video_filter_menu clean
 
       - name: Build and run core_info_page_test
@@ -428,6 +425,19 @@ jobs:
           samples/menu/core_info_page/build.sh
           ./samples/menu/core_info_page/core_info_page_test
           make -C samples/menu/core_info_page clean
+
+      - name: Build and run load_content_filter_test
+        shell: bash
+        run: |
+          set -eu
+          # Load Content with no core lists every file an installed core
+          # or a built-in player opens, however long the installed cores'
+          # extensions run together. Content Scan's Content Location
+          # lists files and folders, and Import Content offers Content
+          # Scan alone.
+          samples/menu/load_content_filter/build.sh
+          ./samples/menu/load_content_filter/load_content_filter_test
+          make -C samples/menu/load_content_filter clean
 
       - name: Build and run explore_build_test
         shell: bash
@@ -446,6 +456,13 @@ jobs:
           set -eu
           make -C samples/network/command_frames check
           make -C samples/network/command_frames clean
+
+      - name: Structured HDR queries through the real frontend
+        shell: bash
+        run: |
+          set -eu
+          make -j$(nproc)
+          python3 samples/gfx/hdr_metadata/live.py --retroarch ./retroarch --log-dir /tmp/hdr-metadata-live
 
       - name: ccache statistics
         if: ${{ !cancelled() }}

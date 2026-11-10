@@ -15,10 +15,51 @@
 
 #include <string.h>
 #include <limits.h>
+#include <float.h>
 #include <math.h>
 
 #include "video_views.h"
 #include "video_defines.h"
+
+void video_views_xr_reset(video_screen_xr_t *screens, unsigned count)
+{
+   unsigned i;
+   if (!screens)
+      return;
+   if (count > RETRO_VIDEO_VIEWS_MAX)
+      count = RETRO_VIDEO_VIEWS_MAX;
+   for (i = 0; i < count; i++)
+   {
+      memset(&screens[i], 0, sizeof(screens[i]));
+      screens[i].scale   = 1.0f;
+      screens[i].visible = true;
+   }
+}
+
+static float video_views_xr_value(float value, float low, float high,
+      float fallback)
+{
+   if (!(value >= -FLT_MAX && value <= FLT_MAX))
+      return fallback;
+   if (value < low)
+      return low;
+   if (value > high)
+      return high;
+   return value;
+}
+
+void video_views_xr_normalize(video_screen_xr_t *screen)
+{
+   if (!screen)
+      return;
+   screen->x = video_views_xr_value(screen->x, -10.0f, 10.0f, 0.0f);
+   screen->y = video_views_xr_value(screen->y, -10.0f, 10.0f, 0.0f);
+   screen->z = video_views_xr_value(screen->z, -10.0f, 10.0f, 0.0f);
+   screen->yaw = video_views_xr_value(screen->yaw, -180.0f, 180.0f, 0.0f);
+   screen->pitch = video_views_xr_value(screen->pitch, -180.0f, 180.0f, 0.0f);
+   screen->roll = video_views_xr_value(screen->roll, -180.0f, 180.0f, 0.0f);
+   screen->scale = video_views_xr_value(screen->scale, 0.1f, 10.0f, 1.0f);
+}
 
 bool video_views_validate(const struct retro_video_view *views,
       unsigned num_views, video_views_map_t *out)
@@ -40,9 +81,12 @@ bool video_views_validate(const struct retro_video_view *views,
    if (!views || num_views > RETRO_VIDEO_VIEWS_MAX)
       return false;
 
-   memset(count_none,  0, sizeof(count_none));
-   memset(count_left,  0, sizeof(count_left));
-   memset(count_right, 0, sizeof(count_right));
+   for (i = 0; i < RETRO_VIDEO_VIEWS_MAX; i++)
+   {
+      count_none [i] = 0;
+      count_left [i] = 0;
+      count_right[i] = 0;
+   }
 
    for (i = 0; i < num_views; i++)
    {
@@ -239,7 +283,8 @@ static int video_views_round(double v)
 
 /* Screen rectangles within an area of size cdims, in screen order. */
 static void video_views_fit(const video_views_layout_params_t *p,
-      unsigned cdims, video_views_rect_t *fit)
+      unsigned cdims, unsigned count, unsigned first,
+      video_views_rect_t *fit)
 {
    unsigned s;
    double disp_w[RETRO_VIDEO_VIEWS_MAX];
@@ -250,27 +295,30 @@ static void video_views_fit(const video_views_layout_params_t *p,
    unsigned ch   = VIDEO_SCALE_H(cdims);
    bool vertical = (p->screen_layout != VIDEO_SCREEN_LAYOUT_HORIZONTAL);
 
-   if (map->num_screens == 1 && p->stretch && !p->scale_integer)
+   if (count == 1 && p->stretch && !p->scale_integer)
    {
-      fit[0].pos  = VIDEO_POS_PACK(0, 0);
-      fit[0].dims = cdims;
+      fit[first].pos  = VIDEO_POS_PACK(0, 0);
+      fit[first].dims = cdims;
       return;
    }
 
-   if (map->num_screens == 1 && p->custom_vp && cdims == p->dims)
+   if (count == 1 && p->custom_vp && cdims == p->dims)
    {
-      fit[0] = *p->custom_vp;
+      fit[first] = *p->custom_vp;
       return;
    }
 
    for (s = 0; s < map->num_screens; s++)
    {
-      const struct retro_video_view *v = &map->views[
-         video_views_find(map, s, RETRO_VIDEO_VIEW_EYE_NONE)];
-      double w      = v->width;
-      double h      = v->height;
-      double aspect = video_views_aspect(v);
-      if (map->num_screens == 1 && p->single_aspect > 0.0f)
+      const struct retro_video_view *v;
+      double w, h, aspect;
+      if (p->exclude_screens & (1u << s))
+         continue;
+      v      = &map->views[video_views_find(map, s, RETRO_VIDEO_VIEW_EYE_NONE)];
+      w      = v->width;
+      h      = v->height;
+      aspect = video_views_aspect(v);
+      if (count == 1 && p->single_aspect > 0.0f)
          aspect = p->single_aspect;
       if (p->rotation & 1)
       {
@@ -305,8 +353,11 @@ static void video_views_fit(const video_views_layout_params_t *p,
    {
       double x, y;
       int x0, y0;
-      double w = disp_w[s] * scale;
-      double h = disp_h[s] * scale;
+      double w, h;
+      if (p->exclude_screens & (1u << s))
+         continue;
+      w = disp_w[s] * scale;
+      h = disp_h[s] * scale;
       if (vertical)
       {
          x    = ox + (tw - disp_w[s]) * scale / 2.0;
@@ -348,7 +399,7 @@ static void video_views_place(const video_views_rect_t *r,
 void video_views_layout(const video_views_layout_params_t *p,
       video_views_layout_t *out)
 {
-   unsigned a, s;
+   unsigned a, s, count = 0, first = 0;
    unsigned w, h, cdims;
    video_views_rect_t fit[RETRO_VIDEO_VIEWS_MAX];
    const video_views_map_t *map = p->map;
@@ -357,6 +408,15 @@ void video_views_layout(const video_views_layout_params_t *p,
    w = VIDEO_SCALE_W(p->dims);
    h = VIDEO_SCALE_H(p->dims);
    if (!map || !map->num_views || !w || !h)
+      return;
+
+   for (s = 0; s < map->num_screens; s++)
+      if (!(p->exclude_screens & (1u << s)))
+      {
+         first = s;
+         count++;
+      }
+   if (!count)
       return;
 
    out->stereo_mode   = p->stereo_mode;
@@ -399,7 +459,7 @@ void video_views_layout(const video_views_layout_params_t *p,
          break;
    }
 
-   video_views_fit(p, cdims, fit);
+   video_views_fit(p, cdims, count, first, fit);
 
    for (a = 0; a < out->num_areas; a++)
    {
@@ -408,7 +468,10 @@ void video_views_layout(const video_views_layout_params_t *p,
          eye = RETRO_VIDEO_VIEW_EYE_RIGHT;
       for (s = 0; s < map->num_screens; s++)
       {
-         video_views_placement_t *pl = &out->placements[out->num_placements++];
+         video_views_placement_t *pl;
+         if (p->exclude_screens & (1u << s))
+            continue;
+         pl = &out->placements[out->num_placements++];
          pl->view = (unsigned)video_views_find(map, s, eye);
          pl->area = a;
          video_views_place(&fit[s], cdims, &out->areas[a], &pl->dst);

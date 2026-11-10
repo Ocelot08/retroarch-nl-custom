@@ -308,16 +308,9 @@ static bool D3D9V_FN(views_setup)(d3d9_video_t *d3d,
             &d3d->views.canvas);
    per_eye = video_views_ui_per_eye(&video_info->views, layout,
          D3D9V_FN(views_allowed)(d3d));
-   /* No directive inside the macro's arguments: MSVC's preprocessor
-    * takes it as tokens. */
-#ifdef HAVE_GFX_WIDGETS
    ui = VIDEO_VIEWS_UI_WANTED(per_eye, menu, msg,
          video_info->statistics_show,
-         video_info->widgets_active && gfx_widgets_visible(video_info));
-#else
-   ui = VIDEO_VIEWS_UI_WANTED(per_eye, menu, msg,
-         video_info->statistics_show, false);
-#endif
+         video_info->widgets_visible);
    views = video_info->views.num_views
       && D3D9V_FN(views_allowed)(d3d)
       && (!offscreen || *blend)
@@ -343,25 +336,11 @@ static bool D3D9V_FN(views_setup)(d3d9_video_t *d3d,
       d3d->views.preset_seen = true;
       RARCH_LOG(D3D9V_TAG " Views drawn through the preset, each by a "
             "chain of its own.\n");
-      RARCH_LOG(D3D9V_TAG " Views' presets have each view of a software "
-            "frame written straight in.\n");
+      if (!d3d->views.hw_frame)
+         RARCH_LOG(D3D9V_TAG " Views' presets have each view of a "
+               "software frame written straight in.\n");
    }
    return views;
-}
-
-/* The frame's @height rows, @row_bytes each, @pitch apart at @frame,
- * into the top left of @tex */
-static void D3D9V_FN(views_upload)(LPDIRECT3DTEXTURE9 tex,
-      const void *frame, unsigned height, size_t row_bytes, unsigned pitch)
-{
-   D3DLOCKED_RECT lr;
-   unsigned y;
-   if (FAILED(IDirect3DTexture9_LockRect(tex, 0, &lr, NULL, 0)) || !lr.pBits)
-      return;
-   for (y = 0; y < height; y++)
-      memcpy((uint8_t*)lr.pBits + (size_t)y * lr.Pitch,
-            (const uint8_t*)frame + (size_t)y * pitch, row_bytes);
-   IDirect3DTexture9_UnlockRect(tex, 0);
 }
 
 /* A viewport over @dims */
@@ -554,6 +533,9 @@ static void D3D9V_FN(set_view_count)(void *data, unsigned count)
    if (!d3d)
       return;
    d3d->views.chains.count = MIN(count, RETRO_VIDEO_VIEWS_MAX);
+   /* Views read the frame where the core left it: no loan */
+   if (count)
+      d3d9_sw_fb_drop(&d3d->sw_fb);
    D3D9V_CHAINS_FREE(d3d, d3d->views.chains.count);
    for (i = d3d->views.chains.count; i < RETRO_VIDEO_VIEWS_MAX; i++)
       d3d->views.chains.stock[i] = NULL;

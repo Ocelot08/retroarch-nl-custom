@@ -7,11 +7,17 @@
 #include <stdlib.h>
 #include <boolean.h>
 
+#include "../../../configuration.h"
 #include "../../../gfx/video_driver.h"
 #include "../../../gfx/gfx_surface.h"
 
 static uintptr_t stub_next_handle = 0x100;
 static unsigned  stub_updates;
+
+settings_t *config_get_ptr(void)
+{
+   return NULL;
+}
 
 bool video_driver_texture_load(void *data, unsigned filter, uintptr_t *id)
 {
@@ -56,8 +62,10 @@ enum texture_filter_type gfx_display_texture_filter(void)
 }
 
 /* No driver lends upload memory here: every slot stays the surface's. */
-void *video_driver_texture_lend(uintptr_t id, unsigned slot, size_t pitch)
+void *video_driver_texture_lend(uintptr_t id, unsigned slot, size_t pitch, size_t *out_pitch)
 {
+   if (out_pitch)
+      *out_pitch = pitch;
    (void)id; (void)slot; (void)pitch;
    return NULL;
 }
@@ -75,3 +83,18 @@ bool video_driver_texture_lend_ready(uintptr_t id, unsigned slot)
    (void)id; (void)slot;
    return true;
 }
+
+bool video_driver_texture_lend_needs_refresh(void) { return false; }
+bool video_thread_lend_get(int idx, void **mem, size_t *pitch)
+{
+   (void)idx;
+   (void)mem;
+   (void)pitch;
+   return false;
+}
+
+bool video_thread_lend_ready(int idx) { (void)idx; return true; }
+
+/* Only an image loaded from a file with a compressed payload owns one */
+#include <formats/data_transfer.h>
+void data_transfer_free(data_transfer_t *dt) { (void)dt; }

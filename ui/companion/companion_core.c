@@ -71,6 +71,9 @@
 
 #include "companion_core.h"
 
+/* the entries and macros there can be (input_driver.c) */
+#define COMPANION_SHORTCUTS_MAX 16
+
 #define COMPANION_NO_SELECTION ((size_t)-1)
 
 #ifdef HAVE_NETWORKING
@@ -78,8 +81,9 @@ static void companion_core_download_orphan(companion_core_t *core);
 #endif
 
 #ifdef HAVE_LIBRETRODB
-/* task_push_dbscan() carries no user data, so the requesting core is
- * kept here. Only one desktop companion is active at a time. */
+/* The requesting core, kept here rather than passed as the scan's
+ * user data so that freeing the core clears it. Only one desktop
+ * companion is active at a time. */
 static companion_core_t *companion_core_scan_owner = NULL;
 #endif
 
@@ -87,6 +91,13 @@ struct companion_core
 {
    companion_callbacks_t cb;
    void *ud;
+
+   /* Controller shortcuts as last read: each row's number, combinations
+    * first; 0 is an empty row's, which adds the lowest number free */
+   uint8_t shortcut_number[2 * (COMPANION_SHORTCUTS_MAX + 1)];
+   uint8_t shortcut_new[2];   /* the empty rows' numbers */
+   uint8_t shortcut_combos;   /* rows that are combinations */
+   uint8_t shortcut_rows;
 
    /* Playlist files (*.lpl) in the playlist directory. */
    struct string_list *playlist_files;
@@ -399,6 +410,129 @@ void companion_core_free(companion_core_t *core)
    free(core->browse_size);
    free(core->browse_mtime);
    free(core);
+}
+
+/* --- Controller shortcuts ------------------------------------------------ */
+
+static size_t companion_shortcut_spec(bool macro, unsigned n, char *s, size_t len)
+{
+   return macro ? input_macro_spec(n, s, len) : input_entry_spec(n, s, len);
+}
+
+size_t companion_core_shortcut_count(companion_core_t *core)
+{
+   unsigned kind;
+   if (!core)
+      return 0;
+   core->shortcut_rows = 0;
+   for (kind = 0; kind < 2; kind++)
+   {
+      unsigned n, had = 0;
+      char buf[8];
+      core->shortcut_new[kind] = 0;
+      for (n = 1; n <= 255; n++)
+      {
+         if (companion_shortcut_spec(kind == 1, n, buf, sizeof(buf)))
+         {
+            if (had < COMPANION_SHORTCUTS_MAX)
+               core->shortcut_number[core->shortcut_rows++] = (uint8_t)n;
+            had++;
+         }
+         else if (!core->shortcut_new[kind])
+            core->shortcut_new[kind] = (uint8_t)n;
+      }
+      /* the empty row, while there is room for another */
+      if (had < COMPANION_SHORTCUTS_MAX && core->shortcut_new[kind])
+         core->shortcut_number[core->shortcut_rows++] = 0;
+      if (!kind)
+         core->shortcut_combos = core->shortcut_rows;
+   }
+   return core->shortcut_rows;
+}
+
+bool companion_core_shortcut_is_macro(companion_core_t *core, size_t i)
+{
+   return core && i < core->shortcut_rows && i >= core->shortcut_combos;
+}
+
+/* Row @i's number: its own, or the one the empty row adds */
+static unsigned companion_shortcut_number(companion_core_t *core, size_t i)
+{
+   if (!core || i >= core->shortcut_rows)
+      return 0;
+   if (core->shortcut_number[i])
+      return core->shortcut_number[i];
+   return core->shortcut_new[i >= core->shortcut_combos ? 1 : 0];
+}
+
+const char *companion_core_shortcut_label(companion_core_t *core, size_t i,
+      char *s, size_t len)
+{
+   bool macro = companion_core_shortcut_is_macro(core, i);
+   if (!s || !len)
+      return "";
+   s[0] = '\0';
+   if (!core || i >= core->shortcut_rows)
+      return s;
+   if (!core->shortcut_number[i])
+      strlcpy(s, macro ? "New macro" : "New combination", len);
+   else
+      snprintf(s, len, "%s %u", macro ? "Macro" : "Combination",
+            (unsigned)core->shortcut_number[i]);
+   return s;
+}
+
+const char *companion_core_shortcut_get(companion_core_t *core, size_t i,
+      char *s, size_t len)
+{
+   if (!s || !len)
+      return "";
+   s[0] = '\0';
+   if (core && i < core->shortcut_rows && core->shortcut_number[i])
+      companion_shortcut_spec(companion_core_shortcut_is_macro(core, i),
+            core->shortcut_number[i], s, len);
+   return s;
+}
+
+bool companion_core_shortcut_set(companion_core_t *core, size_t i,
+      const char *text)
+{
+   bool macro    = companion_core_shortcut_is_macro(core, i);
+   unsigned n    = companion_shortcut_number(core, i);
+   bool done;
+   if (!n || !text)
+      return false;
+   while (*text == ' ' || *text == '\t')
+      text++;
+   if (!*text)
+      done = macro ? input_macro_remove(n) : input_entry_remove(n);
+   else
+      done = macro ? input_macro_set(n, text) : input_entry_add(n, text);
+   return done || !*text;
+}
+
+const char *companion_core_shortcut_help(companion_core_t *core, bool macro,
+      char *s, size_t len)
+{
+   size_t at;
+   (void)core;
+   if (!s || !len)
+      return "";
+   if (macro)
+   {
+      strlcpy(s, "Steps with commas between, each buttons of the RetroPad"
+            " with + between them (or - for none) and the frames it lasts:"
+            " \"down 2, down+right 2, - 1, a 4\". A combination starts it"
+            " with the target macro_N.", len);
+      return s;
+   }
+   at = strlcpy(s, "Buttons and a key with + between them, then : and what"
+         " it does; before the colon \"held 2s\" or \"pressed 80%\" if"
+         " wanted: \"l3+r3 : menu_toggle\", \"start held 2s : quit\"."
+         " It can do: ", len);
+   if (at < len)
+      input_entry_targets(s + at, len - at);
+   return s;
 }
 
 /* --- Options table (Qt's View > Options) --------------------------------- */
@@ -717,7 +851,7 @@ float companion_core_shader_param_current(companion_core_t *core, size_t i)
    (void)core;
    if (!s || i >= s->num_parameters)
       return 0.0f;
-   return s->parameters[i].current;
+   return video_shader_param_get(&s->parameters[i]);
 }
 
 void companion_core_shader_param_set(companion_core_t *core, size_t i, float v)
@@ -728,7 +862,7 @@ void companion_core_shader_param_set(companion_core_t *core, size_t i, float v)
       return;
    if (v < s->parameters[i].minimum) v = s->parameters[i].minimum;
    if (v > s->parameters[i].maximum) v = s->parameters[i].maximum;
-   s->parameters[i].current = v;
+   video_shader_param_set(&s->parameters[i], v);
 }
 
 void companion_core_shader_param_reset(companion_core_t *core, size_t i)
@@ -737,7 +871,7 @@ void companion_core_shader_param_reset(companion_core_t *core, size_t i)
    (void)core;
    if (!s || i >= s->num_parameters)
       return;
-   s->parameters[i].current = s->parameters[i].initial;
+   video_shader_param_set(&s->parameters[i], s->parameters[i].initial);
 }
 
 const char *companion_core_shader_path(companion_core_t *core)
@@ -1591,7 +1725,16 @@ bool companion_core_request_load_content(companion_core_t *core,
 
    db_name_full[0] = '\0';
    if (!string_is_empty(db_name))
-      fill_pathname(db_name_full, db_name, ".lpl", sizeof(db_name_full));
+   {
+      /* Qt hands the name without its .lpl, Win32 and Cocoa with it;
+       * a dot inside the name stays (Tiger - Game.com). */
+      size_t _len = strlcpy(db_name_full, db_name, sizeof(db_name_full));
+      if (     _len < sizeof(db_name_full)
+            && !string_ends_with_size(db_name_full, ".lpl", _len,
+               STRLEN_CONST(".lpl")))
+         strlcpy_lit(db_name_full + _len, ".lpl",
+               sizeof(db_name_full) - _len);
+   }
 
    memset(&content_info, 0, sizeof(content_info));
 
@@ -1715,6 +1858,15 @@ static void companion_core_scan_finished(retro_task_t *task,
 }
 #endif
 
+const char *companion_core_scan_refusal(void)
+{
+#ifdef HAVE_LIBRETRODB
+   if (task_dbscan_chain_is_running())
+      return msg_hash_to_str(MSG_MANUAL_CONTENT_SCAN_ALREADY_RUNNING);
+#endif
+   return "Scanning is not available in this build.";
+}
+
 bool companion_core_request_scan(companion_core_t *core, const char *path)
 {
 #ifdef HAVE_LIBRETRODB
@@ -1722,7 +1874,7 @@ bool companion_core_request_scan(companion_core_t *core, const char *path)
       return false;
 
    companion_core_scan_owner = core;
-   return task_push_dbscan(path, companion_core_scan_finished);
+   return task_push_dbscan(path, companion_core_scan_finished, NULL);
 #else
    (void)core;
    (void)path;

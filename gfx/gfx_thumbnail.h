@@ -31,6 +31,7 @@
 #include <retro_atomic.h>
 
 #include "gfx_animation.h"
+#include "gfx_media_state.h"
 
 #include "../playlist.h"
 
@@ -203,7 +204,9 @@ enum gfx_thumbnail_flags
    GFX_THUMB_FLAG_FADE_ACTIVE = (1 << 0),
    GFX_THUMB_FLAG_CORE_ASPECT = (1 << 1),
    GFX_THUMB_FLAG_BG_ONLY     = (1 << 2),
-   GFX_THUMB_FLAG_ANIM_ACTIVE = (1 << 3)
+   GFX_THUMB_FLAG_ANIM_ACTIVE = (1 << 3),
+   GFX_THUMB_FLAG_MEDIA_COMPLETED = (1 << 4),
+   GFX_THUMB_FLAG_MEDIA_ENDED = (1 << 5)
 };
 
 /* Holds all runtime parameters associated with
@@ -253,6 +256,7 @@ typedef struct
    /* The playback (gfx_surface_player_t*): its clock and loops, and
     * the decode, a frame ahead on a worker where there is one. */
    void *anim_player;
+   void *anim_lifetime;
    /* The GPU surface (gfx_surface_t*) the still goes to, and the
     * animation's frames are decoded into and shown from: one
     * persistent texture updated per frame, kept after the animation
@@ -266,6 +270,12 @@ typedef struct
     * ever deliver it, so the slot must be re-requested rather than
     * waited on. */
    uint64_t list_id;
+   /* 64-bit FNV-1a of the file this thumbnail was last requested
+    * from, 0 when none; cleared by gfx_thumbnail_reset.  Lets
+    * gfx_thumbnail_has_file recognise a still (or an animation that
+    * fell back to one) without keeping a path buffer per thumbnail,
+    * so the viewer takes what the browser already decoded. */
+   uint64_t file_hash;
    /* Both axes in one word, VIDEO_SCALE_PACK's layout. */
    unsigned dims;
    float alpha;
@@ -310,6 +320,7 @@ static INLINE void gfx_thumbnail_init_blank(gfx_thumbnail_t *t)
    t->anim_dt         = NULL;
    t->anim_sess       = NULL;
    t->anim_player     = NULL;
+   t->anim_lifetime   = NULL;
    t->anim_surface    = NULL;
    t->anim_buf_len    = 0;
    t->list_id         = 0;
@@ -408,6 +419,16 @@ void gfx_thumbnail_anim_worker_deinit(void);
  *    heap-use-after-free errors *will* occur */
 void gfx_thumbnail_cancel_pending_requests(void);
 
+/* While on, still requests land decoded and are held instead of
+ * uploaded (at most four, by path); the next request for the same
+ * path uploads the held image without reading or decoding the file.
+ * For a menu whose thumbnails are not shown while content runs:
+ * requested as content starts, they upload when shown or on close. */
+void gfx_thumbnail_park_requests(bool park);
+
+/* Frees the held images */
+void gfx_thumbnail_parked_free(void);
+
 /* True if 'thumbnail' is waiting on a request that has since been
  * superseded, i.e. it is PENDING with nothing behind it.  Resets the
  * thumbnail (returning it to UNKNOWN) and returns true in that case, so
@@ -467,7 +488,34 @@ void gfx_thumbnail_reset(gfx_thumbnail_t *thumbnail);
  * this function reads no clock of its own, so every thumbnail
  * advanced in a frame paces off one coherent 'now', and a harness can
  * drive it with synthetic time. */
+unsigned gfx_thumbnail_anim_threads_wanted(void);
+
+/* Main-thread identity check for an installed preview session. */
+bool gfx_thumbnail_has_file(const gfx_thumbnail_t *thumbnail, const char *path);
+
 void gfx_thumbnail_animate(gfx_thumbnail_t *thumbnail,
+      retro_time_t current_time);
+
+/* Main-thread media command: retain the current picture and preview PCM.
+ * Uses the same monotonic clock as animate. False for a still or a
+ * thumbnail whose animation session has not been installed yet. */
+bool gfx_thumbnail_set_repeat(gfx_thumbnail_t *thumbnail, bool repeat);
+bool gfx_thumbnail_take_completed(gfx_thumbnail_t *thumbnail);
+bool gfx_thumbnail_set_paused(gfx_thumbnail_t *thumbnail, bool paused,
+      retro_time_t current_time);
+
+typedef gfx_media_playback_state_t gfx_thumbnail_playback_state_t;
+
+/* Main-thread UI snapshot using the same monotonic time as animate.
+ * Position follows mixed PCM when available. While seeking it shows
+ * the latest requested target. False for a still/non-media thumbnail. */
+bool gfx_thumbnail_get_playback_state(gfx_thumbnail_t *thumbnail,
+      retro_time_t current_time, gfx_thumbnail_playback_state_t *state);
+
+/* Main-thread absolute media seek, currently MP4. Latest request wins;
+ * decoding and audio preparation use the existing player worker.
+ * Keeps the last texture visible and preserves the user's pause state. */
+bool gfx_thumbnail_seek(gfx_thumbnail_t *thumbnail, int64_t target_us,
       retro_time_t current_time);
 
 /* Stream processing */

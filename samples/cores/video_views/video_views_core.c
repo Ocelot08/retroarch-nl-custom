@@ -21,12 +21,18 @@
  * RETRO_VIDEO_VIEWS_STATUS_PRESENTS, so the frontend's answer there is
  * logged too. It draws in software, or with the video_views_test_hw
  * option through a GL core context, with either origin, or a
- * compatibility one (gl_compat, which the gl driver takes), into Vulkan
+ * compatibility one (gl_compat, which the gl driver takes), or a GLES 3
+ * one (gles3, which the gl driver takes on Android), into Vulkan
  * images of its own handed over with set_image, or on Windows into
  * D3D11 textures of its own, one per sync index, handed over with
  * set_texture (libretro_d3d11.h version 2), or into D3D12 textures
- * handed over with set_texture_fenced (libretro_d3d12.h version 2). With
+ * handed over with set_texture_fenced (libretro_d3d12.h version 2), or
+ * into Direct3D 9 render target textures handed over with set_texture
+ * (libretro_d3d9.h), which the d3d9_hlsl driver takes. With
  * video_views_test_max it declares a far larger maximum than it draws.
+ * With video_views_test_map_change it changes to another map, or with
+ * none clears its map, once video_views_test_map_change_frame frames
+ * have run, for checking where a game whose map changes is shown.
  * e2e/run.py checks the colours on screen and the status in the log;
  * e2e/d3d.sh checks the d3d11 and d3d12 drivers' frames, under Wine
  * or on Windows.
@@ -74,6 +80,7 @@
 #ifdef _WIN32
 #include <libretro_d3d11.h>
 #include <libretro_d3d12.h>
+#include <libretro_d3d9.h>
 #endif
 
 #define MAX_W 800
@@ -119,7 +126,8 @@ enum hw_kind
    HW_VULKAN,
    HW_VULKAN_KEEP,
    HW_D3D11,
-   HW_D3D12
+   HW_D3D12,
+   HW_D3D9
 };
 
 /* The Vulkan modes, by the order above. */
@@ -239,9 +247,14 @@ static retro_log_printf_t    log_cb;
 static uint32_t frame_buf[FRAME_MAX_PIXELS];
 static uint16_t frame_buf16[FRAME_MAX_PIXELS];
 static enum map_kind map_kind = MAP_3DS;
+static enum map_kind map_change;
+/* Frames until the change, or -1 for none. */
+static int map_change_left    = -1;
+static bool map_changed;
 static enum hw_kind hw_kind   = HW_OFF;
 /* HW_GL through a compatibility context. */
 static bool hw_gl_compat;
+static bool hw_gles3;
 static enum pattern_kind pattern = PATTERN_SOLID;
 static bool large_max;
 static bool rgb565;
@@ -275,8 +288,8 @@ static struct vk_slot vk_slots[VK_SLOTS];
 static bool vk_ready;
 static int last_status        = -1;
 static int last_accepted      = -1;
-static int last_pressed       = -1;
-static int16_t last_px, last_py;
+static int last_pressed[2]    = { -1, -1 };
+static int16_t last_px[2], last_py[2];
 static struct retro_rumble_interface rumble;
 static int last_pad[2][7];      /* buttons, lx, ly, rx, ry, l2, r2 */
 static bool pad_logged[2];
@@ -891,6 +904,23 @@ static unsigned build_map(struct retro_video_view *v, uint32_t *c,
    }
 }
 
+static enum map_kind map_named(const char *name)
+{
+   if (!strcmp(name, "3ds_force"))
+      return MAP_3DS_FORCE;
+   if (!strcmp(name, "ds"))
+      return MAP_DS;
+   if (!strcmp(name, "vb"))
+      return MAP_VB;
+   if (!strcmp(name, "invalid"))
+      return MAP_INVALID;
+   if (!strcmp(name, "none"))
+      return MAP_NONE;
+   if (!strcmp(name, "crop"))
+      return MAP_CROP;
+   return MAP_3DS;
+}
+
 static void read_options(void)
 {
    struct retro_variable var;
@@ -898,6 +928,7 @@ static void read_options(void)
    var.value = NULL;
    hw_kind      = HW_OFF;
    hw_gl_compat = false;
+   hw_gles3     = false;
    if (environ_cb(RETRO_ENVIRONMENT_GET_VARIABLE, &var) && var.value)
    {
       if (!strcmp(var.value, "gl"))
@@ -906,6 +937,11 @@ static void read_options(void)
       {
          hw_kind      = HW_GL;
          hw_gl_compat = true;
+      }
+      else if (!strcmp(var.value, "gles3"))
+      {
+         hw_kind  = HW_GL;
+         hw_gles3 = true;
       }
       else if (!strcmp(var.value, "gl_topleft"))
          hw_kind = HW_GL_TOPLEFT;
@@ -918,6 +954,8 @@ static void read_options(void)
          hw_kind = HW_D3D11;
       else if (!strcmp(var.value, "d3d12"))
          hw_kind = HW_D3D12;
+      else if (!strcmp(var.value, "d3d9"))
+         hw_kind = HW_D3D9;
 #endif
    }
 
@@ -936,6 +974,9 @@ static void read_options(void)
       else if (!strcmp(var.value, "noise"))
          pattern = PATTERN_NOISE;
    }
+   if (hw_gles3 && pattern != PATTERN_SOLID)
+      log_cb(RETRO_LOG_ERROR,
+            "[video_views] gles3 can't upload a pattern: BGRA isn't GLES 3.0\n");
 
    var.key   = "video_views_test_format";
    var.value = NULL;
@@ -983,20 +1024,24 @@ static void read_options(void)
    var.key   = "video_views_test_map";
    var.value = NULL;
    map_kind  = MAP_3DS;
-   if (!environ_cb(RETRO_ENVIRONMENT_GET_VARIABLE, &var) || !var.value)
+   if (environ_cb(RETRO_ENVIRONMENT_GET_VARIABLE, &var) && var.value)
+      map_kind = map_named(var.value);
+
+   var.key         = "video_views_test_map_change";
+   var.value       = NULL;
+   map_change_left = -1;
+   map_changed     = false;
+   if (     !environ_cb(RETRO_ENVIRONMENT_GET_VARIABLE, &var) || !var.value
+         || !strcmp(var.value, "off"))
       return;
-   if (!strcmp(var.value, "3ds_force"))
-      map_kind = MAP_3DS_FORCE;
-   else if (!strcmp(var.value, "ds"))
-      map_kind = MAP_DS;
-   else if (!strcmp(var.value, "vb"))
-      map_kind = MAP_VB;
-   else if (!strcmp(var.value, "invalid"))
-      map_kind = MAP_INVALID;
-   else if (!strcmp(var.value, "none"))
-      map_kind = MAP_NONE;
-   else if (!strcmp(var.value, "crop"))
-      map_kind = MAP_CROP;
+   map_change      = map_named(var.value);
+   var.key         = "video_views_test_map_change_frame";
+   var.value       = NULL;
+   map_change_left = 60;
+   if (environ_cb(RETRO_ENVIRONMENT_GET_VARIABLE, &var) && var.value)
+      map_change_left = atoi(var.value);
+   if (map_change_left < 0)
+      map_change_left = 60;
 }
 
 /* A core may show or hide options by the views status; this one only
@@ -1016,8 +1061,12 @@ void retro_set_environment(retro_environment_t cb)
    static const struct retro_variable vars[] = {
       { "video_views_test_map",
         "View map; 3ds|3ds_force|ds|vb|invalid|none|crop" },
+      { "video_views_test_map_change",
+        "View map after a set frame; off|3ds|3ds_force|ds|vb|invalid|none|crop" },
+      { "video_views_test_map_change_frame",
+        "Frames before the map changes; 60|5|10|30|180|300|600" },
       { "video_views_test_hw",
-        "Hardware rendering; off|gl|gl_topleft|gl_compat|vulkan|vulkan_keep|d3d11|d3d12" },
+        "Hardware rendering; off|gl|gl_topleft|gl_compat|vulkan|vulkan_keep|d3d11|d3d12|d3d9|gles3" },
       { "video_views_test_max",
         "Declared maximum size; normal|large" },
       { "video_views_test_fps",
@@ -1155,6 +1204,37 @@ static void log_lightgun(unsigned fw, unsigned fh)
    gun_logged = true;
 }
 
+/* Pointer @idx logged when it changes; 1 is the second finger, for
+ * touches on two displays at once. True while pressed, at @cx,@cy in
+ * the frame. */
+static bool log_pointer(unsigned idx, unsigned fw, unsigned fh,
+      unsigned *cx, unsigned *cy)
+{
+   const char *name = idx ? "pointer1" : "pointer";
+   int16_t x        = input_state_cb(0, RETRO_DEVICE_POINTER, idx,
+         RETRO_DEVICE_ID_POINTER_X);
+   int16_t y        = input_state_cb(0, RETRO_DEVICE_POINTER, idx,
+         RETRO_DEVICE_ID_POINTER_Y);
+   int pressed      = input_state_cb(0, RETRO_DEVICE_POINTER, idx,
+         RETRO_DEVICE_ID_POINTER_PRESSED) ? 1 : 0;
+   *cx = (unsigned)(((long)x + 0x7fff) * (long)(fw - 1) / 0xfffe);
+   *cy = (unsigned)(((long)y + 0x7fff) * (long)(fh - 1) / 0xfffe);
+   if (pressed)
+   {
+      if (     x != last_px[idx] || y != last_py[idx]
+            || pressed != last_pressed[idx])
+         log_cb(RETRO_LOG_INFO,
+               "[video_views] %s x=%d y=%d pressed=1 packed=(%u,%u)\n",
+               name, x, y, *cx, *cy);
+   }
+   else if (last_pressed[idx] == 1)
+      log_cb(RETRO_LOG_INFO, "[video_views] %s pressed=0\n", name);
+   last_px[idx]      = x;
+   last_py[idx]      = y;
+   last_pressed[idx] = pressed;
+   return pressed != 0;
+}
+
 /* A port rumbles while it holds Start; each port at its own strength. */
 static void update_rumble(void)
 {
@@ -1270,6 +1350,122 @@ static bool d3d_send(unsigned fw, unsigned fh)
    d3d->set_texture(d3d->handle, d3d_tex[i]);
    d3d->unlock_context(d3d->handle);
    return true;
+}
+
+/* The D3D9 mode: frame_buf written into a system memory surface and
+ * copied with UpdateSurface into a render target texture per sync
+ * index, then handed over with set_texture. With the large maximum the
+ * textures are the regular maximum's size, as in the D3D11 mode. */
+static const struct retro_hw_render_interface_d3d9 *d9;
+static LPDIRECT3DTEXTURE9 d9_tex[D3D_TEXTURES];
+static unsigned           d9_dims[D3D_TEXTURES];
+static LPDIRECT3DSURFACE9 d9_sys;
+static unsigned           d9_sys_dims;
+
+static void d9_context_destroy(void)
+{
+   unsigned i;
+   if (d9)
+      d9->lock_context(d9->handle);
+   for (i = 0; i < D3D_TEXTURES; i++)
+   {
+      if (d9_tex[i])
+         d9_tex[i]->lpVtbl->Release(d9_tex[i]);
+      d9_tex[i]  = NULL;
+      d9_dims[i] = 0;
+   }
+   if (d9_sys)
+      d9_sys->lpVtbl->Release(d9_sys);
+   d9_sys      = NULL;
+   d9_sys_dims = 0;
+   if (d9)
+      d9->unlock_context(d9->handle);
+   d9 = NULL;
+}
+
+static void d9_context_reset(void)
+{
+   d9 = NULL;
+   if (     !environ_cb(RETRO_ENVIRONMENT_GET_HW_RENDER_INTERFACE,
+               (void*)&d9)
+         || !d9
+         || d9->interface_type    != RETRO_HW_RENDER_INTERFACE_D3D9
+         || d9->interface_version <  RETRO_HW_RENDER_INTERFACE_D3D9_VERSION)
+   {
+      log_cb(RETRO_LOG_ERROR, "[video_views] no D3D9 interface\n");
+      d9 = NULL;
+   }
+}
+
+static bool d9_send(unsigned fw, unsigned fh)
+{
+   unsigned i, y;
+   RECT rect;
+   POINT at;
+   D3DLOCKED_RECT lr;
+   LPDIRECT3DSURFACE9 level = NULL;
+   LPDIRECT3DDEVICE9 dev;
+   unsigned tw = (large_max && fw <= MAX_W && fh <= MAX_H) ? MAX_W : fw;
+   unsigned th = (large_max && fw <= MAX_W && fh <= MAX_H) ? MAX_H : fh;
+   bool ok     = false;
+   if (!d9)
+      return false;
+   i = d9->get_sync_index(d9->handle);
+   if (i >= D3D_TEXTURES)
+      return false;
+   d9->wait_sync_index(d9->handle);
+   d9->lock_context(d9->handle);
+   dev = d9->device;
+   if (!d9_tex[i] || d9_dims[i] != (tw << 16 | th))
+   {
+      if (d9_tex[i])
+         d9_tex[i]->lpVtbl->Release(d9_tex[i]);
+      d9_tex[i]  = NULL;
+      d9_dims[i] = 0;
+      if (FAILED(dev->lpVtbl->CreateTexture(dev, tw, th, 1,
+                  D3DUSAGE_RENDERTARGET, D3DFMT_X8R8G8B8, D3DPOOL_DEFAULT,
+                  &d9_tex[i], NULL)))
+         d9_tex[i] = NULL;
+      else
+         d9_dims[i] = tw << 16 | th;
+   }
+   if (!d9_sys || d9_sys_dims != (fw << 16 | fh))
+   {
+      if (d9_sys)
+         d9_sys->lpVtbl->Release(d9_sys);
+      d9_sys_dims = 0;
+      if (FAILED(dev->lpVtbl->CreateOffscreenPlainSurface(dev, fw, fh,
+                  D3DFMT_X8R8G8B8, D3DPOOL_SYSTEMMEM, &d9_sys, NULL)))
+         d9_sys = NULL;
+      else
+         d9_sys_dims = fw << 16 | fh;
+   }
+   if (     d9_tex[i] && d9_sys
+         && SUCCEEDED(d9_sys->lpVtbl->LockRect(d9_sys, &lr, NULL, 0)))
+   {
+      for (y = 0; y < fh; y++)
+         memcpy((uint8_t*)lr.pBits + (size_t)y * lr.Pitch,
+               frame_buf + (size_t)y * fw, fw * sizeof(uint32_t));
+      d9_sys->lpVtbl->UnlockRect(d9_sys);
+      rect.left   = 0;
+      rect.top    = 0;
+      rect.right  = (LONG)fw;
+      rect.bottom = (LONG)fh;
+      at.x        = 0;
+      at.y        = 0;
+      if (     SUCCEEDED(d9_tex[i]->lpVtbl->GetSurfaceLevel(d9_tex[i], 0,
+                  &level))
+            && SUCCEEDED(dev->lpVtbl->UpdateSurface(dev, d9_sys, &rect,
+                  level, &at)))
+      {
+         d9->set_texture(d9->handle, d9_tex[i]);
+         ok = true;
+      }
+      if (level)
+         level->lpVtbl->Release(level);
+   }
+   d9->unlock_context(d9->handle);
+   return ok;
 }
 
 /* The D3D12 mode: frame_buf copied through an upload buffer into a
@@ -1780,14 +1976,33 @@ static bool vr_tracking(bool hmd)
    return false;
 }
 
+static void change_map(void)
+{
+   unsigned w, h, nw, nh;
+   enum map_kind first = map_kind;
+   frame_size(&w, &h);
+   map_kind = map_change;
+   frame_size(&nw, &nh);
+   /* A Vulkan slot's image keeps the size it was made at. */
+   if (HW_IS_VULKAN(hw_kind) && (nw != w || nh != h))
+   {
+      map_kind = first;
+      log_cb(RETRO_LOG_ERROR,
+            "[video_views] map not changed at frame %u: the Vulkan frame "
+            "would change size\n", frames_run);
+      return;
+   }
+   map_changed = true;
+   log_cb(RETRO_LOG_INFO, "[video_views] map changed at frame %u\n",
+         frames_run);
+}
+
 void retro_run(void)
 {
    struct retro_video_view v[RETRO_VIDEO_VIEWS_MAX];
    uint32_t c[RETRO_VIDEO_VIEWS_MAX];
    struct retro_video_views views;
-   unsigned i, n, fw, fh;
-   int16_t px, py;
-   int pressed;
+   unsigned i, n, fw, fh, cx, cy;
    int accepted    = 0;
    unsigned status = 0;
    bool stereo;
@@ -1802,6 +2017,8 @@ void retro_run(void)
             frames_run,
             (long long)ts.tv_sec * 1000000LL + ts.tv_nsec / 1000);
    }
+   if (map_change_left >= 0 && !map_change_left--)
+      change_map();
    frames_run++;
 
    input_poll_cb();
@@ -1867,6 +2084,14 @@ void retro_run(void)
          return;
       }
    }
+   else if (hw_kind == HW_D3D9)
+   {
+      if (!d9)
+      {
+         video_cb(NULL, fw, fh, 0);
+         return;
+      }
+   }
 #endif
    else if (hw_kind != HW_OFF)
    {
@@ -1901,11 +2126,12 @@ void retro_run(void)
          frame_tag(&v[i], fw, fh);
    }
 
-   if (map_kind != MAP_NONE)
+   /* A map changed to none clears the one sent before. */
+   if (map_kind != MAP_NONE || map_changed)
    {
       memset(&views, 0, sizeof(views));
       views.views     = v;
-      views.num_views = n;
+      views.num_views = (map_kind == MAP_NONE) ? 0 : n;
       if (vr)
       {
          views.flags           = RETRO_VIDEO_VIEWS_FLAG_TRACKED;
@@ -1929,30 +2155,13 @@ void retro_run(void)
    }
    log_status(status, accepted, n);
 
-   px      = input_state_cb(0, RETRO_DEVICE_POINTER, 0, RETRO_DEVICE_ID_POINTER_X);
-   py      = input_state_cb(0, RETRO_DEVICE_POINTER, 0, RETRO_DEVICE_ID_POINTER_Y);
-   pressed = input_state_cb(0, RETRO_DEVICE_POINTER, 0,
-         RETRO_DEVICE_ID_POINTER_PRESSED) ? 1 : 0;
-   if (pressed)
+   if (     log_pointer(0, fw, fh, &cx, &cy)
+         && cx >= 4 && cx + 5 <= fw && cy >= 4 && cy + 5 <= fh)
    {
-      unsigned cx = (unsigned)(((long)px + 0x7fff) * (long)(fw - 1) / 0xfffe);
-      unsigned cy = (unsigned)(((long)py + 0x7fff) * (long)(fh - 1) / 0xfffe);
-      if (cx >= 4 && cx + 5 <= fw && cy >= 4 && cy + 5 <= fh)
-      {
-         rect(cx - 4, cy, 9, 1, fw, fh, COL_WHITE);
-         rect(cx, cy - 4, 1, 9, fw, fh, COL_WHITE);
-      }
-      if (px != last_px || py != last_py || pressed != last_pressed)
-         log_cb(RETRO_LOG_INFO,
-               "[video_views] pointer x=%d y=%d pressed=1 packed=(%u,%u)\n",
-               px, py, cx, cy);
+      rect(cx - 4, cy, 9, 1, fw, fh, COL_WHITE);
+      rect(cx, cy - 4, 1, 9, fw, fh, COL_WHITE);
    }
-   else if (last_pressed == 1)
-      log_cb(RETRO_LOG_INFO, "[video_views] pointer pressed=0\n");
-   last_px      = px;
-   last_py      = py;
-   last_pressed = pressed;
-
+   log_pointer(1, fw, fh, &cx, &cy);
    log_pads();
    log_lightgun(fw, fh);
    update_rumble();
@@ -1970,6 +2179,9 @@ void retro_run(void)
             fw, fh, 0);
    else if (hw_kind == HW_D3D12)
       video_cb(d12_send(fw, fh) ? RETRO_HW_FRAME_BUFFER_VALID : NULL,
+            fw, fh, 0);
+   else if (hw_kind == HW_D3D9)
+      video_cb(d9_send(fw, fh) ? RETRO_HW_FRAME_BUFFER_VALID : NULL,
             fw, fh, 0);
 #endif
    else if (hw_kind != HW_OFF)
@@ -2073,6 +2285,16 @@ bool retro_load_game(const struct retro_game_info *game)
          environ_cb(RETRO_ENVIRONMENT_SET_HW_RENDER_CONTEXT_NEGOTIATION_INTERFACE,
                &d12_nego);
    }
+   else if (hw_kind == HW_D3D9)
+   {
+      memset(&hw_render, 0, sizeof(hw_render));
+      hw_render.context_type    = RETRO_HW_CONTEXT_D3D9;
+      hw_render.version_major   = 9;
+      hw_render.context_reset   = d9_context_reset;
+      hw_render.context_destroy = d9_context_destroy;
+      if (!environ_cb(RETRO_ENVIRONMENT_SET_HW_RENDER, &hw_render))
+         return false;
+   }
 #endif
    else if (hw_kind != HW_OFF)
    {
@@ -2084,6 +2306,12 @@ bool retro_load_game(const struct retro_game_info *game)
       {
          hw_render.context_type    = RETRO_HW_CONTEXT_OPENGL;
          hw_render.version_major   = 0;
+         hw_render.version_minor   = 0;
+      }
+      else if (hw_gles3)
+      {
+         hw_render.context_type    = RETRO_HW_CONTEXT_OPENGLES3;
+         hw_render.version_major   = 3;
          hw_render.version_minor   = 0;
       }
       hw_render.context_reset      = context_reset;

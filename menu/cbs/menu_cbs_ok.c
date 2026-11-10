@@ -81,16 +81,20 @@
 #include "../../tasks/task_file_transfer.h"
 #include "../../tasks/tasks_internal.h"
 #include "../../input/input_remapping.h"
+#include "../../input/common/input_ignore_devices.h"
 #include "../../paths.h"
 #include "../../playlist.h"
 #include "../../retroarch.h"
 #include "../../runloop.h"
 #include "../../verbosity.h"
-#include "../../lakka.h"
+#include "../../os/lakka/lakka.h"
 #ifdef HAVE_BLUETOOTH
 #include "../../bluetooth/bluetooth_driver.h"
 #endif
 #include "../../gfx/video_display_server.h"
+#ifdef HAVE_VULKAN_CUSTOM_DRIVER
+#include "../../gfx/common/vulkan_custom_driver.h"
+#endif
 #include "../../manual_content_scan.h"
 #ifdef __MACH__
 #include <TargetConditionals.h>
@@ -104,7 +108,7 @@
 #endif
 
 #ifdef __WINRT__
-#include "../../uwp/uwp_func.h"
+#include "../../os/uwp/uwp_func.h"
 #endif
 #if TARGET_OS_IPHONE
 #include "../../ui/drivers/cocoa/apple_platform.h"
@@ -112,16 +116,18 @@
 
 #if defined(ANDROID)
 #include "../../file_path_special.h"
-#include "../../play_feature_delivery/play_feature_delivery.h"
+#include "../../os/android/play_feature_delivery.h"
 #endif
 
 #if defined(HAVE_LIBNX)
-#include "../../switch_performance_profiles.h"
+#include "../../os/libnx/switch_performance_profiles.h"
 #endif
 
 #ifdef HAVE_MIST
 #include "../../steam/steam.h"
 #endif
+
+#include "../../input/drivers_hid/winusb_bind.h"
 
 enum
 {
@@ -146,6 +152,7 @@ enum
    ACTION_OK_SHOW_WIMP,
    ACTION_OK_LOAD_CHEAT_FILE_APPEND,
    ACTION_OK_LOAD_RGUI_MENU_THEME_PRESET,
+   ACTION_OK_LOAD_VULKAN_DRIVER,
    ACTION_OK_SET_MANUAL_CONTENT_SCAN_DAT_FILE
 };
 
@@ -190,7 +197,7 @@ static int (funcname)(const char *path, const char *label, unsigned type, size_t
 #define DEFAULT_ACTION_DIALOG_START_TYPE(funcname, _label, _idx, _cb, _text_type) \
 static int (funcname)(const char *path, const char *label_setting, unsigned type, size_t idx, size_t entry_idx) \
 { \
-   menu_input_ctx_line_t line; \
+   menu_input_ctx_line_t line = {0}; \
    line.label         = _label; \
    line.label_setting = label_setting; \
    line.type          = type; \
@@ -332,6 +339,10 @@ static enum msg_hash_enums action_ok_dl_to_enum(unsigned lbl)
          return MENU_ENUM_LABEL_DEFERRED_DROPDOWN_BOX_LIST_INPUT_DESCRIPTION_KBD;
       case ACTION_OK_DL_DROPDOWN_BOX_LIST_INPUT_SELECT_RESERVED_DEVICE:
          return MENU_ENUM_LABEL_DEFERRED_DROPDOWN_BOX_LIST_INPUT_SELECT_RESERVED_DEVICE;
+      case ACTION_OK_DL_DROPDOWN_BOX_LIST_INPUT_PLAYS_AS:
+         return MENU_ENUM_LABEL_DEFERRED_DROPDOWN_BOX_LIST_INPUT_PLAYS_AS;
+      case ACTION_OK_DL_DROPDOWN_BOX_LIST_INPUT_PLAYS_AS_ADD:
+         return MENU_ENUM_LABEL_DEFERRED_DROPDOWN_BOX_LIST_INPUT_PLAYS_AS_ADD;
 #ifdef ANDROID
       case ACTION_OK_DL_DROPDOWN_BOX_LIST_INPUT_SELECT_PHYSICAL_KEYBOARD:
          return MENU_ENUM_LABEL_DEFERRED_DROPDOWN_BOX_LIST_INPUT_SELECT_PHYSICAL_KEYBOARD;
@@ -390,6 +401,8 @@ static enum msg_hash_enums action_ok_dl_to_enum(unsigned lbl)
          return MENU_ENUM_LABEL_DEFERRED_VIDEO_HDR_SETTINGS_LIST;
       case ACTION_OK_DL_VIDEO_STEREO_SETTINGS_LIST:
          return MENU_ENUM_LABEL_DEFERRED_VIDEO_STEREO_SETTINGS_LIST;
+      case ACTION_OK_DL_VIDEO_DLSS_NR_SETTINGS_LIST:
+         return MENU_ENUM_LABEL_DEFERRED_VIDEO_DLSS_NR_SETTINGS_LIST;
       case ACTION_OK_DL_VIDEO_OUTPUT_SETTINGS_LIST:
          return MENU_ENUM_LABEL_DEFERRED_VIDEO_OUTPUT_SETTINGS_LIST;
       case ACTION_OK_DL_CRT_SWITCHRES_SETTINGS_LIST:
@@ -480,6 +493,8 @@ static enum msg_hash_enums action_ok_dl_to_enum(unsigned lbl)
          return MENU_ENUM_LABEL_DEFERRED_MENU_SOUNDS_LIST;
       case ACTION_OK_DL_MENU_FILE_BROWSER_SETTINGS_LIST:
          return MENU_ENUM_LABEL_DEFERRED_MENU_FILE_BROWSER_SETTINGS_LIST;
+      case ACTION_OK_DL_MEDIA_PLAYER_SETTINGS_LIST:
+         return MENU_ENUM_LABEL_DEFERRED_MEDIA_PLAYER_SETTINGS_LIST;
       case ACTION_OK_DL_RETRO_ACHIEVEMENTS_SETTINGS_LIST:
          return MENU_ENUM_LABEL_DEFERRED_RETRO_ACHIEVEMENTS_SETTINGS_LIST;
       case ACTION_OK_DL_CHEEVOS_APPEARANCE_SETTINGS_LIST:
@@ -534,6 +549,8 @@ static enum msg_hash_enums action_ok_dl_to_enum(unsigned lbl)
          return MENU_ENUM_LABEL_DEFERRED_AUDIO_MIXER_SETTINGS_LIST;
       case ACTION_OK_DL_INPUT_RETROPAD_BINDS_LIST:
          return MENU_ENUM_LABEL_DEFERRED_INPUT_RETROPAD_BINDS_LIST;
+      case ACTION_OK_DL_INPUT_CONTROLLERS_LIST:
+         return MENU_ENUM_LABEL_DEFERRED_INPUT_CONTROLLERS_LIST;
       case ACTION_OK_DL_INPUT_HOTKEY_BINDS_LIST:
          return MENU_ENUM_LABEL_DEFERRED_INPUT_HOTKEY_BINDS_LIST;
       case ACTION_OK_DL_RECORDING_SETTINGS_LIST:
@@ -996,6 +1013,22 @@ int generic_action_ok_displaylist_push(
          info.enum_idx      = MENU_ENUM_LABEL_DEFERRED_DROPDOWN_BOX_LIST_INPUT_SELECT_RESERVED_DEVICE;
          dl_type            = DISPLAYLIST_GENERIC;
          break;
+      case ACTION_OK_DL_DROPDOWN_BOX_LIST_INPUT_PLAYS_AS:
+         info.type          = type;
+         info.directory_ptr = idx;
+         info_path          = path;
+         info_label         = MENU_ENUM_LABEL_DEFERRED_DROPDOWN_BOX_LIST_INPUT_PLAYS_AS_STR;
+         info.enum_idx      = MENU_ENUM_LABEL_DEFERRED_DROPDOWN_BOX_LIST_INPUT_PLAYS_AS;
+         dl_type            = DISPLAYLIST_GENERIC;
+         break;
+      case ACTION_OK_DL_DROPDOWN_BOX_LIST_INPUT_PLAYS_AS_ADD:
+         info.type          = type;
+         info.directory_ptr = idx;
+         info_path          = path;
+         info_label         = MENU_ENUM_LABEL_DEFERRED_DROPDOWN_BOX_LIST_INPUT_PLAYS_AS_ADD_STR;
+         info.enum_idx      = MENU_ENUM_LABEL_DEFERRED_DROPDOWN_BOX_LIST_INPUT_PLAYS_AS_ADD;
+         dl_type            = DISPLAYLIST_GENERIC;
+         break;
 #ifdef ANDROID
        case ACTION_OK_DL_DROPDOWN_BOX_LIST_INPUT_SELECT_PHYSICAL_KEYBOARD:
            info.type          = type;
@@ -1358,26 +1391,28 @@ int generic_action_ok_displaylist_push(
          dl_type            = DISPLAYLIST_FILE_BROWSER_SCAN_DIR;
          break;
       case ACTION_OK_DL_MANUAL_SCAN_DIR_LIST:
-         if (*(manual_content_scan_get_scan_single_file_ptr()) == true)
-         {
-            filebrowser_set_type(FILEBROWSER_SCAN_FILE);
-            info.type          = FILE_TYPE_PLAIN;
-            dl_type            = DISPLAYLIST_FILE_BROWSER_SELECT_FILE;
-         }
-         else
-         {
-            filebrowser_set_type(FILEBROWSER_MANUAL_SCAN_DIR);
-            info.type          = FILE_TYPE_DIRECTORY;
-            dl_type            = DISPLAYLIST_FILE_BROWSER_SELECT_DIR;
-         }
+         filebrowser_set_type(FILEBROWSER_MANUAL_SCAN_DIR);
+         info.type          = FILE_TYPE_DIRECTORY;
+         dl_type            = DISPLAYLIST_FILE_BROWSER_SELECT_DIR;
          info.directory_ptr = idx;
-         info_label         = label;
+         info_label         = MENU_ENUM_LABEL_MANUAL_CONTENT_SCAN_DIR_STR;
+         info_path          = new_path;
 
-         action_ok_get_file_browser_start_path(
-               manual_content_scan_get_content_dir_ptr(),
-               new_path, parent_dir, sizeof(parent_dir), true);
-
-         info_path          = parent_dir;
+         /* The stored location's own entry reopens it; the other
+          * places open at their root */
+         if (type == MENU_SETTING_MANUAL_CONTENT_SCAN_DIR)
+         {
+            const char *stored = manual_content_scan_get_content_dir_ptr();
+            info_path          = parent_dir;
+#if defined(HAVE_NFSCLIENT) || defined(HAVE_SMBCLIENT)
+            /* Nothing above a network root can be browsed */
+            if (menu_displaylist_is_network_root(stored))
+               info_path       = stored;
+            else
+#endif
+               action_ok_get_file_browser_start_path(stored,
+                     new_path, parent_dir, sizeof(parent_dir), true);
+         }
          break;
       case ACTION_OK_DL_MANUAL_CONTENT_SCAN_DAT_FILE:
          filebrowser_clear_type();
@@ -1547,6 +1582,33 @@ int generic_action_ok_displaylist_push(
             info_path          = parent_dir;
          }
          break;
+#ifdef HAVE_VULKAN_CUSTOM_DRIVER
+      case ACTION_OK_DL_VULKAN_DRIVER:
+         {
+            char drivers_dir[DIR_MAX_LENGTH];
+
+            filebrowser_clear_type();
+            info.type          = type;
+            info.directory_ptr = idx;
+            info_label         = label;
+            dl_type            = DISPLAYLIST_FILE_BROWSER_SELECT_FILE;
+
+            fill_pathname_join_special(drivers_dir,
+                  settings->paths.directory_system, "vulkan_drivers",
+                  sizeof(drivers_dir));
+            if (     *settings->paths.directory_system
+                  && !path_is_directory(drivers_dir))
+               path_mkdir(drivers_dir);
+
+            action_ok_get_file_browser_start_path(
+                  settings->paths.path_vulkan_driver,
+                  drivers_dir,
+                  parent_dir, sizeof(parent_dir), true);
+
+            info_path          = parent_dir;
+         }
+         break;
+#endif
       case ACTION_OK_DL_CORE_LIST:
          filebrowser_clear_type();
          info.type          = type;
@@ -1649,6 +1711,10 @@ int generic_action_ok_displaylist_push(
 #if TARGET_OS_IPHONE
          fill_pathname_abbreviate_special(tmp, parent_dir, sizeof(tmp));
          strlcpy(parent_dir, tmp, sizeof(parent_dir));
+#endif
+#if defined(HAVE_NFSCLIENT) || defined(HAVE_SMBCLIENT)
+         if (menu_path && menu_displaylist_is_network_root(menu_path))
+            parent_dir[0] = '\0';
 #endif
 
          info.type          = type;
@@ -1828,6 +1894,7 @@ int generic_action_ok_displaylist_push(
       case ACTION_OK_DL_VIDEO_SETTINGS_LIST:
       case ACTION_OK_DL_VIDEO_HDR_SETTINGS_LIST:
       case ACTION_OK_DL_VIDEO_STEREO_SETTINGS_LIST:
+      case ACTION_OK_DL_VIDEO_DLSS_NR_SETTINGS_LIST:
       case ACTION_OK_DL_VIDEO_SYNCHRONIZATION_SETTINGS_LIST:
       case ACTION_OK_DL_VIDEO_FULLSCREEN_MODE_SETTINGS_LIST:
       case ACTION_OK_DL_VIDEO_WINDOWED_MODE_SETTINGS_LIST:
@@ -1878,6 +1945,7 @@ int generic_action_ok_displaylist_push(
       case ACTION_OK_DL_CPU_POLICY_SETTINGS_LIST:
       case ACTION_OK_DL_MENU_SOUNDS_LIST:
       case ACTION_OK_DL_MENU_FILE_BROWSER_SETTINGS_LIST:
+      case ACTION_OK_DL_MEDIA_PLAYER_SETTINGS_LIST:
       case ACTION_OK_DL_RETRO_ACHIEVEMENTS_SETTINGS_LIST:
       case ACTION_OK_DL_CHEEVOS_APPEARANCE_SETTINGS_LIST:
       case ACTION_OK_DL_CHEEVOS_VISIBILITY_SETTINGS_LIST:
@@ -1907,6 +1975,7 @@ int generic_action_ok_displaylist_push(
 #endif
       case ACTION_OK_DL_AUDIO_MIXER_SETTINGS_LIST:
       case ACTION_OK_DL_INPUT_RETROPAD_BINDS_LIST:
+      case ACTION_OK_DL_INPUT_CONTROLLERS_LIST:
       case ACTION_OK_DL_INPUT_HOTKEY_BINDS_LIST:
       case ACTION_OK_DL_RECORDING_SETTINGS_LIST:
       case ACTION_OK_DL_PLAYLIST_SETTINGS_LIST:
@@ -2026,6 +2095,7 @@ static const ok_dl_map_t ok_dl_map[] = {
    { MENU_ENUM_LABEL_VIDEO_SCALING_SETTINGS, ACTION_OK_DL_VIDEO_SCALING_SETTINGS_LIST },
    { MENU_ENUM_LABEL_VIDEO_HDR_SETTINGS, ACTION_OK_DL_VIDEO_HDR_SETTINGS_LIST },
    { MENU_ENUM_LABEL_VIDEO_STEREO_SETTINGS, ACTION_OK_DL_VIDEO_STEREO_SETTINGS_LIST },
+   { MENU_ENUM_LABEL_VIDEO_DLSS_NR_SETTINGS, ACTION_OK_DL_VIDEO_DLSS_NR_SETTINGS_LIST },
    { MENU_ENUM_LABEL_VIDEO_OUTPUT_SETTINGS, ACTION_OK_DL_VIDEO_OUTPUT_SETTINGS_LIST },
    { MENU_ENUM_LABEL_CRT_SWITCHRES_SETTINGS, ACTION_OK_DL_CRT_SWITCHRES_SETTINGS_LIST },
    { MENU_ENUM_LABEL_AUDIO_SETTINGS, ACTION_OK_DL_AUDIO_SETTINGS_LIST },
@@ -2039,6 +2109,7 @@ static const ok_dl_map_t ok_dl_map[] = {
    { MENU_ENUM_LABEL_PLAYLIST_MANAGER_LIST, ACTION_OK_DL_PLAYLIST_MANAGER_LIST },
    { MENU_ENUM_LABEL_RECORDING_SETTINGS, ACTION_OK_DL_RECORDING_SETTINGS_LIST },
    { MENU_ENUM_LABEL_INPUT_RETROPAD_BINDS, ACTION_OK_DL_INPUT_RETROPAD_BINDS_LIST },
+   { MENU_ENUM_LABEL_INPUT_CONTROLLERS, ACTION_OK_DL_INPUT_CONTROLLERS_LIST },
    { MENU_ENUM_LABEL_INPUT_HOTKEY_BINDS, ACTION_OK_DL_INPUT_HOTKEY_BINDS_LIST },
    { MENU_ENUM_LABEL_ACCOUNTS_YOUTUBE, ACTION_OK_DL_ACCOUNTS_YOUTUBE_LIST },
    { MENU_ENUM_LABEL_ACCOUNTS_TWITCH, ACTION_OK_DL_ACCOUNTS_TWITCH_LIST },
@@ -2087,6 +2158,7 @@ static const ok_dl_map_t ok_dl_map[] = {
    { MENU_ENUM_LABEL_CPU_POLICY_ENTRY, ACTION_OK_DL_CPU_POLICY_SETTINGS_LIST },
    { MENU_ENUM_LABEL_MENU_SOUNDS, ACTION_OK_DL_MENU_SOUNDS_LIST },
    { MENU_ENUM_LABEL_MENU_FILE_BROWSER_SETTINGS, ACTION_OK_DL_MENU_FILE_BROWSER_SETTINGS_LIST },
+   { MENU_ENUM_LABEL_MEDIA_PLAYER_SETTINGS, ACTION_OK_DL_MEDIA_PLAYER_SETTINGS_LIST },
    { MENU_ENUM_LABEL_RETRO_ACHIEVEMENTS_SETTINGS, ACTION_OK_DL_RETRO_ACHIEVEMENTS_SETTINGS_LIST },
    { MENU_ENUM_LABEL_CHEEVOS_APPEARANCE_SETTINGS, ACTION_OK_DL_CHEEVOS_APPEARANCE_SETTINGS_LIST },
    { MENU_ENUM_LABEL_CHEEVOS_VISIBILITY_SETTINGS, ACTION_OK_DL_CHEEVOS_VISIBILITY_SETTINGS_LIST },
@@ -2657,11 +2729,19 @@ static int generic_action_ok(const char *path,
          break;
       case ACTION_OK_LOAD_OVERRIDE_FILE:
 #ifdef HAVE_CONFIGFILE
-         flush_char = msg_hash_to_str(flush_id);
-         config_unload_override();
+         {
+            uint8_t before[MAX_USERS];
+            input_config_plays_as_players(before);
+            flush_char = msg_hash_to_str(flush_id);
+            config_unload_override();
 
-         if (!config_load_override_file(action_path))
-            return -1;
+            if (!config_load_override_file(action_path))
+            {
+               input_autoconfigure_plays_as_reread(before);
+               return -1;
+            }
+            input_autoconfigure_plays_as_reread(before);
+         }
 #endif
          break;
       case ACTION_OK_LOAD_CHEAT_FILE:
@@ -2689,6 +2769,17 @@ static int generic_action_ok(const char *path,
                   settings->paths.path_rgui_theme_preset, action_path);
          }
          break;
+#ifdef HAVE_VULKAN_CUSTOM_DRIVER
+      case ACTION_OK_LOAD_VULKAN_DRIVER:
+         flush_char = MENU_ENUM_LABEL_DEFERRED_VIDEO_OUTPUT_SETTINGS_LIST_STR;
+         if (settings)
+         {
+            configuration_set_string(settings,
+                  settings->paths.path_vulkan_driver, action_path);
+            vulkan_custom_driver_picked(settings->paths.path_vulkan_driver);
+         }
+         break;
+#endif
       case ACTION_OK_SUBSYSTEM_ADD:
          /* Return to the subsystem list (which rebuilds to offer the
           * next required ROM, or the Load entry once all are set)
@@ -2903,6 +2994,9 @@ DEFAULT_ACTION_OK_SET(action_ok_shader_preset_load,   ACTION_OK_LOAD_PRESET,    
 DEFAULT_ACTION_OK_SET(action_ok_shader_pass_load,     ACTION_OK_LOAD_SHADER_PASS,      MENU_ENUM_LABEL_SHADER_OPTIONS)
 #endif
 DEFAULT_ACTION_OK_SET(action_ok_rgui_menu_theme_preset_load,  ACTION_OK_LOAD_RGUI_MENU_THEME_PRESET,  MENU_ENUM_LABEL_MENU_SETTINGS)
+#ifdef HAVE_VULKAN_CUSTOM_DRIVER
+DEFAULT_ACTION_OK_SET(action_ok_vulkan_driver_load,  ACTION_OK_LOAD_VULKAN_DRIVER,  MENU_ENUM_LABEL_DEFERRED_VIDEO_OUTPUT_SETTINGS_LIST)
+#endif
 DEFAULT_ACTION_OK_SET(action_ok_set_manual_content_scan_dat_file, ACTION_OK_SET_MANUAL_CONTENT_SCAN_DAT_FILE, MENU_ENUM_LABEL_DEFERRED_MANUAL_CONTENT_SCAN_LIST)
 
 static int action_ok_file_load(const char *path,
@@ -3603,6 +3697,13 @@ static int action_ok_bluetooth(const char *path, const char *label,
 
    return 0;
 }
+
+static int action_ok_bluetooth_scan(const char *path, const char *label,
+         unsigned type, size_t idx, size_t entry_idx)
+{
+   menu_displaylist_bluetooth_scan();
+   return 0;
+}
 #endif
 
 #ifdef HAVE_NETWORKING
@@ -3628,7 +3729,7 @@ static void menu_input_wifi_cb(void *userdata, const char *passphrase)
 static int action_ok_wifi(const char *path, const char *label_setting,
       unsigned type, size_t idx, size_t entry_idx)
 {
-   menu_input_ctx_line_t line;
+   menu_input_ctx_line_t line = {0};
    wifi_network_scan_t* scan = driver_wifi_get_ssids();
    if (idx >= RBUF_LEN(scan->net_list))
       return -1;
@@ -4103,7 +4204,7 @@ DEFAULT_ACTION_DIALOG_START_TYPE(action_ok_disable_kiosk_mode,
 static int action_ok_rename_entry(const char *path,
       const char *label_setting, unsigned type, size_t idx, size_t entry_idx)
 {
-   menu_input_ctx_line_t line;
+   menu_input_ctx_line_t line = {0};
    playlist_t *playlist;
    const struct playlist_entry *entry = NULL;
 
@@ -4113,14 +4214,15 @@ static int action_ok_rename_entry(const char *path,
    line.idx                           = (unsigned)entry_idx;
    line.text_type                     = MENU_INPUT_DIALOG_KB_TYPE_TEXT;
    line.cb                            = menu_input_st_string_cb_rename_entry;
-
-   if (!menu_input_dialog_start(&line))
-      return -1;
+   line.dialog_type                   = MENU_INPUT_DIALOG_TYPE_EDIT;
 
    if ((playlist = playlist_get_cached()))
       playlist_get_index(playlist, entry_idx, &entry);
-   if (entry && entry->label && *entry->label)
-      input_driver_keyboard_line_append(entry->label, strlen(entry->label));
+   if (entry)
+      line.initial_text = entry->label;
+
+   if (!menu_input_dialog_start(&line))
+      return -1;
 
    return 0;
 }
@@ -4523,12 +4625,15 @@ static int action_ok_override_unload(const char *path,
       const char *label, unsigned type, size_t idx, size_t entry_idx)
 {
 #ifdef HAVE_CONFIGFILE
+   uint8_t before[MAX_USERS];
+   input_config_plays_as_players(before);
    if (config_unload_override())
    {
       const char *_msg = msg_hash_to_str(MSG_OVERRIDES_UNLOADED_SUCCESSFULLY);
       runloop_msg_queue_push(_msg, strlen(_msg), 1, 100, true, NULL,
             MESSAGE_QUEUE_ICON_DEFAULT, MESSAGE_QUEUE_CATEGORY_SUCCESS);
    }
+   input_autoconfigure_plays_as_reread(before);
 #endif
    return 0;
 }
@@ -4549,60 +4654,100 @@ static int action_ok_path_scan_directory(const char *path,
 }
 #endif
 
+static void action_ok_manual_content_scan_set_dir_kind(
+      const char *content_dir, enum manual_content_scan_path_kind kind)
+{
+#ifdef HAVE_COCOATOUCH
+   /* For iOS, set the path using realpath because the path name
+    * can start with /private and this ensures the path starts with it.
+    * This will allow the path to be properly substituted when
+    * fill_pathname_expand_special() is called. */
+   char tmp_dir[PATH_MAX_LENGTH];
+   char *real_dir = NULL;
+   fill_pathname_expand_special(tmp_dir, content_dir, sizeof(tmp_dir));
+   if ((real_dir = realpath(tmp_dir, NULL)))
+      content_dir = real_dir;
+#endif
+
+   /* 'Reset' file browser */
+   filebrowser_clear_type();
+
+   /* Update manual content scan settings */
+   manual_content_scan_set_menu_content_dir_kind(content_dir, kind);
+#ifdef HAVE_COCOATOUCH
+   free(real_dir);
+#endif
+
+   /* Return to 'manual content scan' menu */
+   menu_entries_flush_stack(MENU_ENUM_LABEL_DEFERRED_MANUAL_CONTENT_SCAN_LIST_STR, 0);
+}
+
+/* Also called by the Apple file pickers opened from Content Location. */
+void action_ok_manual_content_scan_set_dir(const char *content_dir)
+{
+   action_ok_manual_content_scan_set_dir_kind(content_dir,
+         MANUAL_CONTENT_SCAN_PATH_UNKNOWN);
+}
+
+/* Whether Content Location's list of places or its browser, or a
+ * folder entered from it, is the current menu. Back leaves the browser
+ * type set; a folder entered keeps the browser's label. */
+bool action_ok_manual_content_scan_dir_browsing(void)
+{
+   const char *menu_label = NULL;
+   if (filebrowser_get_type() != FILEBROWSER_MANUAL_SCAN_DIR)
+      return false;
+   menu_entries_get_last_stack(NULL, &menu_label, NULL, NULL, NULL);
+   return string_is_equal(menu_label,
+         MENU_ENUM_LABEL_MANUAL_CONTENT_SCAN_DIR_STR)
+       || string_is_equal(menu_label,
+         MENU_ENUM_LABEL_DEFERRED_MANUAL_CONTENT_SCAN_DIR_LIST_STR);
+}
+
+#ifdef HAVE_LIBRETRODB
+/* Scan File: OK on a file scans it, as the Scan action does. */
+static int action_ok_path_scan_file(const char *path,
+      const char *label, unsigned type, size_t idx, size_t entry_idx)
+{
+   return action_scan_file(path, label, type, idx);
+}
+#endif
+
 static int action_ok_path_manual_scan_directory(const char *path,
       const char *label, unsigned type, size_t idx, size_t entry_idx)
 {
 #if TARGET_OS_IPHONE
    char dir_path[DIR_MAX_LENGTH];
 #endif
-   char content_dir[DIR_MAX_LENGTH];
-   unsigned flush_type    = 0;
+   char content_dir[PATH_MAX_LENGTH];
    const char *menu_path  = NULL;
 
    content_dir[0]         = '\0';
 
-   if (filebrowser_get_type() == FILEBROWSER_SCAN_FILE)
-   {
-      menu_entries_get_last_stack(&menu_path, NULL, NULL, NULL, NULL);
+   menu_entries_get_last_stack(&menu_path, NULL, NULL, NULL, NULL);
 
+   /* The folder entry picks the folder, any other entry its file */
+   if (type == FILE_TYPE_MANUAL_SCAN_DIRECTORY)
+   {
+      if (menu_path && *menu_path)
+         strlcpy(content_dir, menu_path, sizeof(content_dir));
+   }
+   else
+   {
 #if TARGET_OS_IPHONE
       fill_pathname_expand_special(dir_path, menu_path, sizeof(dir_path));
       menu_path = dir_path;
 #endif
-
-      fill_pathname_join_special(content_dir, menu_path, path, sizeof(content_dir));
+      /* A path that does not fit is refused, not cut short */
+      if (   !menu_path
+          || fill_pathname_join_special(content_dir, menu_path, path,
+               sizeof(content_dir)) >= sizeof(content_dir))
+         return 0;
    }
-   else
-   {
-      /* Get user-selected scan directory */
-      menu_entries_get_last_stack(&menu_path,
-            NULL, NULL, NULL, NULL);
-      if (menu_path && *menu_path)
-         strlcpy(content_dir, menu_path, sizeof(content_dir));
-   }
-   /* 'Reset' file browser */
-   filebrowser_clear_type();
 
-
-#ifdef HAVE_COCOATOUCH
-   {
-      /* For iOS, set the path using realpath because the path name
-       * can start with /private and this ensures the path starts with it.
-       * This will allow the path to be properly substituted when
-       * fill_pathname_expand_special() is called. */
-      char tmp_dir[DIR_MAX_LENGTH];
-      tmp_dir[0] = '\0';
-      fill_pathname_expand_special(tmp_dir, content_dir, sizeof(content_dir));
-      realpath(tmp_dir, content_dir);
-   }
-#endif
-
-   /* Update manual content scan settings */
-   manual_content_scan_set_menu_content_dir(content_dir);
-
-   /* Return to 'manual content scan' menu */
-   menu_entries_flush_stack(MENU_ENUM_LABEL_DEFERRED_MANUAL_CONTENT_SCAN_LIST_STR, flush_type);
-
+   action_ok_manual_content_scan_set_dir_kind(content_dir,
+         type == FILE_TYPE_MANUAL_SCAN_DIRECTORY
+         ? MANUAL_CONTENT_SCAN_PATH_FOLDER : MANUAL_CONTENT_SCAN_PATH_FILE);
    return 0;
 }
 
@@ -4903,6 +5048,97 @@ static int action_ok_input_bt_pair(const char *path,
    menu_st->flags &= ~MENU_ST_FLAG_PREVENT_POPULATE;
    return 0;
 }
+
+/* Information > Input Information: the model of controller on the
+ * entry's port left out, or one left out read again; the controller
+ * driver is restarted for it, as only a connect looks. */
+static int action_ok_input_device_ignore_change(size_t entry_idx,
+      bool ignore)
+{
+   char msg[128];
+   size_t _len               = 0;
+   uint16_t vid              = 0;
+   uint16_t pid              = 0;
+   settings_t *settings      = config_get_ptr();
+   struct menu_state *menu_st = menu_state_get_ptr();
+   char *list                = settings->arrays.input_ignore_devices;
+
+   if (ignore)
+   {
+      vid = input_config_get_device_vid((unsigned)entry_idx);
+      pid = input_config_get_device_pid((unsigned)entry_idx);
+      if (     (!vid && !pid)
+            || !input_ignore_devices_add(list,
+               sizeof(settings->arrays.input_ignore_devices), vid, pid))
+         return 0;
+      _len = snprintf(msg, sizeof(msg),
+            msg_hash_to_str(MSG_INPUT_DEVICE_IGNORED),
+            (unsigned)entry_idx + 1, (unsigned)vid, (unsigned)pid);
+   }
+   else
+   {
+      if (!input_ignore_devices_at(list, (unsigned)entry_idx, &vid, &pid))
+         return 0;
+      input_ignore_devices_remove(list, vid, pid);
+      _len = snprintf(msg, sizeof(msg),
+            msg_hash_to_str(MSG_INPUT_DEVICE_UNIGNORED),
+            (unsigned)vid, (unsigned)pid);
+   }
+   settings->flags |= SETTINGS_FLG_MODIFIED;
+   joypad_driver_reinit(input_driver_current_data(),
+         settings->arrays.input_joypad_driver);
+   runloop_msg_queue_push(msg, _len, 1, 180, true, NULL,
+         MESSAGE_QUEUE_ICON_DEFAULT, MESSAGE_QUEUE_CATEGORY_INFO);
+   menu_st->flags |=  MENU_ST_FLAG_ENTRIES_NEED_REFRESH;
+   menu_st->flags &= ~MENU_ST_FLAG_PREVENT_POPULATE;
+   return 0;
+}
+
+static int action_ok_input_device_ignore(const char *path,
+      const char *label, unsigned type, size_t idx, size_t entry_idx)
+{
+   return action_ok_input_device_ignore_change(entry_idx, true);
+}
+
+static int action_ok_input_device_unignore(const char *path,
+      const char *label, unsigned type, size_t idx, size_t entry_idx)
+{
+   return action_ok_input_device_ignore_change(entry_idx, false);
+}
+
+#ifdef HAVE_WINUSB_BIND
+/* Information > Input Information: every DualShock 3 plugged in moved
+ * to WinUSB, or given back to Windows' own driver. */
+static int action_ok_input_ds3_enable(const char *path,
+      const char *label, unsigned type, size_t idx, size_t entry_idx)
+{
+   winusb_bind_request(WINUSB_BIND_DS3, true);
+   return 0;
+}
+
+static int action_ok_input_ds3_restore(const char *path,
+      const char *label, unsigned type, size_t idx, size_t entry_idx)
+{
+   winusb_bind_request(WINUSB_BIND_DS3, false);
+   return 0;
+}
+
+/* Information > Input Information: the Wii U GameCube adapters plugged
+ * in moved to WinUSB. */
+static int action_ok_input_gca_enable(const char *path,
+      const char *label, unsigned type, size_t idx, size_t entry_idx)
+{
+   winusb_bind_request(WINUSB_BIND_GCA, true);
+   return 0;
+}
+
+static int action_ok_input_xid_enable(const char *path,
+      const char *label, unsigned type, size_t idx, size_t entry_idx)
+{
+   winusb_bind_request(WINUSB_BIND_XID, true);
+   return 0;
+}
+#endif
 
 static int action_ok_start_recording(const char *path,
       const char *label, unsigned type, size_t idx, size_t entry_idx)
@@ -6244,6 +6480,7 @@ static int action_ok_sideload_core(const char *path,
 {
    const char *menu_path    = NULL;
    bool core_loaded         = false;
+   bool pushed;
    menu_handle_t *menu      = menu_state_get_ptr()->driver_data;
    settings_t *settings     = config_get_ptr();
    const char *dir_libretro = settings->paths.directory_libretro;
@@ -6260,21 +6497,31 @@ static int action_ok_sideload_core(const char *path,
       char backup_path[PATH_MAX_LENGTH];
       fill_pathname_join_special(
             backup_path, menu_path, path, sizeof(backup_path));
-      task_push_core_restore(backup_path, dir_libretro, &core_loaded);
+      pushed = task_push_core_restore(backup_path, dir_libretro, &core_loaded);
    }
    else
-      task_push_core_restore(path, dir_libretro, &core_loaded);
+      pushed = task_push_core_restore(path, dir_libretro, &core_loaded);
 
    /* Flush stack
     * > Since the 'sideload core' option is present
     *   in several locations, can't flush to a predefined
-    *   level - just go to the top */
-   menu_entries_flush_stack(NULL, 0);
+    *   level - just go to the top
+    * > Only for a sideload that started: one refused leaves the
+    *   user where they were, with the reason on screen */
+   if (pushed)
+      menu_entries_flush_stack(NULL, 0);
 
    return 0;
 }
 
 #ifdef HAVE_NETWORKING
+/* An Online Updater bundle (assets, autoconfig, core info, databases,
+ * overlays...) by its CB enum, for callers outside a menu entry */
+int action_ok_download_bundle(enum msg_hash_enums enum_idx)
+{
+   return action_ok_download_generic("", "", NULL, 0, 0, 0, enum_idx);
+}
+
 DEFAULT_ACTION_OK_DOWNLOAD(action_ok_core_system_files_download, MENU_ENUM_LABEL_CB_CORE_SYSTEM_FILES_DOWNLOAD)
 DEFAULT_ACTION_OK_DOWNLOAD(action_ok_core_content_thumbnails, MENU_ENUM_LABEL_CB_CORE_THUMBNAILS_DOWNLOAD)
 DEFAULT_ACTION_OK_DOWNLOAD(action_ok_download_url, MENU_ENUM_LABEL_CB_DOWNLOAD_URL)
@@ -6356,6 +6603,10 @@ static int action_ok_core_options_flush(const char *path,
    return 0;
 }
 
+#if defined(_MSC_VER) && _MSC_VER == 1400
+/* VC8's optimizer crashes on this function in Griffin builds. */
+#pragma optimize("", off)
+#endif
 static int action_ok_dialog_init(struct menu_state *menu_st)
 {
    menu_displaylist_info_t info;
@@ -6393,6 +6644,10 @@ error:
    menu_displaylist_info_free(&info);
    return -1;
 }
+
+#if defined(_MSC_VER) && _MSC_VER == 1400
+#pragma optimize("", on)
+#endif
 
 int action_ok_quit(const char *path, const char *label, unsigned type, size_t idx, size_t entry_idx)
 {
@@ -7143,7 +7398,7 @@ static void action_input_add_entry_to_new_playlist_quickmenu(void *userdata, con
 static int action_ok_add_entry_to_new_playlist(const char *path,
    const char *label, unsigned type, size_t idx, size_t entry_idx)
 {
-   menu_input_ctx_line_t line;
+   menu_input_ctx_line_t line = {0};
    line.label                 = msg_hash_to_str(MENU_ENUM_LABEL_VALUE_CREATE_NEW_PLAYLIST);
    line.label_setting         = NULL;
    line.type                  = 0;
@@ -7294,10 +7549,10 @@ static int action_ok_delete_entry(const char *path,
    char *conf_path           = NULL;
    char *def_conf_path       = NULL;
    char *def_conf_music_path = NULL;
-#if defined(HAVE_FFMPEG) || defined(HAVE_MPV)
+#if defined(HAVE_FFMPEG) || defined(HAVE_MPV) || defined(HAVE_WEBMPLAYER)
    char *def_conf_video_path = NULL;
 #endif
-#ifdef HAVE_IMAGEVIEWER
+#if defined(HAVE_IMAGEVIEWER) || defined(HAVE_MENU)
    char *def_conf_img_path   = NULL;
 #endif
    char *def_conf_fav_path   = NULL;
@@ -7311,10 +7566,10 @@ static int action_ok_delete_entry(const char *path,
    conf_path                 = playlist_get_conf_path(playlist);
    def_conf_path             = playlist_get_conf_path(g_defaults.content_history);
    def_conf_music_path       = playlist_get_conf_path(g_defaults.music_history);
-#if defined(HAVE_FFMPEG) || defined(HAVE_MPV)
+#if defined(HAVE_FFMPEG) || defined(HAVE_MPV) || defined(HAVE_WEBMPLAYER)
    def_conf_video_path       = playlist_get_conf_path(g_defaults.video_history);
 #endif
-#ifdef HAVE_IMAGEVIEWER
+#if defined(HAVE_IMAGEVIEWER) || defined(HAVE_MENU)
    def_conf_img_path         = playlist_get_conf_path(g_defaults.image_history);
 #endif
    def_conf_fav_path         = playlist_get_conf_path(g_defaults.content_favorites);
@@ -7323,11 +7578,11 @@ static int action_ok_delete_entry(const char *path,
       playlist               = g_defaults.content_history;
    else if (string_is_equal(conf_path, def_conf_music_path))
       playlist               = g_defaults.music_history;
-#if defined(HAVE_FFMPEG) || defined(HAVE_MPV)
+#if defined(HAVE_FFMPEG) || defined(HAVE_MPV) || defined(HAVE_WEBMPLAYER)
    else if (string_is_equal(conf_path, def_conf_video_path))
       playlist               = g_defaults.video_history;
 #endif
-#ifdef HAVE_IMAGEVIEWER
+#if defined(HAVE_IMAGEVIEWER) || defined(HAVE_MENU)
    else if (string_is_equal(conf_path, def_conf_img_path))
       playlist               = g_defaults.image_history;
 #endif
@@ -7435,6 +7690,9 @@ STATIC_DEFAULT_ACTION_OK_FUNC(action_ok_push_accounts_cheevos_list, ACTION_OK_DL
 STATIC_DEFAULT_ACTION_OK_FUNC(action_ok_push_eject_disc, ACTION_OK_DL_EJECT_DISC)
 #endif
 STATIC_DEFAULT_ACTION_OK_FUNC(action_ok_rgui_menu_theme_preset, ACTION_OK_DL_RGUI_MENU_THEME_PRESET)
+#ifdef HAVE_VULKAN_CUSTOM_DRIVER
+STATIC_DEFAULT_ACTION_OK_FUNC(action_ok_vulkan_driver, ACTION_OK_DL_VULKAN_DRIVER)
+#endif
 #ifdef HAVE_NETWORKING
 STATIC_DEFAULT_ACTION_OK_FUNC(action_ok_pl_thumbnails_updater_list, ACTION_OK_DL_PL_THUMBNAILS_UPDATER_LIST)
 #endif
@@ -7872,6 +8130,23 @@ int action_ok_push_manual_content_scan_dir_select(const char *path,
          ACTION_OK_DL_MANUAL_SCAN_DIR_LIST);
 }
 
+/* The browser type lets an Apple file picker opened from the list
+ * set the location */
+static int action_ok_push_manual_content_scan_dir_list(const char *path,
+      const char *label, unsigned type, size_t idx, size_t entry_idx)
+{
+   filebrowser_set_type(FILEBROWSER_MANUAL_SCAN_DIR);
+   return generic_action_ok_displaylist_push(
+         path, NULL,
+         MENU_ENUM_LABEL_DEFERRED_MANUAL_CONTENT_SCAN_DIR_LIST_STR, type,
+         idx, entry_idx,
+         ACTION_OK_DL_PUSH_DEFAULT);
+}
+
+DEFAULT_ACTION_OK_DL_PUSH(action_ok_manual_content_scan_dir_start, FILEBROWSER_MANUAL_SCAN_DIR, ACTION_OK_DL_MANUAL_SCAN_DIR_LIST, settings->paths.directory_menu_content)
+DEFAULT_ACTION_OK_DL_PUSH(action_ok_manual_content_scan_dir_downloads, FILEBROWSER_MANUAL_SCAN_DIR, ACTION_OK_DL_MANUAL_SCAN_DIR_LIST, settings->paths.directory_core_assets)
+DEFAULT_ACTION_OK_DL_PUSH(action_ok_manual_content_scan_dir_drive, FILEBROWSER_MANUAL_SCAN_DIR, ACTION_OK_DL_MANUAL_SCAN_DIR_LIST, path)
+
 /* TODO/FIXME */
 static int action_ok_push_dropdown_setting_core_options_item_special(
       const char *path,
@@ -7946,7 +8221,7 @@ static int generic_action_ok_dropdown_setting(const char *path, const char *labe
 
    switch (setting->type)
    {
-      /* Integer lists are built from the minimum (0 unless the range
+      /* Int lists are built from the minimum (0 unless the range
        * enforces one) in whole steps, so entry @idx is that value;
        * the value is taken back the same way, not from offset_by,
        * which only some settings set to their minimum. */
@@ -7966,19 +8241,8 @@ static int generic_action_ok_dropdown_setting(const char *path, const char *labe
          }
          break;
       case ST_UINT:
-         {
-            int32_t i_min  = (setting->flags & SD_FLAG_ENFORCE_MINRANGE)
-               ? (int32_t)setting->min : 0;
-            int32_t i_step = (int32_t)setting->step;
-            int32_t value;
-            if (i_step < 1)
-               i_step = 1;
-            value = i_min + (int32_t)idx * i_step;
-            if (     (setting->flags & SD_FLAG_ENFORCE_MAXRANGE)
-                  && value > (int32_t)setting->max)
-               value = (int32_t)setting->max;
-            setting_uint_set(setting, (unsigned)value);
-         }
+         /* Each entry carries its value: a list may leave values out */
+         setting_uint_set(setting, (unsigned)entry_idx);
          break;
       case ST_FLOAT:
          {
@@ -8005,7 +8269,7 @@ static int generic_action_ok_dropdown_setting(const char *path, const char *labe
       case ST_STRING_OPTIONS:
          if (setting->actions->repr)
          {
-            const char *tok       = setting->values;
+            const char *tok       = setting->aux.values;
             unsigned tok_idx      = 0;
 
             while (tok)
@@ -8161,13 +8425,13 @@ static int action_ok_push_dropdown_item_video_shader_param_generic(const char *p
       return -1;
 
    /* Clamp against the live parameter's stable range, then submit
-    * through the owning-thread setter (see menu_cbs_right.c). */
+    * through the driver-level setter (see menu_cbs_right.c). */
    param_prev           = &shader_info.data->parameters[entry_idx - offset];
    val                  = MIN(MAX(param_prev->minimum, val),
          param_prev->maximum);
    video_shader_driver_set_parameter(shader_info.data,
          (unsigned)(entry_idx - offset), val);
-   param_menu->current  = val;
+   video_shader_param_set(param_menu, val);
 
    shader->flags       |= SHDR_FLAG_MODIFIED;
 
@@ -8679,6 +8943,30 @@ static int action_ok_push_dropdown_item_input_select_physical_keyboard(const cha
 
 #endif
 
+static int action_ok_push_dropdown_item_input_plays_as(const char *path,
+      const char *label, unsigned type, size_t idx, size_t entry_idx)
+{
+   unsigned row_type = string_to_unsigned(label);
+
+   if (     row_type < MENU_SETTINGS_INPUT_PLAYS_AS_BEGIN
+         || row_type > MENU_SETTINGS_INPUT_PLAYS_AS_END)
+      return -1;
+   menu_input_plays_as_change(row_type - MENU_SETTINGS_INPUT_PLAYS_AS_BEGIN,
+         (unsigned)entry_idx);
+   return action_cancel_pop_default(NULL, NULL, 0, 0);
+}
+
+static int action_ok_push_dropdown_item_input_plays_as_add(const char *path,
+      const char *label, unsigned type, size_t idx, size_t entry_idx)
+{
+   unsigned p_user = string_to_unsigned(label);
+
+   if (p_user >= MAX_USERS || entry_idx >= MAX_INPUT_DEVICES)
+      return -1;
+   menu_input_plays_as_change((unsigned)entry_idx, p_user + 1);
+   return action_cancel_pop_default(NULL, NULL, 0, 0);
+}
+
 static int action_ok_push_dropdown_item_input_description(const char *path,
       const char *label, unsigned type, size_t idx, size_t entry_idx)
 {
@@ -8860,7 +9148,8 @@ static int action_ok_state_slot_run(const char *path,
    menu_entries_pop_stack(&new_selection_ptr, 0, 0);
    menu_st->selection_ptr     = 0;
 
-   menu_st->driver_data->state_slot_run = idx - 1;
+   menu_st->driver_data->state_slot_run         = idx - 1;
+   menu_st->driver_data->state_slot_run_pending = true;
 
    menu_st->flags |=  MENU_ST_FLAG_ENTRIES_NEED_REFRESH;
    menu_st->flags &= ~MENU_ST_FLAG_PREVENT_POPULATE;
@@ -9155,6 +9444,29 @@ static int action_ok_input_description_dropdown_box_list(const char *path,
       ACTION_OK_DL_DROPDOWN_BOX_LIST_INPUT_DESCRIPTION);
 }
 
+static int action_ok_input_plays_as_dropdown_box_list(const char *path,
+      const char *label, unsigned type, size_t idx, size_t entry_idx)
+{
+   return generic_action_ok_displaylist_push(
+      path, NULL,
+      label, type,
+      idx, entry_idx,
+      ACTION_OK_DL_DROPDOWN_BOX_LIST_INPUT_PLAYS_AS);
+}
+
+static int action_ok_input_plays_as_add_dropdown_box_list(const char *path,
+      const char *label, unsigned type, size_t idx, size_t entry_idx)
+{
+   char user_str[12];
+   /* the list reads the player's user from its path */
+   snprintf(user_str, sizeof(user_str), "%u", (unsigned)entry_idx);
+   return generic_action_ok_displaylist_push(
+      user_str, NULL,
+      label, type,
+      idx, entry_idx,
+      ACTION_OK_DL_DROPDOWN_BOX_LIST_INPUT_PLAYS_AS_ADD);
+}
+
 static int action_ok_input_description_kbd_dropdown_box_list(
       const char *path,
       const char *label, unsigned type, size_t idx, size_t entry_idx)
@@ -9258,6 +9570,8 @@ static int action_ok_manual_content_scan_start(const char *path,
 {
    playlist_config_t playlist_config;
    settings_t *settings                = config_get_ptr();
+   if (task_dbscan_chain_refuse())
+      return 0;
    /* Note: playlist_config.path will set by the
     * task itself */
    playlist_config.capacity            = COLLECTION_SIZE;
@@ -9268,7 +9582,7 @@ static int action_ok_manual_content_scan_start(const char *path,
          settings->bools.playlist_portable_paths ?
                settings->paths.directory_menu_content : NULL);
 
-   task_push_manual_content_scan(true, NULL);
+   task_push_manual_content_scan(true, NULL, NULL);
    return 0;
 }
 
@@ -9734,6 +10048,8 @@ static int action_ok_playlist_refresh(const char *path,
    playlist_config = playlist_get_config(playlist);
    if (!playlist_config || !*playlist_config->path)
       return -1;
+   if (task_dbscan_chain_refuse())
+      return 0;
    stat = manual_content_scan_set_menu_from_playlist(playlist,
          settings->paths.path_content_database,
          settings->bools.show_hidden_files);
@@ -9818,7 +10134,35 @@ static int action_ok_playlist_refresh(const char *path,
             settings->bools.playlist_portable_paths ?
             settings->paths.directory_menu_content : NULL);
 
-      task_push_manual_content_scan(false, NULL);
+      task_push_manual_content_scan(false, NULL, NULL);
+   }
+   return 0;
+}
+
+static void action_ok_playlist_refresh_all_cb(
+      const task_dbscan_chain_result_t *res, void *user_data)
+{
+   char msg[128];
+   int  n = snprintf(msg, sizeof(msg),
+         msg_hash_to_str(MSG_PLAYLIST_MANAGER_REFRESH_ALL_DONE),
+         res->ran, res->skipped, res->failed);
+   /* the length written, not the one a translation asked for */
+   size_t _len = n < 0 ? 0 : (size_t)n >= sizeof(msg) ? sizeof(msg) - 1 : (size_t)n;
+   runloop_msg_queue_push(msg, _len, 1, 180, true, NULL,
+         MESSAGE_QUEUE_ICON_DEFAULT, MESSAGE_QUEUE_CATEGORY_INFO);
+}
+
+static int action_ok_playlist_refresh_all(const char *path,
+      const char *label, unsigned type, size_t idx, size_t entry_idx)
+{
+   task_dbscan_item_t *item = NULL;
+   if (task_dbscan_chain_refuse_start())
+      return 0;
+   if ((item = (task_dbscan_item_t*)calloc(1, sizeof(*item))))
+   {
+      item->kind = TASK_DBSCAN_ITEM_REFRESH_ALL;
+      task_push_dbscan_chain(item, 1, NULL,
+            action_ok_playlist_refresh_all_cb, NULL);
    }
    return 0;
 }
@@ -9864,6 +10208,7 @@ static int action_ok_nfs_browse(const char *path,
       const char *label, unsigned type, size_t idx, size_t entry_idx)
 {
    char nfs_path[PATH_MAX_LENGTH];
+   const char *menu_label = NULL;
 
    if (!menu_displaylist_build_nfs_root(nfs_path, sizeof(nfs_path)))
    {
@@ -9874,6 +10219,14 @@ static int action_ok_nfs_browse(const char *path,
             MESSAGE_QUEUE_CATEGORY_ERROR);
       return -1;
    }
+
+   menu_entries_get_last_stack(NULL, &menu_label, NULL, NULL, NULL);
+   if (string_is_equal(menu_label,
+            MENU_ENUM_LABEL_DEFERRED_MANUAL_CONTENT_SCAN_DIR_LIST_STR))
+      return generic_action_ok_displaylist_push(
+            nfs_path, nfs_path, label, type, idx, entry_idx,
+            ACTION_OK_DL_MANUAL_SCAN_DIR_LIST);
+
    filebrowser_set_type(FILEBROWSER_SELECT_FILE);
    return generic_action_ok_displaylist_push(
       nfs_path,
@@ -9889,6 +10242,7 @@ static int action_ok_smb_browse(const char *path,
       const char *label, unsigned type, size_t idx, size_t entry_idx)
 {
    settings_t *settings = config_get_ptr();
+   const char *menu_label = NULL;
    char smb_path[PATH_MAX_LENGTH];
 
    if (!settings->bools.smb_client_enable)
@@ -9910,6 +10264,13 @@ static int action_ok_smb_browse(const char *path,
             MESSAGE_QUEUE_CATEGORY_ERROR);
       return -1;
    }
+
+   menu_entries_get_last_stack(NULL, &menu_label, NULL, NULL, NULL);
+   if (string_is_equal(menu_label,
+            MENU_ENUM_LABEL_DEFERRED_MANUAL_CONTENT_SCAN_DIR_LIST_STR))
+      return generic_action_ok_displaylist_push(
+            smb_path, smb_path, label, type, idx, entry_idx,
+            ACTION_OK_DL_MANUAL_SCAN_DIR_LIST);
 
    /* Push as a content list under the same label Load Content uses:
     * files inside then bind to the detect-core handler instead of
@@ -9988,6 +10349,14 @@ static int menu_cbs_init_bind_ok_compare_label(menu_file_list_cbs_t *cbs,
 #endif
          {MENU_ENUM_LABEL_RUN_MUSIC,                           action_ok_audio_run},
          {MENU_ENUM_LABEL_INPUT_BT_PAIR,                       action_ok_input_bt_pair},
+         {MENU_ENUM_LABEL_INPUT_DEVICE_IGNORE,                 action_ok_input_device_ignore},
+         {MENU_ENUM_LABEL_INPUT_DEVICE_UNIGNORE,               action_ok_input_device_unignore},
+#ifdef HAVE_WINUSB_BIND
+         {MENU_ENUM_LABEL_INPUT_DS3_ENABLE,                    action_ok_input_ds3_enable},
+         {MENU_ENUM_LABEL_INPUT_DS3_RESTORE,                   action_ok_input_ds3_restore},
+         {MENU_ENUM_LABEL_INPUT_GCA_ENABLE,                    action_ok_input_gca_enable},
+         {MENU_ENUM_LABEL_INPUT_XID_ENABLE,                    action_ok_input_xid_enable},
+#endif
 #ifdef HAVE_AUDIOMIXER
          {MENU_ENUM_LABEL_ADD_TO_MIXER_AND_COLLECTION,         action_ok_audio_add_to_mixer_and_collection},
          {MENU_ENUM_LABEL_ADD_TO_MIXER_AND_COLLECTION_AND_PLAY,action_ok_audio_add_to_mixer_and_collection_and_play},
@@ -10115,10 +10484,13 @@ static int menu_cbs_init_bind_ok_compare_label(menu_file_list_cbs_t *cbs,
          {MENU_ENUM_LABEL_OSK_OVERLAY_PRESET,                  action_ok_osk_overlay_preset},
          {MENU_ENUM_LABEL_RECORD_CONFIG,                       action_ok_record_configfile},
          {MENU_ENUM_LABEL_STREAM_CONFIG,                       action_ok_stream_configfile},
+#ifdef HAVE_VULKAN_CUSTOM_DRIVER
+         {MENU_ENUM_LABEL_VIDEO_VULKAN_DRIVER_PATH,            action_ok_vulkan_driver},
+#endif
 #ifdef HAVE_RGUI
          {MENU_ENUM_LABEL_RGUI_MENU_THEME_PRESET,              action_ok_rgui_menu_theme_preset},
 #endif
-         {MENU_ENUM_LABEL_MANUAL_CONTENT_SCAN_DIR,             action_ok_push_manual_content_scan_dir_select},
+         {MENU_ENUM_LABEL_MANUAL_CONTENT_SCAN_DIR,             action_ok_push_manual_content_scan_dir_list},
          {MENU_ENUM_LABEL_SCAN_METHOD,                         action_ok_scan_method},
          {MENU_ENUM_LABEL_SCAN_USE_DB,                         action_ok_scan_use_db},
          {MENU_ENUM_LABEL_SCAN_DB_SELECT,                      action_ok_scan_db_select},
@@ -10175,6 +10547,7 @@ static int menu_cbs_init_bind_ok_compare_label(menu_file_list_cbs_t *cbs,
          {MENU_ENUM_LABEL_PLAYLIST_MANAGER_RESET_CORES,        action_ok_playlist_reset_cores},
          {MENU_ENUM_LABEL_PLAYLIST_MANAGER_CLEAN_PLAYLIST,     action_ok_playlist_clean},
          {MENU_ENUM_LABEL_PLAYLIST_MANAGER_REFRESH_PLAYLIST,   action_ok_playlist_refresh},
+         {MENU_ENUM_LABEL_PLAYLIST_MANAGER_REFRESH_ALL_PLAYLISTS, action_ok_playlist_refresh_all},
          {MENU_ENUM_LABEL_ACCOUNTS_RETRO_ACHIEVEMENTS,         action_ok_push_accounts_cheevos_list},
 #ifdef HAVE_LAKKA
          {MENU_ENUM_LABEL_EJECT_DISC,                          action_ok_push_eject_disc},
@@ -10225,6 +10598,7 @@ static int menu_cbs_init_bind_ok_compare_label(menu_file_list_cbs_t *cbs,
          {MENU_ENUM_LABEL_REMAP_FILE_REMOVE_GAME,              action_ok_remap_file_remove_game},
          {MENU_ENUM_LABEL_REMAP_FILE_RESET,                    action_ok_remap_file_reset},
          {MENU_ENUM_LABEL_INPUT_REMAP_FIND,                    action_ok_input_remap_find},
+         {MENU_ENUM_LABEL_INPUT_PLAYS_AS_ADD,                  action_ok_input_plays_as_add_dropdown_box_list},
          {MENU_ENUM_LABEL_REMAP_FILE_FLUSH,                    action_ok_remap_file_flush},
          {MENU_ENUM_LABEL_OVERRIDE_FILE_LOAD,                  action_ok_override_file},
          {MENU_ENUM_LABEL_OVERRIDE_FILE_SAVE_AS,               action_ok_override_file_save_as},
@@ -10239,6 +10613,7 @@ static int menu_cbs_init_bind_ok_compare_label(menu_file_list_cbs_t *cbs,
          {MENU_ENUM_LABEL_FILE_BROWSER_OPEN_PICKER,            action_ok_open_picker},
 #ifdef HAVE_BLUETOOTH
          {MENU_ENUM_LABEL_BLUETOOTH_SETTINGS,                  action_ok_bluetooth_list},
+         {MENU_ENUM_LABEL_BLUETOOTH_SCAN,                      action_ok_bluetooth_scan},
 #endif
 #ifdef HAVE_NETWORKING
 #ifdef HAVE_WIFI
@@ -10311,6 +10686,9 @@ static int menu_cbs_init_bind_ok_compare_label(menu_file_list_cbs_t *cbs,
          {MENU_ENUM_LABEL_RECORD_CONFIG,                       action_ok_record_configfile},
          {MENU_ENUM_LABEL_STREAM_CONFIG,                       action_ok_stream_configfile},
          {MENU_ENUM_LABEL_RGUI_MENU_THEME_PRESET,              action_ok_rgui_menu_theme_preset},
+#ifdef HAVE_VULKAN_CUSTOM_DRIVER
+         {MENU_ENUM_LABEL_VIDEO_VULKAN_DRIVER_PATH,            action_ok_vulkan_driver},
+#endif
          {MENU_ENUM_LABEL_ACCOUNTS_RETRO_ACHIEVEMENTS,         action_ok_push_accounts_cheevos_list},
          {MENU_ENUM_LABEL_FAVORITES,                           action_ok_push_content_list},
          {MENU_ENUM_LABEL_DOWNLOADED_FILE_DETECT_CORE_LIST,    action_ok_push_downloads_dir},
@@ -10441,6 +10819,11 @@ static int menu_cbs_init_bind_ok_compare_type(menu_file_list_cbs_t *cbs,
    {
       BIND_ACTION_OK(cbs, action_ok_input_description_kbd_dropdown_box_list);
    }
+   else if (   (type >= MENU_SETTINGS_INPUT_PLAYS_AS_BEGIN)
+            && (type <= MENU_SETTINGS_INPUT_PLAYS_AS_END))
+   {
+      BIND_ACTION_OK(cbs, action_ok_input_plays_as_dropdown_box_list);
+   }
    else
    {
       switch (type)
@@ -10526,6 +10909,12 @@ static int menu_cbs_init_bind_ok_compare_type(menu_file_list_cbs_t *cbs,
           case MENU_SETTING_DROPDOWN_ITEM_INPUT_SELECT_RESERVED_DEVICE:
               BIND_ACTION_OK(cbs, action_ok_push_dropdown_item_input_select_reserved_device);
               break;
+         case MENU_SETTING_DROPDOWN_ITEM_INPUT_PLAYS_AS:
+            BIND_ACTION_OK(cbs, action_ok_push_dropdown_item_input_plays_as);
+            break;
+         case MENU_SETTING_DROPDOWN_ITEM_INPUT_PLAYS_AS_ADD:
+            BIND_ACTION_OK(cbs, action_ok_push_dropdown_item_input_plays_as_add);
+            break;
 #ifdef ANDROID
           case MENU_SETTING_DROPDOWN_ITEM_INPUT_SELECT_PHYSICAL_KEYBOARD:
               BIND_ACTION_OK(cbs, action_ok_push_dropdown_item_input_select_physical_keyboard);
@@ -10590,6 +10979,11 @@ static int menu_cbs_init_bind_ok_compare_type(menu_file_list_cbs_t *cbs,
          case FILE_TYPE_RGUI_THEME_PRESET:
             BIND_ACTION_OK(cbs, action_ok_rgui_menu_theme_preset_load);
             break;
+#ifdef HAVE_VULKAN_CUSTOM_DRIVER
+         case FILE_TYPE_VULKAN_DRIVER:
+            BIND_ACTION_OK(cbs, action_ok_vulkan_driver_load);
+            break;
+#endif
          case FILE_TYPE_REMAP:
             BIND_ACTION_OK(cbs, action_ok_remap_file_load);
             break;
@@ -10662,10 +11056,16 @@ static int menu_cbs_init_bind_ok_compare_type(menu_file_list_cbs_t *cbs,
                BIND_ACTION_OK(cbs, action_ok_push_random_dir);
             break;
          case FILE_TYPE_CARCHIVE:
-            if (filebrowser_get_type() == FILEBROWSER_SCAN_FILE)
+            if (filebrowser_get_type() == FILEBROWSER_MANUAL_SCAN_DIR)
             {
                BIND_ACTION_OK(cbs, action_ok_path_manual_scan_directory);
             }
+#ifdef HAVE_LIBRETRODB
+            else if (filebrowser_get_type() == FILEBROWSER_SCAN_FILE)
+            {
+               BIND_ACTION_OK(cbs, action_ok_path_scan_file);
+            }
+#endif
 #ifdef HAVE_COMPRESSION
             else if (filebrowser_get_type() == FILEBROWSER_SELECT_OVERLAY)
             {
@@ -10824,10 +11224,16 @@ static int menu_cbs_init_bind_ok_compare_type(menu_file_list_cbs_t *cbs,
 #endif
             /* fall through */
          case FILE_TYPE_PLAIN:
-            if (filebrowser_get_type() == FILEBROWSER_SCAN_FILE)
+            if (filebrowser_get_type() == FILEBROWSER_MANUAL_SCAN_DIR)
             {
                BIND_ACTION_OK(cbs, action_ok_path_manual_scan_directory);
             }
+#ifdef HAVE_LIBRETRODB
+            else if (filebrowser_get_type() == FILEBROWSER_SCAN_FILE)
+            {
+               BIND_ACTION_OK(cbs, action_ok_path_scan_file);
+            }
+#endif
             else if (cbs->enum_idx != MSG_UNKNOWN)
             {
                switch (cbs->enum_idx)
@@ -10996,6 +11402,33 @@ static int menu_cbs_init_bind_ok_compare_type(menu_file_list_cbs_t *cbs,
    return 0;
 }
 
+/* Content Location's places open its folder picker instead of
+ * Load Content's browser. Browse SMB Share and Browse NFS Export
+ * keep their own actions, which check the menu they are in. */
+static int menu_cbs_init_bind_ok_manual_content_scan_dir_list(
+      menu_file_list_cbs_t *cbs)
+{
+   switch (cbs->enum_idx)
+   {
+      case MENU_ENUM_LABEL_MANUAL_CONTENT_SCAN_DIR:
+         BIND_ACTION_OK(cbs, action_ok_push_manual_content_scan_dir_select);
+         break;
+      case MENU_ENUM_LABEL_FAVORITES:
+         BIND_ACTION_OK(cbs, action_ok_manual_content_scan_dir_start);
+         break;
+      case MENU_ENUM_LABEL_DOWNLOADED_FILE_DETECT_CORE_LIST:
+         BIND_ACTION_OK(cbs, action_ok_manual_content_scan_dir_downloads);
+         break;
+      case MENU_ENUM_LABEL_FILE_DETECT_CORE_LIST_PUSH_DIR:
+         BIND_ACTION_OK(cbs, action_ok_manual_content_scan_dir_drive);
+         break;
+      default:
+         return -1;
+   }
+
+   return 0;
+}
+
 int menu_cbs_init_bind_ok(menu_file_list_cbs_t *cbs,
       const char *path,
       const char *label, size_t lbl_len,
@@ -11006,6 +11439,11 @@ int menu_cbs_init_bind_ok(menu_file_list_cbs_t *cbs,
       return -1;
 
    BIND_ACTION_OK(cbs, action_ok_lookup_setting);
+
+   if (     string_is_equal(menu_label,
+               MENU_ENUM_LABEL_DEFERRED_MANUAL_CONTENT_SCAN_DIR_LIST_STR)
+         && menu_cbs_init_bind_ok_manual_content_scan_dir_list(cbs) == 0)
+      return 0;
 
    if (menu_cbs_init_bind_ok_compare_label(cbs, label) == 0)
       return 0;

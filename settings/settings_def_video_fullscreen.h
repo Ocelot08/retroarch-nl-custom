@@ -36,4 +36,4 @@ S_BOOL(video_dxgi_present, VIDEO_DXGI_PRESENT,
       "video_dxgi_present",
       false, SD_FLAG_CMD_APPLY_AUTO, 0, CMD_EVENT_REINIT,
       "DXGI Presentation",
-      "Use DXGI presentation with compatible Windows OpenGL and Vulkan drivers. Falls back to native presentation when unsupported. May change frame latency; disabled by default.")
+      "Use a DXGI flip-model swap chain with Windows glcore and Vulkan drivers. Enables display-driver features such as NVIDIA Smooth Motion. Falls back to native presentation if unsupported and may change frame latency. With Smooth Motion, enable this globally for menus and cores. A core-only override can switch presentation APIs within one session and crash the display driver.")

@@ -41,7 +41,7 @@
 
 #ifdef __WINRT__
 #include <Fileapifromapp.h>
-#include <uwp/uwp_func.h>
+#include "../os/uwp/uwp_func.h"
 #endif
 
 #ifdef HAVE_CONFIG_H
@@ -910,7 +910,13 @@ static uint8_t *content_file_pump_source(data_transfer_t *dt,
    size_t          total  = 0;
 
    if (ps)
+   {
+      /* The transfer's buffer is one allocation that never moves, and
+       * stays alive, detached as the content, until the patch is
+       * finished: the patch reads the source there, not from a copy */
       base = data_transfer_ptr(dt, &total);
+      patch_stream_set_source(ps, base);
+   }
 #else
    (void)patch_stream;
 #endif
@@ -1152,16 +1158,14 @@ static size_t content_file_load_into_memory(
     * when an applier rejects a patch. */
    if (patch_ps)
    {
-      uint8_t *patched = NULL;
-      size_t   patched_len = 0;
+      size_t patched_len = (size_t)content_size;
 
+      /* The source was fed from content_data itself: an IPS patch goes
+       * on it where it lies, any other replaces it */
       if (      content_data
-            &&  patch_stream_finish((patch_stream_t*)patch_ps,
-                     &patched, &patched_len)
-            &&  patched)
+            &&  patch_stream_finish_into((patch_stream_t*)patch_ps,
+                     &content_data, &patched_len))
       {
-         free(content_data);
-         content_data = patched;
          content_size = (int64_t)patched_len;
          streamed     = true;
 
@@ -2271,6 +2275,15 @@ static void content_load_finish(struct content_load_job *job,
    runloop_st->content_switching = false;
    /* A library opened for a core stage that never took it */
    runloop_core_preload_cancel();
+#ifdef HAVE_MENU
+   /* A Load State slot asked for with this load, left over when the
+    * load failed before the content came up */
+   {
+      menu_handle_t *menu = menu_state_get_ptr()->driver_data;
+      if (menu)
+         menu->state_slot_run_pending = false;
+   }
+#endif
 
    if (ok)
       content_load_tail(job, p_content);
@@ -2519,6 +2532,14 @@ static bool content_load(content_ctx_info_t *info,
          content_load_job_free(job);
          return false;
       }
+#ifdef HAVE_MENU
+      /* The core title the menu holds while the load runs: the one
+       * this load is for, when its library is already open. */
+      {
+         char title[NAME_MAX_LENGTH + 64];
+         menu_entries_get_core_title(title, sizeof(title));
+      }
+#endif
       runloop_state_get_ptr()->content_switching = true;
       return true;
    }
@@ -2625,7 +2646,7 @@ static void task_push_to_history_list(
          switch (path_is_media_type(tmp))
          {
             case RARCH_CONTENT_MOVIE:
-#ifdef HAVE_FFMPEG
+#if defined(HAVE_FFMPEG) || defined(HAVE_MPV) || defined(HAVE_WEBMPLAYER)
                playlist_hist        = g_defaults.video_history;
                core_name            = "movieplayer";
                core_path            = "builtin";
@@ -2760,7 +2781,7 @@ static bool task_push_to_history_list_from_playlist_pre_load_static(
    switch (path_is_media_type(content_path))
    {
       case RARCH_CONTENT_MOVIE:
-#ifdef HAVE_FFMPEG
+#if defined(HAVE_FFMPEG) || defined(HAVE_MPV) || defined(HAVE_WEBMPLAYER)
          playlist_hist       = g_defaults.video_history;
          core_name           = "movieplayer";
          core_path           = "builtin";

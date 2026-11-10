@@ -27,9 +27,11 @@ static INLINE void gl_android_openxr_set_pacing(unsigned interval,
       float hz) { (void)interval; (void)hz; }
 static INLINE void gl_android_openxr_set_views(const video_views_map_t *map,
       unsigned frame_dims, const video_viewport_t *vp, unsigned rotation,
-      unsigned screen_layout, bool swap_eyes)
+      unsigned screen_layout, bool swap_eyes,
+      const video_screen_xr_t *screens, unsigned edit_seq, bool editing)
       { (void)map; (void)frame_dims; (void)vp; (void)rotation;
-        (void)screen_layout; (void)swap_eyes; }
+        (void)screen_layout; (void)swap_eyes; (void)screens;
+        (void)edit_seq; (void)editing; }
 static INLINE float gl_android_openxr_refresh(float *rates, unsigned cap,
       unsigned *count) { (void)rates; (void)cap; *count = 0; return 0.0f; }
 static INLINE void gl_android_openxr_new_frame(void) { }
@@ -50,7 +52,8 @@ void gl_android_openxr_set_stereo(bool on);
 
 /* gl2, in its frame, for a tracked map's eyes: this frame's two eye
  * images as textures, and their size. False when the headset cannot
- * take them now; the last ones stay shown. */
+ * take them now; the last ones stay shown. On true, sRGB encoding is
+ * off for the drawing until gl_android_openxr_eyes_drawn. */
 bool gl_android_openxr_eye_targets(uint32_t tex[2], unsigned *dims);
 /* gl2 drew each eye width x height from its image's origin. */
 void gl_android_openxr_eyes_drawn(unsigned width, unsigned height);
@@ -75,11 +78,13 @@ void gl_android_openxr_set_placement(unsigned placement, float distance,
 void gl_android_openxr_set_pacing(unsigned interval, float hz);
 /* gl2, once a frame: the frame's views and the size they are in, where
  * the window draws the frame (from its top left) and its quarter turns,
- * and how screens are laid out and eyes swapped. While the menu is
+ * and how screens are laid out and eyes swapped. Screen adjustments,
+ * edit mode and its count are copied for this frame. While the menu is
  * closed, an untracked map's screens are cut from the window. */
 void gl_android_openxr_set_views(const video_views_map_t *map,
       unsigned frame_dims, const video_viewport_t *vp, unsigned rotation,
-      unsigned screen_layout, bool swap_eyes);
+      unsigned screen_layout, bool swap_eyes,
+      const video_screen_xr_t *screens, unsigned edit_seq, bool editing);
 /* The headset's measured rate, 0 until known, and up to cap of the
  * rates it can be asked for. */
 float gl_android_openxr_refresh(float *rates, unsigned cap,

@@ -83,12 +83,13 @@ enum audio_type_enum
                      * from a caller that filled the format in before
                      * starting - raw samples say nothing about
                      * themselves                                      */
-   AUDIO_TYPE_AC3   /* AC-3 or E-AC-3 (rac3); a buffer of syncframes
+   AUDIO_TYPE_AC3,  /* AC-3 or E-AC-3 (rac3); a buffer of syncframes
                     * (.ac3, .eac3, .ec3). Up
                     * to 5.1, handed over in the WAV shape for its
                     * channel count (the mixer folds by count): a
                     * lone surround becomes a phantom pair, and the
                     * LFE is kept only in 5.1                           */
+   AUDIO_TYPE_WMA   /* Native WMA1/WMA2/Pro in ASF or RIFF/XWMA. */
 };
 
 /* The linear-PCM format an AUDIO_TYPE_LPCM handle will use, for a
@@ -132,6 +133,9 @@ void  audio_transfer_set_buffer_ptr(void *data, enum audio_type_enum type,
  * the decoder.  Used by container demuxers (e.g. WebM) that have already
  * separated setup from payload; call instead of set_buffer_ptr, before
  * audio_transfer_start. Returns false if the codec has no demuxed path.
+ * Vorbis, Opus and AAC may start with an empty packet set: setup alone
+ * exposes the channel count and sample rate. Packets may arrive later
+ * under the growth contract below.
  *
  * GROWTH CONTRACT: this call may be repeated after audio_transfer_start,
  * mid-stream, to grow the packet set for a progressive source - e.g. a
@@ -147,6 +151,16 @@ bool  audio_transfer_set_demuxed_ptr(void *data, enum audio_type_enum type,
       const void *setup, size_t setup_size,
       const void *packets, size_t packets_size,
       const uint32_t *sizes, size_t num_packets);
+
+/* Exact decoded contribution of one borrowed demuxed packet, without
+ * decoding or changing the active cursor. Call after start(). index is
+ * its zero-based position since the stream head: Vorbis packet zero
+ * primes overlap and yields no frames. Counts precede start/end trim.
+ * Returns -1 when a measurement is unavailable. This is not a full
+ * coded-payload validation; the decoder still validates each packet. */
+int audio_transfer_demuxed_packet_frames(void *data, enum audio_type_enum type,
+      const void *packet, size_t size, size_t index);
+
 
 /* Frames the container trims from the start of the stream (e.g. the
  * AAC encoder delay from an MP4 edit list).  Call between
@@ -214,6 +228,13 @@ void  audio_transfer_free(void *data, enum audio_type_enum type);
 
 /* Stream format, valid after a successful start. Any out pointer may be
  * NULL. total_frames is 0 when the stream length is unknown. */
+/* WAVE speaker-mask downmix for native WMA/XMA. False for other arms. */
+bool audio_transfer_stereo_matrix(void *data, enum audio_type_enum type,
+      int32_t matrix[8][2]);
+/* Float mixing keeps sqrt(1/2) coefficients without Q15 rounding. */
+bool audio_transfer_stereo_matrix_f32(void *data, enum audio_type_enum type,
+      float matrix[8][2]);
+
 bool  audio_transfer_info(void *data, enum audio_type_enum type,
       unsigned *channels, unsigned *rate, uint64_t *total_frames);
 
@@ -250,13 +271,16 @@ int   audio_transfer_read_f32(void *data, enum audio_type_enum type,
  * material the demuxer keeps borrowed pointers into. DVD LPCM reports the
  * encoded read frontier; a partially emitted block lives in owned carry. */
 size_t audio_transfer_buffer_tell(void *data, enum audio_type_enum type);
+/* Complete encoded element blocking the next read, or zero. Query only
+ * with exclusive decoder ownership. This is admission demand, never a
+ * byte-release frontier. */
+size_t audio_transfer_buffer_read_end(void *data, enum audio_type_enum type);
 
-/* Seek to an absolute interleaved PCM frame (used to loop). true on
- * success.  Every arm seeks except a packet-fed Vorbis stream (demuxed
- * input, or a WebM buffer), which takes frame 0 only - the rewind a
- * loop needs.  There is no Ogg for it to seek in and, unlike Opus, a
- * Vorbis packet does not carry its own duration, so the packets before
- * a target cannot be stepped over without being decoded.
+/* Seek to an absolute PCM frame (used to loop). Internally demuxed
+ * container audio uses movie coordinates, including gaps and tail;
+ * caller-demuxed input keeps source-sample coordinates. true accepts
+ * the request. Packet duration queries locate Vorbis and Opus preroll;
+ * MP4 AAC uses its sample tables. Unsupported input modes may refuse.
  *
  * Seeking is not always cheap, and what it costs is spent on the
  * calling thread: MOD walks the sequence to get where it is going,
@@ -264,11 +288,32 @@ size_t audio_transfer_buffer_tell(void *data, enum audio_type_enum type);
  * decoding them and then decode a short pre-roll before it.  That
  * pre-roll is why a seek in a lossy codec does not resume bit-exactly -
  * the decoder converges rather than arriving in the state a playthrough
- * would have left it in.  An Opus seek happens at the following read
- * rather than in the call itself, since decoding the pre-roll is what
- * settles the output format. */
+ * would have left it in. An Opus seek starts at the following read
+ * because preroll settles the output format. Container preparation may
+ * return NEXT with zero output while metadata/preroll work remains;
+ * retry normally, feeding the requested byte frontier when starved. */
 bool  audio_transfer_seek(void *data, enum audio_type_enum type,
       uint64_t frame);
+
+/* Exclusive-owner bounded seek preparation, MP4 AAC and Matroska/WebM
+ * AAC, Opus and Vorbis.
+ * Targets use container movie frames, including gaps and the declared tail.
+ * AAC maps <=256 sample-table timestamps per metadata slice, then selects
+ * indexed preroll without reading media bytes. WebM steps header mapping
+ * and decoder preroll separately. Step decodes at most one access unit or
+ * examines <=256 packet/sample headers: -1 failure, 0 retry (including input
+ * starvation), 1 positioned for the next read. Feed buffer_tell before
+ * retrying a resident wall. A new successful begin replaces the request.
+ * Do not interleave reads or legacy seek with an unfinished request.
+ * Failure to begin leaves the previous request/decoder untouched. */
+bool audio_transfer_seek_begin(void *data, enum audio_type_enum type,
+      uint64_t frame);
+/* Select the WebM pending PCM format before preparation (AAC is format
+ * independent). The default begin above prepares float PCM. */
+bool audio_transfer_seek_begin_format(void *data, enum audio_type_enum type,
+      uint64_t frame, bool s16);
+
+int audio_transfer_seek_step(void *data, enum audio_type_enum type);
 
 RETRO_END_DECLS
 

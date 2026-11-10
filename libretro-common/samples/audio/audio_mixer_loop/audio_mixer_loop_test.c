@@ -402,6 +402,19 @@ static int mix_repeating(audio_mixer_sound_t *sound, int s16,
                nonzero = 1;
                break;
             }
+      if (expect_audio && !voice_ended)
+      {
+         size_t frames = 0;
+         unsigned rate = 0;
+         if (!audio_mixer_voice_clock(voice, &frames, &rate, NULL)
+               || frames != (size_t)(i + 1) * MIX_FRAMES || rate != MIX_RATE)
+         {
+            printf("  %s: clock counted %lu frames at %u Hz after %d blocks\n",
+                  what, (unsigned long)frames, rate, i + 1);
+            audio_mixer_stop(voice);
+            return 0;
+         }
+      }
    }
 
    if (!voice_ended)
@@ -452,7 +465,7 @@ static int check_feed_bound(const uint8_t *lpcm, size_t len)
    const size_t b0 = len / 6, b1 = len / 2;
    audio_mixer_sound_t *snd = audio_mixer_load_lpcm(dup_bytes(lpcm, len), len);
    audio_mixer_voice_t *voice;
-   size_t top;
+   size_t top, serial = 0, next_serial = 0;
    int ok = 1;
 
    if (!snd)
@@ -463,6 +476,9 @@ static int check_feed_bound(const uint8_t *lpcm, size_t len)
       audio_mixer_destroy(snd);
       return 0;
    }
+
+   if (!audio_mixer_voice_clock(voice, NULL, NULL, &serial))
+      ok = 0;
 
    /* a bound set with no position read stands on its own, across the
     * loops this run makes */
@@ -519,13 +535,93 @@ static int check_feed_bound(const uint8_t *lpcm, size_t len)
    }
    audio_mixer_stop(voice);
    audio_mixer_destroy(snd);
+   snd = audio_mixer_load_lpcm(dup_bytes(lpcm, len), len);
+   if (!snd)
+      return 0;
+   voice = audio_mixer_play(snd, true, 1.0f, NULL,
+         RESAMPLER_QUALITY_DONTCARE, NULL);
+   if (!voice)
+   {
+      audio_mixer_destroy(snd);
+      return 0;
+   }
+   if (!audio_mixer_voice_clock(voice, NULL, NULL, &next_serial)
+         || !next_serial || next_serial == serial)
+      ok = 0;
+   audio_mixer_voice_set_avail_bound(voice, b0, next_serial);
+   top = feed_run(voice, 60);
+   if (!top || top > b0)
+      ok = 0;
+   audio_mixer_voice_set_avail_bound(voice, b1, serial);
+   top = feed_run(voice, 60);
+   if (!top || top > b0)
+   {
+      printf("  a stale play bound reached %u (initial bound %u)\n",
+            (unsigned)top, (unsigned)b0);
+      ok = 0;
+   }
+   (void)audio_mixer_voice_buffer_tell(voice);
+   audio_mixer_voice_set_avail_bound(voice, b1, next_serial);
+   top = feed_run(voice, 120);
+   if (top <= b0 || top > b1)
+      ok = 0;
+   audio_mixer_stop(voice);
+   audio_mixer_destroy(snd);
    if (ok)
-      printf("  bounds applied by the mix, a stale one dropped\n");
+      printf("  bounds applied by the mix, stale loop/play bounds dropped\n");
    return ok;
 }
 #endif
 
 /* ------------------------------------------------------------------ */
+
+/* The mix summed over audio in place of a copy of it: the sample for
+ * sample the same as copying it across first, whether the voice runs to
+ * the end of the mix, ends inside it, or there is none. */
+static int check_mix_over(void)
+{
+   enum { FRAMES = 64, SAMPLES = 128 };
+   static int16_t base[SAMPLES], copied[SAMPLES], over[SAMPLES];
+   size_t size = 0;
+   unsigned char *wav;
+   audio_mixer_sound_t *snd;
+   audio_mixer_voice_t *voice;
+   unsigned k, lens[3];
+   int bad = 0, c;
+
+   for (k = 0; k < SAMPLES; k++)
+      base[k] = (int16_t)(k * 311 - 12000);
+   /* no voice */
+   audio_mixer_mix_s16_over(over, base, FRAMES, 0x10000, false);
+   bad += memcmp(over, base, sizeof(base)) != 0;
+
+   lens[0] = 400; lens[1] = 20; lens[2] = 7;
+   for (c = 0; c < 3; c++)
+   {
+      if (!(wav = make_wav(lens[c], MIX_RATE, &size)))
+         return 1;
+      if (!(snd = audio_mixer_load_wav(wav, size, NULL,
+                  RESAMPLER_QUALITY_DONTCARE, true)))
+         return 1;
+      free(wav);
+      voice = audio_mixer_play_s16(snd, false, 0x10000, NULL,
+            RESAMPLER_QUALITY_DONTCARE, NULL);
+      memcpy(copied, base, sizeof(base));
+      audio_mixer_mix_s16(copied, FRAMES, 0x10000, false);
+      audio_mixer_stop(voice);
+      voice = audio_mixer_play_s16(snd, false, 0x10000, NULL,
+            RESAMPLER_QUALITY_DONTCARE, NULL);
+      audio_mixer_mix_s16_over(over, base, FRAMES, 0x10000, false);
+      bad += memcmp(over, copied, sizeof(over)) != 0;
+      audio_mixer_stop(voice);
+      audio_mixer_destroy(snd);
+   }
+   if (bad)
+      printf("FAIL  mix over audio differs from mix over a copy: %d\n", bad);
+   else
+      printf("ok    mix over audio matches a copy, voice or none\n");
+   return bad != 0;
+}
 
 int main(void)
 {
@@ -557,6 +653,9 @@ int main(void)
    }
 
    audio_mixer_init(MIX_RATE);
+
+   current_case = "mix over audio";
+   fails += check_mix_over();
 
    printf("1. audio_transfer: a WAV stream replays after a seek to 0\n");
    current_case = "case 1 (WAV seek contract)";

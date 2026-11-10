@@ -531,6 +531,7 @@ static bool gfx_ctx_wl_set_video_mode(void *data,
    if (!gfx_ctx_wl_set_video_mode_common_fullscreen(wl, fullscreen))
       goto error;
 
+   video_driver_set_hdr_output_mode((wl->color.flags & WL_COLOR_FP16) ? 2 : 0);
    return true;
 
 error:
@@ -688,7 +689,7 @@ static uint32_t gfx_ctx_wl_get_flags(void *data)
 
    if (string_is_equal(video_ident, "glcore"))
    {
-#if defined(HAVE_SLANG) && defined(HAVE_SPIRV_CROSS)
+#if defined(HAVE_SLANG) && (defined(HAVE_SPIRV_CROSS) || defined(HAVE_RSLC))
       BIT32_SET(flags, GFX_CTX_FLAGS_SHADERS_SLANG);
 #endif
    }

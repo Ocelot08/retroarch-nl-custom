@@ -37,6 +37,7 @@
 #include "../../menu/menu_driver.h"
 #endif
 
+#include "../gfx_display.h"
 #ifdef HAVE_GFX_WIDGETS
 #include "../gfx_widgets.h"
 #endif
@@ -49,10 +50,11 @@
 
 #include "../../driver.h"
 #include "../../retroarch.h"
+#include <libretro_rsx.h>
 #ifdef HAVE_THREADS
 #include "../video_thread_wrapper.h"
-#include "../display_servers/dispserv_ps3.h"
 #endif
+#include "../display_servers/dispserv_ps3.h"
 
 #define RSX_MAX_BUFFERS 2
 #define RSX_MAX_MENU_BUFFERS 2
@@ -61,6 +63,10 @@
 #define RSX_MAX_VERTICES 4
 #define RSX_MAX_TEXTURE_VERTICES 4096 /* Set > 0 for preallocated texture vertices */
 #define RSX_MAX_FONT_VERTICES 8192
+#define RSX_FONT_VERTEX_PAGES 8
+#define RSX_FONT_VERTEX_LABEL 198
+/* Largest triangle-list draw that fits a page */
+#define RSX_FONT_VERTEX_CHUNK (RSX_MAX_FONT_VERTICES - RSX_MAX_FONT_VERTICES % 3)
 
 #define RSX_SHADER_STOCK_BLEND (RSX_MAX_SHADERS - 1)
 #define RSX_SHADER_MENU        (RSX_MAX_SHADERS - 2)
@@ -210,6 +216,13 @@ typedef struct
    bool should_resize;
    bool msg_rendering_enabled;
    bool shared_context_use;
+   struct retro_hw_render_interface_rsx hw_interface;
+   struct retro_rsx_image hw_image;
+   bool hw_render;
+   bool hw_image_valid;
+   /* The last presented image carries frontend layers: a duped frame
+    * without any is presented once more to take them off */
+   bool ui_presented;
 } rsx_t;
 
 #include "../font_driver.h"
@@ -229,7 +242,43 @@ typedef struct
 #include <defines/ps3_defines.h>
 
 #define CB_SIZE		0x100000
-#define HOST_SIZE	(32*1024*1024)
+#ifndef RSX_HOST_SIZE
+#define RSX_HOST_SIZE (32*1024*1024)
+#endif
+#define HOST_SIZE RSX_HOST_SIZE
+
+static void *rsx_host_addr;
+
+static bool rsx_set_hw_image(void *data, const struct retro_rsx_image *image)
+{
+   rsx_t *rsx = (rsx_t*)data;
+   if (!rsx)
+      return false;
+   rsx->hw_image_valid = false;
+   if (!image)
+      return true;
+   if (!rsx->hw_render || rsx->video_info.is_threaded
+         || !image->width || !image->height
+         || image->width > 4096 || image->height > 4096
+         || image->pitch < image->width * 4
+         || (uint64_t)image->offset + (uint64_t)(image->height - 1)
+               * image->pitch + image->width * 4 > 256u * 1024 * 1024)
+      return false;
+   rsx->hw_image       = *image;
+   rsx->hw_image_valid = true;
+   return true;
+}
+
+static bool rsx_get_hw_render_interface(void *data,
+      const struct retro_hw_render_interface **iface)
+{
+   rsx_t *rsx = (rsx_t*)data;
+   if (!rsx || !iface || !rsx->hw_render
+         || rsx->video_info.is_threaded || !rsx_host_addr)
+      return false;
+   *iface = (const struct retro_hw_render_interface*)&rsx->hw_interface;
+   return true;
+}
 
 #ifdef __PSL1GHT__
 #include <rsx/rsx.h>
@@ -241,6 +290,69 @@ typedef struct
 #include <rsx/rsx.h>
 #include <io/pad.h>
 #endif
+
+#define RSX_RETIRED_MEMORY_COUNT 256 /* power of two */
+#define RSX_RETIRED_MEMORY_LABEL 199
+static struct
+{
+   void *memory;
+   uint32_t fence;
+} rsx_retired_memory[RSX_RETIRED_MEMORY_COUNT];
+static unsigned rsx_retired_memory_head;
+static unsigned rsx_retired_memory_tail;
+/* Last fence written to the label */
+static uint32_t rsx_retired_memory_serial;
+static bool rsx_retired_memory_queued;
+static bool rsx_labels_initialized;
+
+static void rsx_collect_retired_memory(void)
+{
+   uint32_t done;
+   if (rsx_retired_memory_head == rsx_retired_memory_tail)
+      return;
+   done = *(volatile uint32_t*)gcmGetLabelAddress(RSX_RETIRED_MEMORY_LABEL);
+   while (rsx_retired_memory_head != rsx_retired_memory_tail)
+   {
+      unsigned i = rsx_retired_memory_head & (RSX_RETIRED_MEMORY_COUNT - 1);
+      if ((int32_t)(done - rsx_retired_memory[i].fence) < 0)
+         break;
+      rsxFree(rsx_retired_memory[i].memory);
+      rsx_retired_memory_head++;
+   }
+}
+
+/* One fence per frame covers everything retired since the last one */
+static void rsx_fence_retired_memory(gcmContextData *context)
+{
+   if (!rsx_retired_memory_queued)
+      return;
+   rsxSetWriteBackendLabel(context, RSX_RETIRED_MEMORY_LABEL,
+         ++rsx_retired_memory_serial);
+   rsx_retired_memory_queued = false;
+}
+
+static bool rsx_retire_hw_memory(void *data, void *memory)
+{
+   unsigned i;
+   rsx_t *rsx = (rsx_t*)data;
+   if (!memory)
+      return true;
+   if (!rsx || !rsx->hw_render || rsx->video_info.is_threaded)
+      return false;
+   if (rsx_retired_memory_tail - rsx_retired_memory_head
+         == RSX_RETIRED_MEMORY_COUNT)
+   {
+      rsx_collect_retired_memory();
+      if (rsx_retired_memory_tail - rsx_retired_memory_head
+            == RSX_RETIRED_MEMORY_COUNT)
+         return false;
+   }
+   i = rsx_retired_memory_tail++ & (RSX_RETIRED_MEMORY_COUNT - 1);
+   rsx_retired_memory[i].memory = memory;
+   rsx_retired_memory[i].fence  = rsx_retired_memory_serial + 1;
+   rsx_retired_memory_queued    = true;
+   return true;
+}
 
 #define rsx_context_bind_hw_render(rsx, enable) \
    if (rsx->shared_context_use) \
@@ -256,8 +368,19 @@ typedef struct
 
 typedef struct
 {
+   rsx_vertex_t *vertices;
+   unsigned used;
+   u32 fence;
+} rsx_font_vertex_page_t;
+
+static u32 rsx_font_vertex_serial;
+
+typedef struct
+{
    rsx_t *rsx;
    rsx_vertex_t *vertices;
+   rsx_font_vertex_page_t vertex_pages[RSX_FONT_VERTEX_PAGES];
+   unsigned vertex_page;
    rsx_texture_t texture;
    rsxProgramConst *proj_matrix;
    rsxProgramAttrib *pos_index;
@@ -275,8 +398,9 @@ typedef struct
    unsigned tex_dims;
    /* Texture memory the atlas outgrew: a frame in flight may still
     * draw from it, and freeing it means waiting for the RSX, so it goes
-    * when the font does - the atlas grows at most twice */
-   u32 *retired[2];
+    * when the font does - the atlas grows at most twice, and when it is
+    * kept in texture memory the last of it goes with the font */
+   u32 *retired[4];
    unsigned retired_count;
    u32 fp_offset;
    u32 pos_offset;
@@ -291,6 +415,9 @@ typedef struct
    float font_vertex[2 * 6 * MAX_MSG_LEN_CHUNK];
    float font_tex_coords[2 * 6 * MAX_MSG_LEN_CHUNK];
    float font_color[4 * 6 * MAX_MSG_LEN_CHUNK];
+   /* The atlas is kept in texture memory (rsx_font_storage) and is the
+    * texture: nothing is copied into it */
+   bool atlas_in_place;
 } rsx_font_t;
 
 static const float rsx_vertexes[8] = {
@@ -408,7 +535,7 @@ static void gfx_display_rsx_draw(gfx_display_ctx_draw_t *draw,
       rsx->texture_vert_idx = 0;
       end_vert_idx          = rsx->texture_vert_idx + draw->coords->vertices;
    }
-   vertices                 = &rsx->texture_vertices[rsx->texture_vert_idx];
+   vertices                 = rsx->texture_vertices;
 #else
    /* Smoother gfx at the cost of unmanaged rsx memory */
    rsx->texture_vert_idx    = 0;
@@ -454,6 +581,7 @@ static void gfx_display_rsx_draw(gfx_display_ctx_draw_t *draw,
          GCM_LOCATION_RSX);
 
    rsxClearSurface(rsx->context, GCM_CLEAR_Z);
+   rsxInvalidateVertexCache(rsx->context);
    rsxDrawVertexArray(rsx->context, GCM_TYPE_TRIANGLE_STRIP, 0, draw->coords->vertices);
 }
 
@@ -535,27 +663,32 @@ static void rsx_font_free(void *data,
     * font scale change or context reset. */
    rsxFinish(font->rsx->context, 0);
 
-   if (font->texture.data)
+   /* Kept in texture memory, the atlas's last buffer went to
+    * rsx_font_storage_free with the font driver's */
+   if (font->texture.data && !font->atlas_in_place)
       rsxFree(font->texture.data);
    {
       unsigned i;
       for (i = 0; i < font->retired_count; i++)
          rsxFree(font->retired[i]);
    }
-   if (font->vertices)
-      rsxFree(font->vertices);
+   {
+      unsigned i;
+      for (i = 0; i < RSX_FONT_VERTEX_PAGES; i++)
+         if (font->vertex_pages[i].vertices)
+            rsxFree(font->vertex_pages[i].vertices);
+   }
 
    free(font);
 }
 
-static bool rsx_font_upload_atlas(rsx_t *rsx, rsx_font_t *font)
+/* Copies the atlas's dirty row band into the texture */
+static void rsx_font_copy_dirty(rsx_font_t *font)
 {
    u8 *texbuffer               = (u8 *)font->texture.data;
    const u8 *atlas_data        = (u8 *)font->atlas->buffer;
-   /* Texture pitch equals the atlas width, so the dirty row band is
-    * contiguous in both buffers and one memcpy of just that band
-    * suffices; the initial upload (dirty rect covering everything
-    * after the renderer pre-cache) still transfers the full atlas. */
+   unsigned tex_w              = VIDEO_SCALE_W(font->tex_dims);
+   unsigned tex_h              = VIDEO_SCALE_H(font->tex_dims);
    unsigned y0                 = VIDEO_SCALE_H(font->atlas->dirty_xy0);
    unsigned y1                 = VIDEO_SCALE_H(font->atlas->dirty_xy1);
    if (y1 > font->atlas->height || y1 <= y0)
@@ -563,9 +696,32 @@ static bool rsx_font_upload_atlas(rsx_t *rsx, rsx_font_t *font)
       y0 = 0;
       y1 = font->atlas->height;
    }
-   memcpy(texbuffer   + (size_t)y0 * font->atlas->width,
-          atlas_data  + (size_t)y0 * font->atlas->width,
-          (size_t)(y1 - y0) * font->atlas->width);
+   if (y1 > tex_h)
+      y1 = tex_h;
+   /* Texture pitch is its width. At the atlas's size the dirty row band
+    * is contiguous in both buffers and one memcpy of just that band
+    * suffices; the initial upload (dirty rect covering everything
+    * after the renderer pre-cache) still transfers the full atlas. An
+    * atlas the texture could not follow is larger than it, and goes
+    * across row by row, as much of each as the texture holds. */
+   if (tex_w == font->atlas->width)
+      memcpy(texbuffer   + (size_t)y0 * tex_w,
+             atlas_data  + (size_t)y0 * tex_w,
+             (size_t)(y1 > y0 ? y1 - y0 : 0) * tex_w);
+   else
+   {
+      unsigned y;
+      unsigned w = (tex_w < font->atlas->width) ? tex_w : font->atlas->width;
+      for (y = y0; y < y1; y++)
+         memcpy(texbuffer  + (size_t)y * tex_w,
+                atlas_data + (size_t)y * font->atlas->width, w);
+   }
+}
+
+static bool rsx_font_upload_atlas(rsx_t *rsx, rsx_font_t *font)
+{
+   if (!font->atlas_in_place)
+      rsx_font_copy_dirty(font);
 
    font->texture.tex.format    = GCM_TEXTURE_FORMAT_B8 | GCM_TEXTURE_FORMAT_LIN;
    font->texture.tex.mipmap    = 1;
@@ -603,6 +759,24 @@ static bool rsx_font_upload_atlas(rsx_t *rsx, rsx_font_t *font)
          GCM_TEXTURE_CLAMP_TO_EDGE, 0, GCM_TEXTURE_ZFUNC_LESS, 0);
 
    return true;
+}
+
+/* Texture memory for the atlas, which the cache rasterizes glyphs
+ * straight into and the RSX samples: the texture is linear B8 with its
+ * pitch its width, the atlas's own layout */
+static void *rsx_font_storage(void *user, size_t size)
+{
+   (void)user;
+   return rsxMemalign(128, (u32)size);
+}
+
+/* Texture memory the atlas moved out of: a frame in flight may still
+ * draw from it, so it goes when the font does */
+static void rsx_font_storage_free(void *user, void *buffer)
+{
+   rsx_font_t *font = (rsx_font_t*)user;
+   if (font->retired_count < sizeof(font->retired) / sizeof(font->retired[0]))
+      font->retired[font->retired_count++] = (u32*)buffer;
 }
 
 static void *rsx_font_init(void *data,
@@ -645,16 +819,31 @@ static void *rsx_font_init(void *data,
    font->col_index          = font->rsx->col_index[RSX_SHADER_STOCK_BLEND];
    font->tex_unit           = font->rsx->tex_unit[RSX_SHADER_STOCK_BLEND];
 
-   if (!(font->vertices     = (rsx_vertex_t *)rsxMemalign(128,
-         sizeof(rsx_vertex_t) * RSX_MAX_FONT_VERTICES)))
-      goto error;
+   {
+      unsigned i;
+      for (i = 0; i < RSX_FONT_VERTEX_PAGES; i++)
+         if (!(font->vertex_pages[i].vertices = (rsx_vertex_t *)rsxMemalign(
+               128, sizeof(rsx_vertex_t) * RSX_MAX_FONT_VERTICES)))
+            goto error;
+   }
+   font->vertices           = font->vertex_pages[0].vertices;
    font->rsx->font_vert_idx = 0;
 
    /* The atlas may grow; the texture follows it */
    font->atlas->max_dims = VIDEO_SCALE_PACK(2048, 2048);
+   /* Its cells are written where the RSX samples them, and the frame
+    * before may still be drawing: one per buffer the flip waits on */
+   font->atlas->inflight = RSX_MAX_BUFFERS - 1;
    font->tex_dims           = VIDEO_SCALE_PACK(font->atlas->width,
          font->atlas->height);
-   if (!(font->texture.data = (u32*)rsxMemalign(128,
+   /* The atlas kept in texture memory, or copied into it */
+   if (font_atlas_place(font->atlas, rsx_font_storage,
+            rsx_font_storage_free, font))
+   {
+      font->atlas_in_place = true;
+      font->texture.data   = (u32*)font->atlas->buffer;
+   }
+   else if (!(font->texture.data = (u32*)rsxMemalign(128,
          VIDEO_SCALE_AREA(font->tex_dims))))
       goto error;
    rsxAddressToOffset(font->texture.data, &font->texture.offset);
@@ -683,12 +872,52 @@ static int rsx_font_get_message_width(void *data, const char *msg,
          font->font_data, msg, msg_len, scale);
 }
 
+/* Returns how many of count vertices the current page now has room
+ * for, at most a chunk; 0 while every other page is still on the GPU. */
+static unsigned rsx_font_reserve_vertices(rsx_t *rsx, rsx_font_t *font,
+      unsigned count)
+{
+   rsx_font_vertex_page_t *page = &font->vertex_pages[font->vertex_page];
+   unsigned i;
+   u32 done;
+
+   if (count > RSX_FONT_VERTEX_CHUNK)
+      count = RSX_FONT_VERTEX_CHUNK;
+   if (!page->fence && count <= RSX_MAX_FONT_VERTICES - page->used)
+      return count;
+
+   if (page->used && !page->fence)
+   {
+      page->fence = ++rsx_font_vertex_serial;
+      if (!page->fence)
+         page->fence = ++rsx_font_vertex_serial;
+      rsxSetWriteBackendLabel(rsx->context, RSX_FONT_VERTEX_LABEL,
+            page->fence);
+      rsxFlushBuffer(rsx->context);
+   }
+
+   done = *(volatile u32*)gcmGetLabelAddress(RSX_FONT_VERTEX_LABEL);
+   for (i = 0; i < RSX_FONT_VERTEX_PAGES; i++)
+   {
+      page = &font->vertex_pages[i];
+      if (page->fence ? (int32_t)(done - page->fence) < 0 : page->used != 0)
+         continue;
+      page->used        = 0;
+      page->fence       = 0;
+      font->vertices    = page->vertices;
+      font->vertex_page = i;
+      return count;
+   }
+   return 0;
+}
+
 static void rsx_font_draw_vertices(
       rsx_t *rsx,
       rsx_font_t *font,
       const video_coords_t *coords)
 {
-   int i, end_vert_idx;
+   unsigned i, count;
+   unsigned remaining               = coords->vertices;
    rsx_vertex_t *vertices           = NULL;
    const float *vertex              = coords->vertex;
    const float *tex_coord           = coords->tex_coord;
@@ -700,50 +929,52 @@ static void rsx_font_draw_vertices(
       font->atlas->dirty            = false;
    }
 
-   end_vert_idx                     = rsx->font_vert_idx + coords->vertices;
-   if (end_vert_idx > RSX_MAX_FONT_VERTICES)
-   {
-      rsx->font_vert_idx      = 0;
-      end_vert_idx                  = rsx->font_vert_idx + coords->vertices;
-   }
-
-   vertices = &font->vertices[rsx->font_vert_idx];
-
-   for (i = rsx->font_vert_idx; i < end_vert_idx; i++)
-   {
-      vertices[i].x = *vertex++;
-      vertices[i].y = *vertex++;
-      vertices[i].u = *tex_coord++;
-      vertices[i].v = *tex_coord++;
-      vertices[i].r = *color++;
-      vertices[i].g = *color++;
-      vertices[i].b = *color++;
-      vertices[i].a = *color++;
-   }
-
-   rsxAddressToOffset(&vertices[rsx->font_vert_idx].x, &font->pos_offset);
-   rsxAddressToOffset(&vertices[rsx->font_vert_idx].u, &font->uv_offset);
-   rsxAddressToOffset(&vertices[rsx->font_vert_idx].r, &font->col_offset);
-   rsx->font_vert_idx = end_vert_idx;
-
-   rsxBindVertexArrayAttrib(rsx->context, font->pos_index->index, 0,
-         font->pos_offset, sizeof(rsx_vertex_t), 2,
-         GCM_VERTEX_DATA_TYPE_F32, GCM_LOCATION_RSX);
-   rsxBindVertexArrayAttrib(rsx->context, font->uv_index->index, 0,
-         font->uv_offset, sizeof(rsx_vertex_t), 2,
-         GCM_VERTEX_DATA_TYPE_F32, GCM_LOCATION_RSX);
-   rsxBindVertexArrayAttrib(rsx->context, font->col_index->index, 0,
-         font->col_offset, sizeof(rsx_vertex_t), 4,
-         GCM_VERTEX_DATA_TYPE_F32, GCM_LOCATION_RSX);
-
    rsxLoadVertexProgram(rsx->context, font->vpo, font->vp_ucode);
    rsxSetVertexProgramParameter(rsx->context, font->vpo,
          font->proj_matrix, (float *)&rsx->mvp_no_rot);
    rsxLoadFragmentProgramLocation(rsx->context, font->fpo,
          font->fp_offset, GCM_LOCATION_RSX);
-
    rsxClearSurface(rsx->context, GCM_CLEAR_Z);
-   rsxDrawVertexArray(rsx->context, GCM_TYPE_TRIANGLES, 0, coords->vertices);
+
+   while (remaining)
+   {
+      rsx_font_vertex_page_t *page;
+      if (!(count = rsx_font_reserve_vertices(rsx, font, remaining)))
+         return;
+      page     = &font->vertex_pages[font->vertex_page];
+      vertices = font->vertices + page->used;
+
+      for (i = 0; i < count; i++)
+      {
+         vertices[i].x = *vertex++;
+         vertices[i].y = *vertex++;
+         vertices[i].u = *tex_coord++;
+         vertices[i].v = *tex_coord++;
+         vertices[i].r = *color++;
+         vertices[i].g = *color++;
+         vertices[i].b = *color++;
+         vertices[i].a = *color++;
+      }
+
+      rsxAddressToOffset(&vertices[0].x, &font->pos_offset);
+      rsxAddressToOffset(&vertices[0].u, &font->uv_offset);
+      rsxAddressToOffset(&vertices[0].r, &font->col_offset);
+      page->used        += count;
+      rsx->font_vert_idx = page->used;
+      remaining         -= count;
+
+      rsxBindVertexArrayAttrib(rsx->context, font->pos_index->index, 0,
+            font->pos_offset, sizeof(rsx_vertex_t), 2,
+            GCM_VERTEX_DATA_TYPE_F32, GCM_LOCATION_RSX);
+      rsxBindVertexArrayAttrib(rsx->context, font->uv_index->index, 0,
+            font->uv_offset, sizeof(rsx_vertex_t), 2,
+            GCM_VERTEX_DATA_TYPE_F32, GCM_LOCATION_RSX);
+      rsxBindVertexArrayAttrib(rsx->context, font->col_index->index, 0,
+            font->col_offset, sizeof(rsx_vertex_t), 4,
+            GCM_VERTEX_DATA_TYPE_F32, GCM_LOCATION_RSX);
+      rsxInvalidateVertexCache(rsx->context);
+      rsxDrawVertexArray(rsx->context, GCM_TYPE_TRIANGLES, 0, count);
+   }
 }
 
 #define RSX_FONT_FLUSH() \
@@ -888,7 +1119,20 @@ static void rsx_font_render_msg(
    if (font->font_driver && font->font_data)
    {
       font->atlas = font->font_driver->get_atlas(font->font_data);
-      if (     font->retired_count < 2
+      /* Kept in texture memory, the grown atlas is the texture already;
+       * the cache handed the memory it left to rsx_font_storage_free */
+      if (     font->atlas_in_place
+            && font->tex_dims != VIDEO_SCALE_PACK(font->atlas->width,
+               font->atlas->height))
+      {
+         font->texture.data = (u32*)font->atlas->buffer;
+         rsxAddressToOffset(font->texture.data, &font->texture.offset);
+         font->tex_dims     = VIDEO_SCALE_PACK(font->atlas->width,
+               font->atlas->height);
+         font->atlas->dirty = true;
+      }
+      else if (!font->atlas_in_place
+            && font->retired_count < 2
             && font->tex_dims != VIDEO_SCALE_PACK(font->atlas->width,
                font->atlas->height))
       {
@@ -966,7 +1210,6 @@ static void rsx_font_render_msg(
       rsxSetBlendEnable(rsx->context, GCM_FALSE);
       rsx_set_viewport(rsx, dims, false, true);
    }
-   rsx->font_vert_idx = 0;
 }
 
 static const struct font_glyph *rsx_font_get_glyph(
@@ -995,7 +1238,6 @@ static void rsx_font_flush_block(unsigned dims, void *data)
          GCM_TRUE, 0 << 8, 12 << 8, GCM_TEXTURE_MAX_ANISO_1);
    rsxSetBlendEnable(rsx->context, GCM_FALSE);
    rsx_set_viewport(rsx, dims, block->fullscreen, true);
-   font->rsx->font_vert_idx = 0;
 }
 
 static void rsx_font_bind_block(void *data, void *userdata)
@@ -1190,6 +1432,10 @@ static const gfx_ctx_driver_t* rsx_get_context(rsx_t* rsx)
       && (hwr->context_type != RETRO_HW_CONTEXT_NONE))
       rsx->shared_context_use           = true;
 
+   /* Native RSX uses one command FIFO, not separate GL contexts. */
+   if (hwr->context_type == RETRO_HW_CONTEXT_RSX)
+      rsx->shared_context_use = false;
+
    gfx_ctx = video_context_driver_init_first(rsx,
       settings->arrays.video_context_driver,
       api, 1, 0, rsx->shared_context_use, &ctx_data);
@@ -1235,11 +1481,10 @@ error:
 
 static int rsx_flip(gcmContextData *context, s32 buffer)
 {
+   gcmResetFlipStatus();
    if (gcmSetFlip(context, buffer) == 0)
    {
       rsxFlushBuffer (context);
-      /* Prevent the RSX from continuing until the flip has finished. */
-      gcmSetWaitFlip (context);
       return 1;
    }
    return 0;
@@ -1275,7 +1520,6 @@ static void rsx_wait_flip(void)
 {
   while(gcmGetFlipStatus() != 0)
     usleep(200);  /* Sleep, to not stress the cpu. */
-  gcmResetFlipStatus();
 }
 
 static gcmContextData *rsx_init_screen(rsx_t* gcm)
@@ -1309,6 +1553,7 @@ static gcmContextData *rsx_init_screen(rsx_t* gcm)
       if (!context)
          goto error;
       saved_context = context;
+      rsx_host_addr = host_addr;
    }
    else
       context = saved_context;
@@ -1581,6 +1826,23 @@ static void* rsx_init(const video_info_t* video)
    if (video->font_enable)
       rsx->msg_rendering_enabled = true;
 
+   if (!rsx_labels_initialized)
+   {
+      *(volatile u32*)gcmGetLabelAddress(RSX_FONT_VERTEX_LABEL)    = 0;
+      *(volatile u32*)gcmGetLabelAddress(RSX_RETIRED_MEMORY_LABEL) = 0;
+      rsx_labels_initialized = true;
+   }
+   rsx->hw_render = video_driver_get_hw_context()->context_type
+         == RETRO_HW_CONTEXT_RSX;
+   rsx->hw_interface.interface_type    = RETRO_HW_RENDER_INTERFACE_RSX;
+   rsx->hw_interface.interface_version = RETRO_HW_RENDER_INTERFACE_RSX_VERSION;
+   rsx->hw_interface.handle            = rsx;
+   rsx->hw_interface.context           = rsx->context;
+   rsx->hw_interface.io_address        = rsx_host_addr;
+   rsx->hw_interface.io_size           = HOST_SIZE;
+   rsx->hw_interface.io_used           = CB_SIZE + 64 * 1024;
+   rsx->hw_interface.set_image         = rsx_set_hw_image;
+   rsx->hw_interface.retire_memory     = rsx_retire_hw_memory;
    return rsx;
 
 error:
@@ -2388,12 +2650,39 @@ static void rsx_update_screen(rsx_t* gcm)
    }
 
    rsx_flip(gcm->context, buffer->id);
-   if (gcm->vsync)
-      rsx_wait_flip();
    rsxSetSurface(gcm->context, &gcm->surface[gcm->nextBuffer]);
 #ifdef HAVE_SYSUTILS
    cellSysutilCheckCallback();
 #endif
+}
+
+static void rsx_draw_hw_image(rsx_t *gcm)
+{
+   rsx_texture_t texture;
+   memset(&texture, 0, sizeof(texture));
+   texture.tex.format    = GCM_TEXTURE_FORMAT_A8R8G8B8 | GCM_TEXTURE_FORMAT_LIN;
+   texture.tex.mipmap    = 1;
+   texture.tex.dimension = GCM_TEXTURE_DIMS_2D;
+   texture.tex.remap     = GCM_TEXTURE_REMAP_TYPE_REMAP << GCM_TEXTURE_REMAP_TYPE_B_SHIFT
+         | GCM_TEXTURE_REMAP_TYPE_REMAP << GCM_TEXTURE_REMAP_TYPE_G_SHIFT
+         | GCM_TEXTURE_REMAP_TYPE_REMAP << GCM_TEXTURE_REMAP_TYPE_R_SHIFT
+         | GCM_TEXTURE_REMAP_TYPE_REMAP << GCM_TEXTURE_REMAP_TYPE_A_SHIFT
+         | GCM_TEXTURE_REMAP_COLOR_A << GCM_TEXTURE_REMAP_COLOR_A_SHIFT
+         | GCM_TEXTURE_REMAP_COLOR_R << GCM_TEXTURE_REMAP_COLOR_R_SHIFT
+         | GCM_TEXTURE_REMAP_COLOR_G << GCM_TEXTURE_REMAP_COLOR_G_SHIFT
+         | GCM_TEXTURE_REMAP_COLOR_B << GCM_TEXTURE_REMAP_COLOR_B_SHIFT;
+   texture.tex.width     = gcm->hw_image.width;
+   texture.tex.height    = gcm->hw_image.height;
+   texture.tex.depth     = 1;
+   texture.tex.pitch     = gcm->hw_image.pitch;
+   texture.tex.offset    = gcm->hw_image.offset;
+   texture.tex.location  = GCM_LOCATION_RSX;
+   texture.min_filter    = gcm->smooth ? GCM_TEXTURE_LINEAR : GCM_TEXTURE_NEAREST;
+   texture.mag_filter    = texture.min_filter;
+   texture.wrap_s        = GCM_TEXTURE_CLAMP_TO_EDGE;
+   texture.wrap_t        = GCM_TEXTURE_CLAMP_TO_EDGE;
+   rsx_set_texture(gcm, &texture);
+   rsx_draw_vertices(gcm);
 }
 
 static bool rsx_frame(void* data, const void* frame,
@@ -2415,9 +2704,67 @@ static bool rsx_frame(void* data, const void* frame,
    bool widgets_active              = video_info->widgets_active;
 #endif
    bool draw                        = false;
+   bool ui_now                      = (msg && *msg)
+#ifdef HAVE_MENU
+         || (gcm->menu_frame_enable && menu_is_alive) || statistics_show
+#endif
+#ifdef HAVE_OVERLAY
+         || gcm->overlay_enable
+#endif
+         || video_info->widgets_visible;
+   bool draw_cached                 = ui_now || gcm->ui_presented || gcm->vsync;
+   bool sync_ui                     = false
+#ifdef HAVE_MENU
+         || menu_is_alive || gcm->menu_frame_enable
+#endif
+#ifdef HAVE_OVERLAY
+         || gcm->overlay_enable
+#endif
+         ;
+   /* Two images keep the core behind the flip: lowest input latency */
+   bool overlap                     = video_info->max_swapchain_images > 2;
+   /* The core shares the FIFO and leaves its own state behind. */
+   bool restore                     = gcm->hw_render && (frame || draw_cached);
+
+   rsx_collect_retired_memory();
+   rsx_fence_retired_memory(gcm->context);
+   /* Core work overlaps the previous flip; UI buffers cannot. */
+   if (frame || draw_cached)
+   {
+      if (gcm->vsync)
+         rsx_wait_flip();
+      gcmSetWaitFlip(gcm->context);
+   }
+   if (restore)
+   {
+      unsigned attrib;
+      rsxSetSurface(gcm->context, &gcm->surface[gcm->nextBuffer]);
+      rsxSetColorMask(gcm->context, GCM_COLOR_MASK_R | GCM_COLOR_MASK_G
+            | GCM_COLOR_MASK_B | GCM_COLOR_MASK_A);
+      rsxSetColorMaskMrt(gcm->context, 0);
+      rsxSetDepthTestEnable(gcm->context, GCM_FALSE);
+      rsxSetDepthWriteEnable(gcm->context, GCM_TRUE);
+      rsxSetStencilTestEnable(gcm->context, GCM_FALSE);
+      rsxSetAlphaTestEnable(gcm->context, GCM_FALSE);
+      rsxSetShadeModel(gcm->context, GCM_SHADE_MODEL_SMOOTH);
+      rsxSetBlendEnable(gcm->context, GCM_FALSE);
+      rsxSetLogicOpEnable(gcm->context, GCM_FALSE);
+      rsxSetCullFaceEnable(gcm->context, GCM_FALSE);
+      rsxSetZMinMaxControl(gcm->context, GCM_FALSE, GCM_TRUE, GCM_TRUE);
+      rsxSetScissor(gcm->context, 0, 0, gcm->width, gcm->height);
+      rsxSetPolygonOffsetFillEnable(gcm->context, GCM_FALSE);
+      for (attrib = 0; attrib < 8; attrib++)
+         rsxSetViewportClip(gcm->context, attrib, gcm->width, gcm->height);
+      for (attrib = 0; attrib < 16; attrib++)
+         rsxBindVertexArrayAttrib(gcm->context, attrib, 0, 0,
+               0, 0, GCM_VERTEX_DATA_TYPE_F32, GCM_LOCATION_RSX);
+   }
 
    if (gcm->should_resize)
       rsx_update_viewport(gcm);
+
+   if (frame || draw_cached)
+      rsx_clear_surface(gcm);
 
    vp.min                           = 0.0f;
    vp.max                           = 1.0f;
@@ -2440,16 +2787,26 @@ static bool rsx_frame(void* data, const void* frame,
          VIDEO_SCALE_H(vp.dims), vp.min, vp.max,
          vp.scale, vp.offset);
 
-   if (frame && width && height)
+   if (frame == RETRO_HW_FRAME_BUFFER_VALID)
    {
-      gcm->tex_index  = ((gcm->tex_index + 1) % RSX_MAX_TEXTURES);
+      if (gcm->hw_render && gcm->hw_image_valid)
+      {
+         rsx_draw_hw_image(gcm);
+         draw = true;
+      }
+   }
+   else if (frame && width && height)
+   {
+      /* A failed load leaves the last good frame the cached one */
+      unsigned next   = (gcm->tex_index + 1) % RSX_MAX_TEXTURES;
       if (rsx_load_texture_data(gcm,
-            &gcm->texture[gcm->tex_index],
+            &gcm->texture[next],
             frame, width, height, pitch, gcm->rgb32, false,
             gcm->smooth
             ? TEXTURE_FILTER_LINEAR
             : TEXTURE_FILTER_NEAREST))
       {
+         gcm->tex_index = next;
          /* TODO/FIXME - pipeline ID being used here is RSX_SHADER_MENU,
           * shouldn't this be RSX_SHADER_STOCK_BLEND instead? */
          rsx_set_texture(gcm, &gcm->texture[gcm->tex_index]);
@@ -2458,10 +2815,31 @@ static bool rsx_frame(void* data, const void* frame,
       }
    }
 
+   /* Core duplicates still need a synchronized present. */
+   if (!draw && draw_cached)
+   {
+      if (gcm->hw_render && gcm->hw_image_valid)
+      {
+         rsx_draw_hw_image(gcm);
+         draw = true;
+      }
+      else if (gcm->texture[gcm->tex_index].data)
+      {
+         rsx_set_texture(gcm, &gcm->texture[gcm->tex_index]);
+         rsx_draw_vertices(gcm);
+         draw = true;
+      }
+      /* Nothing cached: a cleared buffer goes out only to put up or
+       * take down UI, never in place of the image on screen */
+      else if (ui_now || gcm->ui_presented)
+         draw = true;
+   }
+
 #ifdef HAVE_MENU
    if (gcm->menu_frame_enable && menu_is_alive)
    {
       menu_driver_frame(menu_is_alive, video_info);
+      draw = true;
       if (gcm->menu_texture.data)
       {
          /* TODO/FIXME - pipeline ID being used here
@@ -2469,7 +2847,6 @@ static bool rsx_frame(void* data, const void* frame,
           * this be RSX_SHADER_MENU instead? */
          rsx_set_menu_texture(gcm, &gcm->menu_texture);
          rsx_draw_menu_vertices(gcm);
-         draw = true;
       }
    };
 
@@ -2486,11 +2863,15 @@ static bool rsx_frame(void* data, const void* frame,
 #endif
 
 #ifdef HAVE_GFX_WIDGETS
+   /* Called on bare dupes too, for the widgets' own per-frame work.
+    * Without vsync those go out without the state restore and are not
+    * presented, so this relies on gfx_widgets_frame drawing nothing
+    * whenever the frame's widgets_visible is false. */
    if (widgets_active)
       gfx_widgets_frame(video_info);
 #endif
 
-   if (msg)
+   if (msg && *msg)
       font_driver_render_msg(gcm, msg, strlen(msg), NULL, NULL);
 
 #if 0
@@ -2498,13 +2879,14 @@ static bool rsx_frame(void* data, const void* frame,
 #endif
    if (draw)
    {
-      /* Only update when we draw to prevent flickering when core frame duping is enabled */
+      /* Undrawn frames are not presented: the last image stays up */
       rsx_update_screen(gcm);
-      rsx_clear_surface(gcm);
+      /* Menu and overlay uploads happen between frame calls. */
+      if (gcm->vsync && (sync_ui || !overlap))
+         rsx_wait_flip();
+      gcm->ui_presented = ui_now;
    }
    gcm->vert_idx         = 0;
-   gcm->texture_vert_idx = 0;
-   gcm->font_vert_idx    = 0;
 
    return true;
 }
@@ -2640,7 +3022,12 @@ static void rsx_set_osd_msg(void *data,
 }
 #endif
 
-static uint32_t rsx_get_flags(void *data) { return 0; }
+static uint32_t rsx_get_flags(void *data)
+{
+   uint32_t flags = 0;
+   BIT32_SET(flags, GFX_CTX_FLAGS_CUSTOMIZABLE_SWAPCHAIN_IMAGES);
+   return flags;
+}
 
 /* --- GPU-native BCn compressed-texture upload (PoC) --- */
 /* RSX (NV47/G70) natively samples DXT1/DXT23/DXT45 == BC1/BC2/BC3.
@@ -2786,7 +3173,7 @@ static const video_poke_interface_t rsx_poke_interface = {
    NULL, /* grab_mouse_toggle */
    NULL, /* get_current_shader */
    NULL, /* get_current_software_framebuffer */
-   NULL, /* get_hw_render_interface */
+   rsx_get_hw_render_interface,
    NULL, /* set_hdr_menu_nits */
    NULL, /* set_hdr_paper_white_nits */
    NULL, /* set_hdr_expand_gamut */

@@ -17,6 +17,7 @@
 #include <string.h>
 
 #include <boolean.h>
+#include <retro_miscellaneous.h>
 #include <compat/strl.h>
 #include <string/stdstring.h>
 
@@ -85,6 +86,25 @@ static bool openxr_runtime_start_loader(openxr_runtime_t *rt)
    return true;
 }
 
+/* An optional extension the runtime has, while there is room for it. */
+static bool openxr_runtime_want_extension(
+      PFN_xrEnumerateInstanceExtensionProperties enum_exts, uint32_t count,
+      const char **exts, uint32_t *num_exts, uint32_t cap, const char *name)
+{
+   if (!openxr_runtime_has_extension(enum_exts, count, name))
+      return false;
+   if (*num_exts >= cap)
+   {
+      RARCH_WARN("[OpenXR] No room to enable %s.\n", name);
+      return false;
+   }
+   exts[(*num_exts)++] = name;
+   return true;
+}
+
+#define OPENXR_RUNTIME_WANT(name) openxr_runtime_want_extension(enum_exts, \
+      count, exts, &num_exts, cap, (name))
+
 enum openxr_runtime_result openxr_runtime_create_instance(
       openxr_runtime_t *rt, PFN_xrGetInstanceProcAddr get_proc,
       const char *graphics_ext)
@@ -92,7 +112,9 @@ enum openxr_runtime_result openxr_runtime_create_instance(
    XrResult res;
    uint32_t count = 0;
    uint32_t num_exts;
-   const char *exts[5];
+   uint32_t cap;
+   /* The graphics and binding extensions, then the optional ones. */
+   const char *exts[10];
    XrInstanceCreateInfo ici;
    PFN_xrEnumerateInstanceExtensionProperties enum_exts;
    PFN_xrCreateInstance create_instance;
@@ -132,25 +154,35 @@ enum openxr_runtime_result openxr_runtime_create_instance(
       }
       exts[num_exts++] = rt->binding_ext;
    }
-   if (openxr_runtime_has_extension(enum_exts, count, OPENXR_FRAME_EXT))
-   {
-      exts[num_exts++]     = OPENXR_FRAME_EXT;
-      rt->frame_controller = true;
-   }
-   if (openxr_runtime_has_extension(enum_exts, count,
-            XR_FB_DISPLAY_REFRESH_RATE_EXTENSION_NAME))
-   {
-      exts[num_exts++] = XR_FB_DISPLAY_REFRESH_RATE_EXTENSION_NAME;
-      rt->refresh_ext  = true;
-   }
-   if (     rt->platform.instance_ext
-         && openxr_runtime_has_extension(enum_exts, count,
-            rt->platform.instance_ext))
-      exts[num_exts++] = rt->platform.instance_ext;
+   /* The platform's goes last, its room kept. */
+   cap = (uint32_t)ARRAY_SIZE(exts) - (rt->platform.instance_ext ? 1 : 0);
+   rt->frame_controller = OPENXR_RUNTIME_WANT(OPENXR_FRAME_EXT);
+   rt->refresh_ext      = OPENXR_RUNTIME_WANT(
+         XR_FB_DISPLAY_REFRESH_RATE_EXTENSION_NAME);
+   /* The hands for a core's RETRO_ENVIRONMENT_GET_VR_CONTROLLER_POSES:
+    * the palm pose, and the joints where the headset sees them. */
+   rt->palm_pose        = OPENXR_RUNTIME_WANT(
+         XR_EXT_PALM_POSE_EXTENSION_NAME);
+   rt->hand_tracking    = OPENXR_RUNTIME_WANT(
+         XR_EXT_HAND_TRACKING_EXTENSION_NAME);
+   if (rt->hand_tracking)
+      rt->hand_data_source = OPENXR_RUNTIME_WANT(
+            XR_EXT_HAND_TRACKING_DATA_SOURCE_EXTENSION_NAME);
+   /* To ask for the clocks a core's frame needs: see
+    * openxr_frame_ask_perf. */
+   rt->perf_settings    = OPENXR_RUNTIME_WANT(
+         XR_EXT_PERFORMANCE_SETTINGS_EXTENSION_NAME);
+   cap = (uint32_t)ARRAY_SIZE(exts);
+   if (rt->platform.instance_ext)
+      OPENXR_RUNTIME_WANT(rt->platform.instance_ext);
 
-   memset(&ici, 0, sizeof(ici));
-   ici.type                       = XR_TYPE_INSTANCE_CREATE_INFO;
-   ici.next                       = rt->platform.instance_next;
+   ici.type                               = XR_TYPE_INSTANCE_CREATE_INFO;
+   ici.createFlags                        = 0;
+   ici.applicationInfo.applicationVersion = 0;
+   ici.applicationInfo.engineVersion      = 0;
+   ici.enabledApiLayerCount               = 0;
+   ici.enabledApiLayerNames               = NULL;
+   ici.next                               = rt->platform.instance_next;
    strlcpy(ici.applicationInfo.applicationName, "RetroArch",
          sizeof(ici.applicationInfo.applicationName));
    strlcpy(ici.applicationInfo.engineName, "RetroArch",
@@ -174,6 +206,9 @@ enum openxr_runtime_result openxr_runtime_create_instance(
          && (  !OPENXR_FN(rt, rt, EnumerateDisplayRefreshRatesFB)
             || !OPENXR_FN(rt, rt, RequestDisplayRefreshRateFB)))
       rt->refresh_ext = false;
+   if (     rt->perf_settings
+         && !OPENXR_FN(rt, rt, PerfSettingsSetPerformanceLevelEXT))
+      rt->perf_settings = false;
    return OPENXR_RUNTIME_OK;
 }
 
@@ -183,6 +218,7 @@ enum openxr_runtime_result openxr_runtime_find_system(openxr_runtime_t *rt)
    uint32_t count = 0;
    XrSystemGetInfo sgi;
    XrSystemProperties props;
+   XrSystemHandTrackingPropertiesEXT hand_props;
    XrViewConfigurationView views[2];
    XrEnvironmentBlendMode modes[8];
    PFN_xrGetSystem get_system;
@@ -204,8 +240,8 @@ enum openxr_runtime_result openxr_runtime_find_system(openxr_runtime_t *rt)
       return OPENXR_RUNTIME_FAILED;
    }
 
-   memset(&sgi, 0, sizeof(sgi));
    sgi.type       = XR_TYPE_SYSTEM_GET_INFO;
+   sgi.next       = NULL;
    sgi.formFactor = XR_FORM_FACTOR_HEAD_MOUNTED_DISPLAY;
    if (XR_FAILED(res = get_system(rt->instance, &sgi, &rt->system)))
    {
@@ -214,25 +250,34 @@ enum openxr_runtime_result openxr_runtime_find_system(openxr_runtime_t *rt)
    }
 
    rt->max_dim    = 4096;
+   rt->max_width  = 0;
    rt->max_layers = XR_MIN_COMPOSITION_LAYERS_SUPPORTED;
-   memset(&props, 0, sizeof(props));
-   props.type     = XR_TYPE_SYSTEM_PROPERTIES;
+   props.type      = XR_TYPE_SYSTEM_PROPERTIES;
+   props.next      = NULL;
+   hand_props.type = XR_TYPE_SYSTEM_HAND_TRACKING_PROPERTIES_EXT;
+   hand_props.next = NULL;
+   if (rt->hand_tracking)
+      props.next   = &hand_props;
    if (XR_SUCCEEDED(get_system_properties(rt->instance, rt->system, &props)))
    {
       uint32_t mw = props.graphicsProperties.maxSwapchainImageWidth;
       uint32_t mh = props.graphicsProperties.maxSwapchainImageHeight;
+      rt->max_width = mw;
       if (mw && mw < rt->max_dim)
          rt->max_dim = mw;
       if (mh && mh < rt->max_dim)
          rt->max_dim = mh;
       if (props.graphicsProperties.maxLayerCount)
          rt->max_layers = props.graphicsProperties.maxLayerCount;
+      if (rt->hand_tracking && !hand_props.supportsHandTracking)
+         rt->hand_tracking = false;
       RARCH_LOG("[OpenXR] Headset: %s.\n", props.systemName);
    }
 
-   memset(views, 0, sizeof(views));
    views[0].type = XR_TYPE_VIEW_CONFIGURATION_VIEW;
+   views[0].next = NULL;
    views[1].type = XR_TYPE_VIEW_CONFIGURATION_VIEW;
+   views[1].next = NULL;
    count         = 0;
    if (     XR_FAILED(enum_views(rt->instance, rt->system,
                XR_VIEW_CONFIGURATION_TYPE_PRIMARY_STEREO, 2, &count, views))

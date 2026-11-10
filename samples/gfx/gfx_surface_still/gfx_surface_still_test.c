@@ -17,16 +17,24 @@
 #include "gfx/gfx_surface.h"
 #include <formats/image_yuv_blit.h>
 
+static int failures;
+#define CHECK(c, ...) do { if (!(c)) { failures++; \
+   printf("[FAIL] " __VA_ARGS__); printf("\n"); } } while (0)
+
 /* --- stub driver ------------------------------------------------- */
 static uintptr_t st_next = 1;
 static int       st_live, st_loads, st_unloads, st_async;
 /* Updates the stub driver drops, and updates it was handed without
  * an image to read */
-static int       st_drop, st_updates, st_null_updates;
+static int       st_drop, st_updates, st_null_updates, st_refuse, st_load_fail, st_post_fail;
+static enum texture_filter_type st_last_filter;
 static enum video_texture_update st_import_result = VIDEO_TEXTURE_UPDATE_REFUSED;
 static unsigned st_abandoned, st_released;
-static bool st_lend;
-static uint32_t st_lent_pixels[2][16];
+static bool st_lend, st_fp16;
+static uint32_t st_lent_pixels[2][64];
+static size_t st_lend_pitch[2];
+static unsigned st_lend_busy;
+static int st_load_lent;
 static uintptr_t st_last_unloaded;
 static video_thread_async_load_t *st_head, *st_tail;
 /* The first and last word of the last frame the driver read */
@@ -34,6 +42,9 @@ static uint32_t st_px_first, st_px_last;
 /* The planes and colour space of the last planar frame read */
 static struct texture_planar st_planar;
 static int st_planar_reads;
+/* The stub driver samples BC1; loads it was handed as a payload */
+static bool st_bc1;
+static int  st_compressed_loads;
 
 static void st_saw(void *data)
 {
@@ -47,14 +58,29 @@ static void st_saw(void *data)
    if (ti && ti->pixels && ti->width && ti->height)
    {
       st_px_first = ti->pixels[0];
-      st_px_last  = ti->pixels[(size_t)ti->width * ti->height - 1];
+      st_px_last  = ti->pixels[(size_t)ti->width * ti->height * (ti->fp16 ? 2 : 1) - 1];
    }
 }
 
 bool video_driver_texture_load(void *data,
       enum texture_filter_type filter, uintptr_t *id)
 {
-   (void)filter;
+   st_last_filter = filter;
+   if (st_load_fail)
+   {
+      st_load_fail--;
+      *id = 0;
+      return false;
+   }
+   if (st_lend_pitch[0] && data)
+   {
+      const struct texture_image *img = (const struct texture_image*)data;
+      if (img->pixels == st_lent_pixels[0] || img->pixels == st_lent_pixels[1])
+         st_load_lent++;
+   }
+   if (     data && ((const struct texture_image*)data)->compressed
+         && !((const struct texture_image*)data)->pixels)
+      st_compressed_loads++;
    st_saw(data);
    *id = st_next++;
    st_loads++;
@@ -82,6 +108,11 @@ enum video_texture_update video_driver_texture_update(uintptr_t id,
    st_saw(data);
    if (!data)
       st_null_updates++;
+   if (st_refuse)
+   {
+      st_refuse--;
+      return VIDEO_TEXTURE_UPDATE_REFUSED;
+   }
    if (st_drop > 0)
    {
       st_drop--;
@@ -98,7 +129,9 @@ unsigned video_driver_get_disp_flags(void) { return 0; }
 static int st_yuv420;
 bool video_driver_supports_texture_format(enum texture_gpu_format fmt)
 {
-   return fmt == TEXTURE_GPU_FORMAT_YUV420 && st_yuv420;
+   return (fmt == TEXTURE_GPU_FORMAT_YUV420 && st_yuv420)
+      || (fmt == TEXTURE_GPU_FORMAT_BC1 && st_bc1)
+      || (st_fp16 && (fmt == TEXTURE_GPU_FORMAT_RGBA16F || fmt == TEXTURE_GPU_FORMAT_SCRGB));
 }
 
 /* As the frontend fits an image, from this stub's own answers */
@@ -111,16 +144,32 @@ bool video_driver_texture_fit(struct texture_image *ti)
    return !ti->fp16
       || video_driver_supports_texture_format(TEXTURE_GPU_FORMAT_RGBA16F);
 }
-void *video_driver_texture_lend(uintptr_t id, unsigned slot, size_t pitch)
+void *video_driver_texture_lend(uintptr_t id, unsigned slot, size_t pitch, size_t *out_pitch)
 {
-   if (st_lend && id && slot < 2 && pitch == 4 * sizeof(uint32_t))
+   size_t actual = slot < 2 && st_lend_pitch[slot] ? st_lend_pitch[slot] : pitch;
+   if (st_lend && id && slot < 2 && pitch == 4 * (st_fp16 ? 8 : sizeof(uint32_t))
+         && actual >= pitch && (out_pitch || actual == pitch))
+   {
+      if (out_pitch)
+         *out_pitch = actual;
       return st_lent_pixels[slot];
+   }
    return NULL;
 }
 enum video_texture_update video_driver_texture_import(uintptr_t *id,
       const video_frame_import_t *frame, enum texture_filter_type filter)
 {
-   (void)frame; (void)filter;
+   (void)filter;
+   CHECK(frame->output_pixfmt == (frame->color.transfer == 16 ? IMAGE_PIXFMT_FP16 : 0),
+         "import lost destination format");
+   CHECK(frame->color.primaries == 9 && frame->color.matrix == 9
+         && (frame->color.transfer == 16 || frame->color.transfer == 18)
+         && frame->color.range == 1 && frame->color.max_cll == 1000
+         && frame->color.max_fall == 400
+         && frame->color.mastering.present == VIDEO_MASTERING_DISPLAY_COMPLETE
+         && frame->color.mastering.chromaticity[0] == 25000
+         && frame->color.mastering.luminance_max == 10240000,
+         "import lost source HDR metadata");
    if (st_import_result == VIDEO_TEXTURE_UPDATE_DONE && !*id)
    {
       *id = st_next++;
@@ -131,15 +180,22 @@ enum video_texture_update video_driver_texture_import(uintptr_t *id,
 
 bool video_driver_texture_lend_ready(uintptr_t id, unsigned slot)
 {
-   (void)id; (void)slot;
-   return true;
+   (void)id;
+   return !(st_lend_busy & (1u << slot));
 }
 
-/* Nothing is lent here: the wrapper's records never exist */
-bool video_thread_lend_ready(int idx) { (void)idx; return true; }
+bool video_thread_lend_ready(int idx)
+{
+   return !(st_lend_busy & (1u << idx));
+}
 
 bool video_thread_async_post(video_thread_async_load_t *n)
 {
+   if (st_post_fail)
+   {
+      st_post_fail--;
+      return false;
+   }
    if (!st_async)
       return false;
    n->link.next = NULL;
@@ -174,9 +230,26 @@ static void st_flush(void)
       }
       else if (n->kind == VIDEO_THREAD_ASYNC_UPDATE)
       {
-         id         = n->handle;
-         n->dropped = video_driver_texture_update(id, n->img)
-               == VIDEO_TEXTURE_UPDATE_DROPPED;
+         enum video_texture_update result;
+         id = n->handle;
+         result = video_driver_texture_update(id, n->img);
+         n->dropped = result == VIDEO_TEXTURE_UPDATE_DROPPED;
+         if (result == VIDEO_TEXTURE_UPDATE_REFUSED)
+            id = 0;
+         if (result == VIDEO_TEXTURE_UPDATE_DONE && n->lend)
+         {
+            const struct texture_image *img = (const struct texture_image*)n->img;
+            unsigned slot;
+            for (slot = 0; slot < 2; slot++)
+               if (n->lend & (1u << slot))
+               {
+                  size_t pitch = img->width * (img->fp16 ? 8 : 4);
+                  n->lent_mem[slot] = video_driver_texture_lend(id, slot, pitch,
+                        n->lend_padded ? &pitch : NULL);
+                  n->lent_pitch[slot] = pitch;
+                  n->lent_idx[slot] = n->lent_mem[slot] ? (int8_t)slot : -1;
+               }
+         }
       }
       else
          video_driver_texture_load(n->img, n->filter, &id);
@@ -248,6 +321,13 @@ void image_texture_free(struct texture_image *img)
 {
    if (!img)
       return;
+   if (img->compressed)
+   {
+      free(img->compressed->storage);
+      free(img->compressed->mips);
+      free(img->compressed);
+      img->compressed = NULL;
+   }
    free(img->pixels);
    img->pixels = NULL;
    img->width  = img->height = 0;
@@ -295,10 +375,76 @@ static struct texture_image *st_image(unsigned w)
    return img;
 }
 
+/* A @w x @w still that is its BC1 blocks alone, as a DDS decodes */
+static struct texture_image *st_bc1_image(unsigned w)
+{
+   struct texture_image *img = (struct texture_image*)calloc(1, sizeof(*img));
+   struct texture_compressed *tc =
+      (struct texture_compressed*)calloc(1, sizeof(*tc));
+   size_t len                = (size_t)((w + 3) / 4) * ((w + 3) / 4) * 8;
+   tc->format                = TEXTURE_GPU_FORMAT_BC1;
+   tc->storage               = calloc(1, len);
+   tc->storage_len           = len;
+   tc->mips                  = (struct texture_mip*)calloc(1, sizeof(*tc->mips));
+   tc->mips[0].data          = tc->storage;
+   tc->mips[0].width         = tc->mips[0].height = w;
+   tc->mips[0].size          = len;
+   tc->num_mips              = 1;
+   img->width = img->height  = w;
+   img->compressed           = tc;
+   return img;
+}
+
 /* --- the test ---------------------------------------------------- */
-static int failures;
-#define CHECK(c, ...) do { if (!(c)) { failures++; \
-   printf("[FAIL] " __VA_ARGS__); printf("\n"); } } while (0)
+
+/* A still that is only a payload the driver samples goes to the video
+ * thread as a load, never through the caller: the payload is the
+ * surface's until the completion, and goes with a surface freed while
+ * it is still out. A format the driver does not sample takes the plain
+ * load, which decodes. */
+static void st_compressed_stills(void)
+{
+   gfx_surface_t *s;
+   int loads, compressed, live = st_live;
+
+   st_async = 1;
+   st_bc1   = true;
+   s        = gfx_surface_new_still(TEXTURE_FILTER_LINEAR);
+   loads    = st_loads;
+   CHECK(gfx_surface_submit_image(s, st_bc1_image(8)),
+         "compressed still: refused");
+   CHECK(s->inflight && st_loads == loads,
+         "compressed still: not posted, loaded on the caller");
+   st_flush();
+   CHECK(s->handle && !s->inflight && st_compressed_loads == 1,
+         "compressed still: no texture from its blocks");
+   CHECK(!s->img.compressed && !s->payload,
+         "compressed still: the payload outlived its upload");
+   gfx_surface_free(s);
+
+   /* freed with the load still queued */
+   s = gfx_surface_new_still(TEXTURE_FILTER_LINEAR);
+   CHECK(gfx_surface_submit_image(s, st_bc1_image(8)) && s->inflight,
+         "compressed still in flight: not posted");
+   gfx_surface_free(s);
+   st_flush();
+   CHECK(st_live == live, "compressed still in flight: %d textures left",
+         st_live - live);
+
+   /* not sampled: the plain load, on the caller */
+   st_bc1     = false;
+   compressed = st_compressed_loads;
+   s          = gfx_surface_new_still(TEXTURE_FILTER_LINEAR);
+   CHECK(gfx_surface_submit_image(s, st_bc1_image(8)), "unsampled: refused");
+   CHECK(!s->inflight && s->handle
+         && st_compressed_loads == compressed + 1,
+         "unsampled: did not take the plain load");
+   gfx_surface_free(s);
+   CHECK(st_live == live, "compressed stills: %d textures left",
+         st_live - live);
+   st_async = 0;
+}
+
 
 /* The path of slot @i in the set lane: "<8 + i>.png", but slot 3's
  * file does not exist and slot 5 has no still */
@@ -338,6 +484,13 @@ static void st_retired_imports(void)
       frame.dims = VIDEO_SCALE_PACK(4, 4);
       frame.pixfmt = IMAGE_PIXFMT_NV12;
       frame.image = 1;
+      frame.color.primaries = frame.color.matrix = 9;
+      frame.color.transfer = i % 2 ? 16 : 18; frame.color.range = 1;
+      frame.output_pixfmt = i % 2 ? IMAGE_PIXFMT_FP16 : 0;
+      frame.color.max_cll = 1000; frame.color.max_fall = 400;
+      frame.color.mastering.present = VIDEO_MASTERING_DISPLAY_COMPLETE;
+      frame.color.mastering.chromaticity[0] = 25000;
+      frame.color.mastering.luminance_max = 10240000;
       frame.done = 42;
       frame.done_value = 7;
       frame.owner = &st_abandoned;
@@ -412,6 +565,208 @@ static void st_retired_lent_textures(void)
    }
    st_async = 0;
 }
+static void st_pitched_write(gfx_surface_t *s, unsigned slot, uint32_t value)
+{
+   unsigned x, y;
+   unsigned words = 4 * IMAGE_PIXFMT_BPP(s->pixfmt) / sizeof(uint32_t);
+   for (y = 0; y < 4; y++)
+      for (x = 0; x < words; x++)
+         ((uint32_t*)((uint8_t*)s->slots[slot] + y * s->pitch[slot]))[x]
+            = value + y * words + x;
+}
+
+static void st_pitched_lending(void)
+{
+   unsigned threaded, active, format, i;
+   for (format = 0; format < 2; format++)
+   for (threaded = 0; threaded < 2; threaded++)
+   for (active = 0; active < 2; active++)
+   {
+      gfx_surface_t *s;
+      uintptr_t old;
+      int unloaded;
+      st_async = (int)threaded;
+      st_lend = true;
+      st_fp16 = format != 0;
+      st_lend_pitch[0] = format ? 48 : 24;
+      st_lend_pitch[1] = format ? 64 : 32;
+      st_load_lent = 0;
+      memset(st_lent_pixels, 0xa5, sizeof(st_lent_pixels));
+      s = gfx_surface_new(VIDEO_SCALE_PACK(4, 4), 2,
+            format ? IMAGE_PIXFMT_FP16 : IMAGE_PIXFMT_8888,
+            TEXTURE_FILTER_LINEAR, NULL, NULL);
+      CHECK(s != NULL, "pitched surface allocation");
+      if (!s) continue;
+      gfx_surface_submit(s, 0, false);
+      st_flush();
+      gfx_surface_submit(s, 0, false);
+      st_flush();
+      CHECK(!s->lent, "packed producer received padded memory");
+      s->padded = 1;
+      for (i = 0; i < 2; i++)
+      {
+         gfx_surface_submit(s, i, false);
+         st_flush();
+      }
+      CHECK(s->lent == 3 && s->pitch[0] == st_lend_pitch[0] && s->pitch[1] == st_lend_pitch[1],
+            "padded pitches not carried through lending");
+      if (active)
+         gfx_surface_slot_begin(s, 1);
+      st_pitched_write(s, 0, 0x100);
+      st_pitched_write(s, 1, 0x200);
+      CHECK(st_lent_pixels[0][format ? 8 : 4] == 0xa5a5a5a5u
+            && st_lent_pixels[1][format ? 8 : 4] == 0xa5a5a5a5u, "row padding overwritten");
+      old = s->handle;
+      unloaded = st_unloads;
+      s->filter = TEXTURE_FILTER_NEAREST;
+      gfx_surface_submit(s, 0, false);
+      st_flush();
+      CHECK(!st_load_lent && st_px_first == 0x100 && st_px_last == 0x100 + (format ? 32 : 16) - 1,
+            "replacement load did not repack padded rows");
+      if (active)
+      {
+         CHECK(s->retired_handle == old && st_unloads == unloaded,
+               "writing producer lost its texture");
+         gfx_surface_slot_end(s, 1);
+         CHECK(!s->retired_handle, "settled producer retained texture");
+      }
+      for (i = 0; i < (format ? 32u : 16u); i++)
+         CHECK(s->own_slots[1][i] == 0x200 + i,
+               "replacement lost %s producer pixel %u", active ? "writing" : "ready", i);
+      gfx_surface_free(s);
+      st_flush();
+      st_lend_pitch[0] = st_lend_pitch[1] = 0;
+      st_lend = false;
+   }
+   st_async = 0;
+   st_fp16 = false;
+   {
+      gfx_surface_t *s = gfx_surface_new(VIDEO_SCALE_PACK(4, 4), 1,
+            IMAGE_PIXFMT_8888, TEXTURE_FILTER_LINEAR, NULL, NULL);
+      uint32_t pixels[16];
+      if (!s) return;
+      s->padded = 1;
+      st_lend = true;
+      st_lend_pitch[0] = 24;
+      st_lend_pitch[1] = 32;
+      gfx_surface_submit(s, 0, false);
+      CHECK(s->pitch[0] == 24 && s->lent_spare_pitch == 32, "one-slot pitches");
+      st_lend_busy = 1;
+      CHECK(gfx_surface_slot_writable(s, 0) && s->pitch[0] == 32,
+            "one-slot pitch did not follow spare");
+      for (i = 0; i < 16; i++) pixels[i] = i + 0x300;
+      gfx_surface_submit_pixels(s, pixels, false);
+      CHECK(st_lent_pixels[1][8] == 0x304 && st_lent_pixels[1][24] == 0x30c,
+            "external canvas was not copied row by row");
+      st_lend_busy = 0;
+      gfx_surface_free(s);
+      st_lend = false;
+      st_lend_pitch[0] = st_lend_pitch[1] = 0;
+   }
+}
+
+static void st_still_recovery(void)
+{
+   unsigned fail_load;
+   for (fail_load = 0; fail_load < 2; fail_load++)
+   {
+      gfx_surface_t *s = gfx_surface_new_still(TEXTURE_FILTER_NEAREST);
+      uintptr_t old;
+      int loads;
+      CHECK(gfx_surface_submit_image(s, st_image(8)), "recovery: initial image");
+      st_flush();
+      old = s->handle;
+      loads = st_loads;
+      st_refuse = 1;
+      CHECK(gfx_surface_submit_image(s, st_image(8)), "recovery: new image");
+      st_flush();
+      CHECK(s->inflight && s->payload && s->handle == old,
+            "refused update lost its image before replacement");
+      st_load_fail = (int)fail_load;
+      st_flush();
+      CHECK(!s->inflight && !s->payload, "recovery did not settle its payload");
+      if (fail_load)
+         CHECK(s->dropped && s->handle == old, "failed replacement was not reported");
+      else
+         CHECK(!s->dropped && s->handle != old && st_loads == loads + 1,
+               "refused update did not load the retained image");
+      gfx_surface_free(s);
+      CHECK(st_live == 0, "recovery leaked textures");
+   }
+   st_load_fail = 0;
+   {
+      gfx_surface_t *s = gfx_surface_new_still(TEXTURE_FILTER_NEAREST);
+      CHECK(gfx_surface_submit_image(s, st_image(8)), "filter: initial image");
+      gfx_surface_still(&s, TEXTURE_FILTER_LINEAR);
+      st_flush();
+      CHECK(s->inflight && s->payload, "in-flight load lost a changed filter");
+      st_flush();
+      CHECK(!s->inflight && st_last_filter == TEXTURE_FILTER_LINEAR,
+            "requested filter did not replace the installed one");
+      CHECK(gfx_surface_submit_image(s, st_image(8)), "filter: update image");
+      gfx_surface_still(&s, TEXTURE_FILTER_NEAREST);
+      st_flush();
+      CHECK(s->inflight && s->payload, "in-flight update lost a changed filter");
+      st_flush();
+      CHECK(!s->inflight && st_last_filter == TEXTURE_FILTER_NEAREST,
+            "update retained the old texture filter");
+      gfx_surface_free(s);
+   }
+   {
+      enum texture_filter_type filters[2] = {
+         TEXTURE_FILTER_MIPMAP_LINEAR, TEXTURE_FILTER_MIPMAP_NEAREST};
+      unsigned i;
+      for (i = 0; i < 2; i++)
+      {
+         gfx_surface_t *s = gfx_surface_new_still(filters[i]);
+         int loads, updates;
+         CHECK(gfx_surface_submit_image(s, st_image(8)), "mips: initial image");
+         st_flush();
+         loads = st_loads;
+         updates = st_updates;
+         CHECK(gfx_surface_submit_image(s, st_image(8)), "mips: replacement image");
+         st_flush();
+         CHECK(st_loads == loads + 1 && st_updates == updates && st_last_filter == filters[i],
+               "mipmapped still reused a stale chain");
+         gfx_surface_free(s);
+      }
+   }
+   {
+      unsigned phase;
+      for (phase = 0; phase < 2; phase++)
+      {
+         gfx_surface_t *s = gfx_surface_new_still(TEXTURE_FILTER_NEAREST);
+         CHECK(gfx_surface_submit_image(s, st_image(8)), "cancel: initial image");
+         st_flush();
+         st_refuse = 1;
+         CHECK(gfx_surface_submit_image(s, st_image(8)), "cancel: replacement image");
+         if (phase)
+            st_flush();
+         gfx_surface_free(s);
+         st_flush();
+         CHECK(st_live == 0 && !st_head, "cancelled recovery leaked work or textures");
+      }
+   }
+   {
+      gfx_surface_t *s = gfx_surface_new_still(TEXTURE_FILTER_NEAREST);
+      uintptr_t old;
+      CHECK(gfx_surface_submit_image(s, st_image(8)), "post failure: initial image");
+      st_flush();
+      old = s->handle;
+      st_refuse = 1;
+      CHECK(gfx_surface_submit_image(s, st_image(8)), "post failure: replacement image");
+      st_post_fail = 1;
+      st_flush();
+      CHECK(!s->inflight && !s->payload && s->dropped && s->handle == old,
+            "failed recovery post did not settle ownership and failure");
+      CHECK(gfx_surface_submit_image(s, st_image(8)), "post failure: subsequent image");
+      st_flush();
+      CHECK(s->handle != old && !s->dropped, "surface did not recover after post failure");
+      gfx_surface_free(s);
+   }
+   CHECK(st_live == 0, "still recovery/filter tests leaked textures");
+}
+
 int main(void)
 {
    uintptr_t a, b;
@@ -419,7 +774,10 @@ int main(void)
    st_decode_lock = slock_new();
    st_retired_imports();
    st_retired_lent_textures();
+   st_pitched_lending();
+   st_compressed_stills();
    st_async = 1;
+   st_still_recovery();
 
    /* 1. threaded: a same-size image updates the texture up in place
     *    once landed, another size replaces it, and one given while
@@ -427,6 +785,7 @@ int main(void)
    {
       gfx_surface_t *s = gfx_surface_new_still(TEXTURE_FILTER_NEAREST);
       int loads;
+      unsigned retired;
       CHECK(s != NULL, "no still");
       CHECK(gfx_surface_submit_image(s, st_image(8)), "first image refused");
       CHECK(s->handle == 0, "a queued image landed early");
@@ -438,16 +797,25 @@ int main(void)
       CHECK(gfx_surface_submit_image(s, st_image(16)),
             "an image during the flight refused");
       CHECK(s->handle == a && st_live == 1, "the texture up went early");
+      retired = gfx_surface_retired();
       st_flush();
       CHECK(s->handle == a && st_loads == loads,
             "a same-size image did not update in place");
+      CHECK(gfx_surface_retired() == retired,
+            "an update in place counted as a retired texture");
       st_flush();
       b = s->handle;
+      /* A handle kept from before is the caller's to take again */
+      CHECK(gfx_surface_retired() != retired,
+            "a replacement retired a texture without saying so");
+      retired = gfx_surface_retired();
       CHECK(b != 0 && b != a && VIDEO_SCALE_W(s->dims) == 16 && st_live == 1,
             "the image given in flight did not go up after (%d live)",
             st_live);
       gfx_surface_free(s);
       CHECK(st_live == 0, "%d textures live after the still went", st_live);
+      CHECK(gfx_surface_retired() != retired,
+            "a freed still retired its texture without saying so");
    }
 
    /* 2. a still freed with an upload in flight: the completion frees
@@ -739,4 +1107,13 @@ int main(void)
 
    printf("%s\n", failures ? "FAILED" : "PASS");
    return failures ? 1 : 0;
+}
+
+bool video_driver_texture_lend_needs_refresh(void) { return false; }
+bool video_thread_lend_get(int idx, void **mem, size_t *pitch)
+{
+   (void)idx;
+   (void)mem;
+   (void)pitch;
+   return false;
 }

@@ -19,7 +19,9 @@ With RA_E2E_XVFB=1 each case runs on an Xvfb server of its own instead
 of gamescope, with Mesa's software renderers where there is no GPU:
 the screen is read with ImageMagick's import and the pointer moved on
 that server, several cases at once (RA_E2E_JOBS, 4 by default). The
-GPU memory cases are left out there. RA_E2E_ONLY, a
+GPU memory cases are left out there. Xvfb has no XVideo adaptor: for
+the xvideo driver RA_E2E_XV_STANDIN names samples/gfx/xv_standin's
+library, preloaded to be one. RA_E2E_ONLY, a
 regular expression, runs only the cases whose names it finds; CI runs a
 set of them that way (Linux-vulkan-validation.yml).
 
@@ -154,6 +156,11 @@ HW_CASES = {
     'd3d12': [(name, 'd3d12')
               for name in ('3ds-2d', '3ds-sbs-full', '3ds-anaglyph',
                            '3ds-interlaced', '3ds-sbs-full-threaded')],
+    # The core's own Direct3D 9 textures, its views drawn straight from
+    # them
+    'd3d9_hlsl': [(name, 'd3d9')
+                  for name in ('3ds-2d', '3ds-sbs-full', '3ds-anaglyph',
+                               '3ds-interlaced', '3ds-sbs-full-threaded')],
 }
 
 # A frame past the declared maximum in the core's own Vulkan image.
@@ -182,6 +189,16 @@ MENU_CASES = [
 # Pixels allowed to differ from the first mode's menu: the cursor's
 # border pulses. A menu laid out for one eye differs in over 200000.
 MENU_DIFF_MAX = 20000
+
+# RGUI is drawn in the picture's rectangle, not the whole window: a 4:3
+# picture on the 5:3 screen leaves 160-pixel black strips either side.
+# (name, map option, settings, points)
+MENU_FIT_CASE = ('no-map-rgui-fit', 'none',
+                 {'aspect_ratio_index': '0', 'menu_driver': 'rgui',
+                  'rgui_menu_color_theme': '4', 'rgui_particle_effect': '0',
+                  'menu_timedate_enable': 'false'}, [])
+MENU_FIT_DRIVERS = ('d3d10', 'd3d11', 'd3d12')
+MENU_FIT_STRIP = 150
 
 # The menu draws its own cursor where it has the pointer: with a per-eye
 # UI, at the pointer in the copy it is over and at the matching place in
@@ -262,6 +279,7 @@ EXACT_CASES = [
     ('exact-3ds', '3ds', NOISE, 'vulkan'),
     ('exact-3ds', '3ds', NOISE, 'd3d11'),
     ('exact-3ds', '3ds', NOISE, 'd3d12'),
+    ('exact-3ds', '3ds', NOISE, 'd3d9'),
     # No map: the frame drawn whole. A core's GL framebuffer as large as
     # its maximum holds the frame in a corner, so the stock chain would
     # copy it out; glcore draws it straight from there instead.
@@ -271,7 +289,7 @@ EXACT_CASES = [
 EXACT_HW = {'gl': ('off', 'gl_compat'),
             'glcore': ('off', 'gl', 'gl_topleft'), 'vulkan': ('off', 'vulkan'),
             'gl1': ('off',), 'd3d10': ('off',), 'd3d11': ('off', 'd3d11'),
-            'd3d12': ('off', 'd3d12'), 'd3d9_hlsl': ('off',),
+            'd3d12': ('off', 'd3d12'), 'd3d9_hlsl': ('off', 'd3d9'),
             'sdl2': ('off',), 'sdl3': ('off',), 'd3d8': ('off',),
             'gdi': ('off',), 'sdl': ('off',), 'x11': ('off',)}
 # Drivers whose views take a preset: on the others a preset draws the
@@ -308,6 +326,11 @@ SW_IN_PLACE_DRIVERS = ('glcore', 'vulkan')
 WRITE_SW_RE = re.compile(
     r'\] Views\' presets have each view of a software frame written '
     r'straight in\.')
+# d3d9_hlsl's presets on a core's Direct3D 9 texture: each view copied
+# out of it on the GPU
+D3D9_HW_COPY_RE = re.compile(
+    r'\] Views\' presets have each view of a hardware frame copied out '
+    r'of the core\'s texture\.')
 # Drivers on shader model 4, where the rect presets' gathers of more than
 # the red component do not compile.
 SM4_DRIVERS = ('d3d10',)
@@ -336,7 +359,7 @@ LINEAR_PRESET = os.path.join(HERE, 'history_linear.slangp')
 # and that draw a frame whole straight from a larger texture.
 DIRECT_DRIVERS = ('gl1', 'gl', 'glcore', 'vulkan', 'd3d9_hlsl', 'd3d10',
                   'd3d11', 'd3d12', 'sdl2', 'sdl3', 'd3d8', 'gdi', 'sdl',
-                  'x11')
+                  'x11', 'xvideo')
 DIRECT_RE = re.compile(r'\] Views drawn straight from the frame\.')
 PRESET_RE = re.compile(r'\] Views drawn through the preset')
 WHOLE_DRIVERS = ('glcore',)
@@ -497,6 +520,9 @@ def write_cfg(path, d, driver, settings, port):
         'confirm_quit': 'false',
         'quit_press_twice': 'false',
         'config_save_on_exit': 'false',
+        # A first run offers the missing downloads in a dialog over the
+        # menu, which then holds the menu's input.
+        'rgui_show_start_screen': 'false',
         'network_cmd_enable': 'true',
         'network_cmd_port': str(port),
         'history_list_enable': 'false',
@@ -556,7 +582,7 @@ def expected_status(driver, settings):
 
 
 def wait_for_views(p, d, timeout=60):
-    """Wait for a Wine launch to reach the core before timing the case."""
+    """Wait for initialization to reach the core before timing the case."""
     deadline = time.monotonic() + timeout
     while p.poll() is None:
         for name in ('run.log', 'retroarch.log'):
@@ -564,10 +590,30 @@ def wait_for_views(p, d, timeout=60):
             if os.path.exists(path):
                 with open(path, errors='replace') as f:
                     if STATUS_RE.search(f.read()):
-                        return
+                        return True
         if time.monotonic() >= deadline:
-            return
+            return False
         time.sleep(0.1)
+
+
+
+def startup_stack(p, d):
+    """Keep the native initialization fault site before terminating a case."""
+    if WINE or not XVFB or os.name != 'posix' or p.poll() is not None:
+        return
+    debugger = shutil.which('gdb')
+    if not debugger:
+        return
+    command = [debugger, '-batch', '-ex', 'set pagination off',
+               '-ex', 'thread apply all bt', '-p', str(p.pid)]
+    if os.environ.get('GITHUB_ACTIONS') == 'true' and os.geteuid() != 0:
+        command = ['sudo', '-n'] + command
+    with open(os.path.join(d, 'startup-stack.log'), 'w') as log:
+        try:
+            subprocess.run(command, stdout=log, stderr=subprocess.STDOUT,
+                           timeout=15)
+        except (OSError, subprocess.TimeoutExpired) as error:
+            log.write(str(error) + '\n')
 
 
 def last_status(d):
@@ -636,10 +682,15 @@ def isolated_env():
     env = {k: v for k, v in os.environ.items() if k not in DESKTOP_ENV}
     env['XDG_RUNTIME_DIR'] = tempfile.mkdtemp(
         prefix='ra-e2e-', dir=os.environ.get('RA_E2E_RUNTIME_BASE', '/tmp'))
+    # Unset means autolaunch, not no session bus.
+    env['DBUS_SESSION_BUS_ADDRESS'] = 'unix:path=' + os.path.join(
+        env['XDG_RUNTIME_DIR'], 'no-session-bus')
     return env
 
 
 XVFB = WINE or os.environ.get('RA_E2E_XVFB') == '1'
+# samples/gfx/xv_standin's library, for the xvideo driver on Xvfb
+XV_STANDIN = os.environ.get('RA_E2E_XV_STANDIN')
 # Cases run side by side, each on an Xvfb of its own, four at a time:
 # most of a case is waiting, so more than the cores still gains. One at
 # a time in gamescope, whose screenshot names one display. Under Wine
@@ -703,13 +754,79 @@ def free_display():
 WM_DRIVERS = ('sdl',)
 
 
+def wm_ready_probe(timeout=10):
+    """Require the WM to manage a new client, not just publish its identity."""
+    x11 = ctypes.CDLL('libX11.so.6')
+    pointer, window_type = ctypes.c_void_p, ctypes.c_ulong
+    x11.XOpenDisplay.argtypes = [ctypes.c_char_p]
+    x11.XOpenDisplay.restype = pointer
+    x11.XDefaultRootWindow.argtypes = [pointer]
+    x11.XDefaultRootWindow.restype = window_type
+    x11.XCreateSimpleWindow.argtypes = [
+        pointer, window_type, ctypes.c_int, ctypes.c_int,
+        ctypes.c_uint, ctypes.c_uint, ctypes.c_uint, window_type, window_type]
+    x11.XCreateSimpleWindow.restype = window_type
+    for name in ('XMapWindow', 'XDestroyWindow'):
+        getattr(x11, name).argtypes = [pointer, window_type]
+    for name in ('XFlush', 'XCloseDisplay'):
+        getattr(x11, name).argtypes = [pointer]
+    display = x11.XOpenDisplay(os.environ['DISPLAY'].encode())
+    if not display:
+        return 1
+    window = x11.XCreateSimpleWindow(
+        display, x11.XDefaultRootWindow(display), 0, 0, 32, 32, 0, 0, 0)
+    try:
+        x11.XMapWindow(display, window)
+        x11.XFlush(display)
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            state = subprocess.run(
+                ['xprop', '-id', hex(window), 'WM_STATE'],
+                stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                timeout=3, text=True)
+            if state.returncode == 0 and 'window state: Normal' in state.stdout:
+                return 0
+            time.sleep(0.02)
+        return 1
+    finally:
+        x11.XDestroyWindow(display, window)
+        x11.XCloseDisplay(display)
+
+
 def wm_start(env):
     """openbox on env's display."""
     p = subprocess.Popen(['openbox'], stdout=subprocess.DEVNULL,
                          stderr=subprocess.DEVNULL, env=env,
                          start_new_session=True)
-    time.sleep(0.5)
-    return p
+    deadline = time.monotonic() + 30
+    try:
+        while p.poll() is None and time.monotonic() < deadline:
+            # A probe that is slow to answer on a loaded runner, with
+            # the other cases' servers and players beside it, is not an
+            # answer: ask again until the deadline.
+            try:
+                probe = subprocess.run(
+                    ['xprop', '-root', '_NET_SUPPORTING_WM_CHECK'], env=env,
+                    stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                    timeout=5, text=True)
+            except subprocess.TimeoutExpired:
+                continue
+            if probe.returncode == 0 and 'window id #' in probe.stdout:
+                ready = subprocess.run(
+                    [sys.executable, os.path.abspath(__file__), '--wm-ready'],
+                    env=env, timeout=max(0.1, deadline - time.monotonic()))
+                if ready.returncode == 0 and p.poll() is None:
+                    return p
+            time.sleep(0.05)
+        raise RuntimeError('openbox did not become ready on ' + env['DISPLAY'])
+    except BaseException:
+        p.terminate()
+        try:
+            p.wait(5)
+        except subprocess.TimeoutExpired:
+            p.kill()
+            p.wait()
+        raise
 
 
 def release_display(display):
@@ -720,16 +837,27 @@ def release_display(display):
 def xvfb_start(env):
     """An Xvfb of the window's size: its process and DISPLAY."""
     n = free_display()
+    # A client disconnect must not reset the server during startup.
     p = subprocess.Popen(['Xvfb', ':%d' % n, '-screen', '0',
-                          '%dx%dx24' % (W, H), '-nolisten', 'tcp'],
+                          '%dx%dx24' % (W, H), '-nolisten', 'tcp', '-noreset'],
                          stdout=subprocess.DEVNULL,
                          stderr=subprocess.DEVNULL, env=env,
                          start_new_session=True)
     deadline = time.time() + 10
-    while (time.time() < deadline
+    while (p.poll() is None and time.time() < deadline
            and not os.path.exists('/tmp/.X11-unix/X%d' % n)):
         time.sleep(0.1)
     time.sleep(0.5)
+    if p.poll() is not None or not os.path.exists('/tmp/.X11-unix/X%d' % n):
+        if p.poll() is None:
+            p.terminate()
+            try:
+                p.wait(5)
+            except subprocess.TimeoutExpired:
+                p.kill()
+                p.wait()
+        release_display(':%d' % n)
+        raise RuntimeError('Xvfb did not become ready on :%d' % n)
     return p, ':%d' % n
 
 
@@ -890,11 +1018,24 @@ def run_case(retroarch, root, driver, case, hw='off', menu=False,
            retroarch, '--config', cfg, '-L', CORE, '--verbose'] + list(args)
     env = isolated_env()
     env.update(env_extra or {})
+    # Xvfb has no XVideo adaptor: the stand-in's, preloaded
+    if driver == 'xvideo' and XV_STANDIN:
+        env['LD_PRELOAD'] = XV_STANDIN
     xvfb = wm = None
     if XVFB:
         xvfb, env['DISPLAY'] = xvfb_start(env)
         if driver in WM_DRIVERS:
-            wm = wm_start(env)
+            # sdl12-compat otherwise creates a GL renderer on Xvfb.
+            env['SDL_RENDER_DRIVER'] = 'software'
+            env['SDL_FRAMEBUFFER_ACCELERATION'] = '0'
+            try:
+                wm = wm_start(env)
+            except Exception:
+                xvfb.terminate()
+                xvfb.wait(5)
+                release_display(env['DISPLAY'])
+                shutil.rmtree(env['XDG_RUNTIME_DIR'], ignore_errors=True)
+                raise
         cmd = cmd[cmd.index('--') + 1:]
     if WINE:
         env['WINEPREFIX'] = wine_prefix()
@@ -911,8 +1052,8 @@ def run_case(retroarch, root, driver, case, hw='off', menu=False,
                          env=env, start_new_session=True)
     shot = None
     try:
-        if WINE:
-            wait_for_views(p, d)
+        if not wait_for_views(p, d):
+            startup_stack(p, d)
         if gpu is None:
             wait_settled(p, d, expected_status(driver, settings))
         settle = time.time() + 5
@@ -1139,6 +1280,10 @@ def run_exact_case(retroarch, root, driver, case, suffix='',
     if driver in WRITE_SW_VIEWS and direct_drawn(d, WRITE_SW_RE) != written:
         errors.append('views %s straight in'
                       % ('not written' if written else 'written'))
+    if driver == 'd3d9_hlsl' and hw == 'd3d9' and mapopt != 'none' \
+            and direct_drawn(d, D3D9_HW_COPY_RE) != bool(preset):
+        errors.append('views %s out of the core\'s texture'
+                      % ('copied' if not preset else 'not copied'))
     shots = sorted(x for x in os.listdir(os.path.join(d, 'shots'))
                    if x.endswith('.png'))
     if not shots:
@@ -1196,6 +1341,25 @@ def run_menu_case(retroarch, root, driver, case):
         if diff > MENU_DIFF_MAX:
             errors.append('stereo mode %s: %d pixels differ from mode %s'
                           % (mode, diff, modes[0]))
+    return errors
+
+
+def run_menu_fit_case(retroarch, root, driver, case):
+    """RGUI over a picture narrower than the window stays inside it."""
+    errors = run_case(retroarch, root, driver, case, menu=True)
+    path = os.path.join(root, '%s-%s' % (driver, case[0]), 'menu.png')
+    if errors or not os.path.exists(path):
+        return errors or ['no menu screenshot']
+    w, h, bpp, rows = read_png(path)
+    lit = 0
+    for x in list(range(MENU_FIT_STRIP)) + list(range(w - MENU_FIT_STRIP, w)):
+        for y in range(h):
+            if max(rows[y][x * bpp:x * bpp + 3]) > TOLERANCE:
+                lit += 1
+    if lit:
+        errors.append('%d lit pixels in the strips beside the picture' % lit)
+    if max(rows[h // 2][w // 2 * bpp:(w // 2 + 40) * bpp]) <= TOLERANCE:
+        errors.append('nothing drawn in the middle of the screen')
     return errors
 
 
@@ -1344,8 +1508,14 @@ def pointer_helper(d):
     x11.XWarpPointer.argtypes = [ctypes.c_void_p, ctypes.c_ulong,
                                  ctypes.c_ulong] + [ctypes.c_int] * 6
     x11.XSync.argtypes = [ctypes.c_void_p, ctypes.c_int]
+    deadline = time.monotonic() + 5
     dpy = x11.XOpenDisplay(None)
+    while not dpy and time.monotonic() < deadline:
+        time.sleep(0.05)
+        dpy = x11.XOpenDisplay(None)
     if not dpy:
+        print('[e2e] pointer helper cannot open DISPLAY=%s'
+              % os.environ['DISPLAY'], flush=True)
         return 1
     x11.XDefaultRootWindow.restype = ctypes.c_ulong
     x11.XDefaultRootWindow.argtypes = [ctypes.c_void_p]
@@ -1515,6 +1685,11 @@ def driver_jobs(retroarch, root, driver):
         errors = run_menu_case(retroarch, root, driver, case)
         return report('%s/%s' % (driver, case[0]), errors), bool(errors)
 
+    def menu_fit():
+        errors = run_menu_fit_case(retroarch, root, driver, MENU_FIT_CASE)
+        return report('%s/%s' % (driver, MENU_FIT_CASE[0]), errors), \
+            bool(errors)
+
     def pointer(menu, case):
         errors = run_pointer_case(retroarch, root, driver, menu, case)
         return report('%s/%s-%s' % (driver, case[0], menu), errors), \
@@ -1550,6 +1725,8 @@ def driver_jobs(retroarch, root, driver):
              for c in (MEMORY_CASES if driver in MEMORY_HW and not XVFB
                        else []) if wanted(c[0])]
     jobs += [lambda c=c: menu_case(c) for c in MENU_CASES if wanted(c[0])]
+    if driver in MENU_FIT_DRIVERS and wanted(MENU_FIT_CASE[0]):
+        jobs.append(menu_fit)
     jobs += [lambda m=m, c=c: pointer(m, c) for m in sorted(POINTER_MENUS)
              for c in POINTER_CASES
              if wanted(c[0]) and driver not in NO_POINTER_DRIVERS]
@@ -1557,11 +1734,18 @@ def driver_jobs(retroarch, root, driver):
 
 
 def main():
+    if len(sys.argv) == 2 and sys.argv[1] == '--wm-ready':
+        return wm_ready_probe()
     if sys.argv[1:2] == ['--pointer']:
         return pointer_helper(sys.argv[2])
     if len(sys.argv) < 4:
         print(__doc__)
         return 2
+    if XVFB and not shutil.which('import'):
+        # The menu and pointer cases read the screen through
+        # ImageMagick's import.
+        print('import (ImageMagick) is needed under Xvfb')
+        return 1
     retroarch = os.path.abspath(sys.argv[1])
     root = os.path.realpath(sys.argv[2])
     os.makedirs(root, exist_ok=True)

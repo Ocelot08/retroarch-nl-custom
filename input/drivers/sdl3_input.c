@@ -51,6 +51,8 @@ typedef struct sdl3_input
    const bool *kb_state;
    int kb_num_keys;
    SDL_Scancode key_scancode_lut[RETROK_LAST];
+   /* RETROK of each scancode's unmodified key, for the key events */
+   uint16_t scancode_rk_lut[SDL_SCANCODE_COUNT];
    /* Whole-pixel relative motion, x and y: VIDEO_POS_PACK. */
    uint32_t mouse_delta;
    /* Sub-pixel remainder carried into the next frame. */
@@ -75,6 +77,10 @@ typedef struct sdl3_input
     * every frame. */
    int num_touch_devices;
    unsigned touch_recheck;
+   /* Fingers were read once; they change only with finger events. */
+   bool touch_read;
+   /* The video driver's window last polled through, 0 for none */
+   SDL_WindowID window_id;
 
    /* Number of active fingers across all touch devices. */
    int num_touches;
@@ -179,10 +185,28 @@ static bool sdl_webos_scancode_enables_phys_kbd(SDL_Scancode scancode)
 static void sdl3_build_scancode_lut(sdl3_input_t *sdl)
 {
    int i;
+
    for (i = 0; i < RETROK_LAST; i++)
       sdl->key_scancode_lut[i] = rarch_keysym_lut[i]
             ? SDL_GetScancodeFromKey((SDL_Keycode)rarch_keysym_lut[i], NULL)
             : SDL_SCANCODE_UNKNOWN;
+
+   sdl->scancode_rk_lut[SDL_SCANCODE_UNKNOWN] = 0;
+   for (i = SDL_SCANCODE_UNKNOWN + 1; i < SDL_SCANCODE_COUNT; i++)
+      sdl->scancode_rk_lut[i] = (uint16_t)input_keymaps_translate_keysym_to_rk(
+            SDL_GetKeyFromScancode((SDL_Scancode)i, SDL_KMOD_NONE, true));
+}
+
+/* The key an event is for, from its scancode. Falls back to the shared
+ * keycode table for anything the layout did not place. */
+static unsigned sdl3_translate_scancode(sdl3_input_t *sdl,
+      SDL_Scancode scancode, SDL_Keycode key)
+{
+   if (     scancode > SDL_SCANCODE_UNKNOWN
+         && scancode < SDL_SCANCODE_COUNT
+         && sdl->scancode_rk_lut[scancode])
+      return sdl->scancode_rk_lut[scancode];
+   return input_keymaps_translate_keysym_to_rk(key);
 }
 
 static void *sdl3_input_init(const char *joypad_driver)
@@ -315,6 +339,14 @@ static int16_t sdl3_input_state(
    }
 
    return 0;
+}
+
+/* Nothing here is the video driver's: the window is looked up at every
+ * poll, and the keyboard state SDL hands out is global. Kept only for
+ * another SDL3 window; any other has an input driver of its own. */
+static bool sdl3_input_survives_video(void *data)
+{
+   return data && sdl3_get_window() && sdl3_next_window_is_sdl3();
 }
 
 static void sdl3_input_free(void *data)
@@ -515,6 +547,13 @@ static void sdl3_poll_touch(sdl3_input_t *sdl)
    int num_direct = 0;
    SDL_TouchID *devices     = NULL;
 
+   /* Without finger events the fingers last read still hold, so the
+    * lists SDL allocates are only asked for when one moves. */
+   if (     sdl->num_touch_devices
+         && sdl->touch_read
+         && !SDL_HasEvents(SDL_EVENT_FINGER_DOWN, SDL_EVENT_FINGER_CANCELED))
+      return;
+
    sdl->num_touches = 0;
 
    /* Skip the per-frame device query on touch-less setups; re-probe
@@ -566,6 +605,7 @@ static void sdl3_poll_touch(sdl3_input_t *sdl)
    }
 
    SDL_free(devices);
+   sdl->touch_read = true;
 
    /* Count touchscreens only, so a machine whose sole touch device is
     * a trackpad still takes the cheap early-out above. */
@@ -670,6 +710,11 @@ static void sdl3_manage_text_input(void)
 
    if (!sdl3_uses_screen_keyboard() || !(win = sdl3_get_window()))
    {
+#ifndef WEBOS
+      /* A keyboard attached since: text events come from text input. */
+      if ((win = sdl3_get_window()) && !SDL_TextInputActive(win))
+         SDL_StartTextInput(win);
+#endif
       input_driver_set_native_keyboard_shown(false);
       input_driver_set_native_keyboard_available(false);
       return;
@@ -795,8 +840,8 @@ bool SDL_webOSCursorVisibility(bool visible)
  * in the air is a pointer that is not pressed. */
 static void sdl3_publish_pointers(sdl3_input_t *sdl)
 {
-   input_pointer_frame_t frame;
-   uint32_t touch_pos[SDL3_MAX_TOUCH];
+   input_pointer_frame_t *frame = input_driver_pointers_lend();
+   uint32_t *touch_pos = input_driver_touches_lend();
    unsigned touches = 0;
    unsigned present = 0;
    unsigned down    = 0;
@@ -828,9 +873,9 @@ static void sdl3_publish_pointers(sdl3_input_t *sdl)
       buttons |= INPUT_POINTER_HWHEEL_UP;
    if (sdl->mouse_wl)
       buttons |= INPUT_POINTER_HWHEEL_DOWN;
-   frame.pos     = VIDEO_POS_PACK((int)sdl->mouse_abs_x, (int)sdl->mouse_abs_y);
-   frame.rel     = sdl->mouse_delta;
-   frame.buttons = (uint16_t)buttons;
+   frame->pos     = VIDEO_POS_PACK((int)sdl->mouse_abs_x, (int)sdl->mouse_abs_y);
+   frame->rel     = sdl->mouse_delta;
+   frame->buttons = (uint16_t)buttons;
 
    if (sdl->num_touches > 0)
    {
@@ -858,7 +903,7 @@ static void sdl3_publish_pointers(sdl3_input_t *sdl)
       down         = sdl->pen_down ? 1 : 0;
    }
 
-   input_driver_publish_pointers(&frame, 1,
+   input_driver_publish_pointers(frame, 1,
            INPUT_POINTERS_BY_MOUSE_INDEX | INPUT_POINTERS_AIM_EVERY_PORT
          | INPUT_POINTERS_GUN_BUTTONS_BOUND
          | INPUT_POINTERS_GUN_BUTTONS_EVERY_PORT
@@ -870,16 +915,31 @@ static void sdl3_input_poll(void *data)
 {
    SDL_Event event;
    sdl3_input_t *sdl = (sdl3_input_t*)data;
+   bool pumped;
 
    /* SDL only emits keyboard/mouse-wheel events for a window that owns
     * the input focus. Without an SDL3 video driver to create and pump
     * that window, this queue drains nothing and key/wheel state below
     * never updates. */
-   sdl3_pump_input_events();
+   pumped = sdl3_pump_input_events();
 
    /* Find the SDL window, so that window coordinates can be calculated
     * properly. */
-   if (!(sdl->window = sdl3_get_window()))
+   sdl->window = sdl3_get_window();
+   {
+      /* Kept across a video restart: what was read through the window
+       * before went with it. */
+      SDL_WindowID id = sdl->window ? SDL_GetWindowID(sdl->window) : 0;
+      if (id != sdl->window_id)
+      {
+         sdl->window_id        = id;
+         sdl->touch_read       = false;
+         sdl->num_touches      = 0;
+         sdl->pen_in_proximity = false;
+         sdl->pen_down         = false;
+      }
+   }
+   if (!sdl->window)
       sdl->window = SDL_GetMouseFocus();
 
    sdl3_manage_text_input();
@@ -888,7 +948,7 @@ static void sdl3_input_poll(void *data)
    sdl3_poll_touch(sdl);
 
    /* SDL_UpdateSensors works without a focused window. */
-   if (sdl->accel || sdl->gyro)
+   if ((sdl->accel || sdl->gyro) && !pumped)
       SDL_UpdateSensors();
 
    sdl->mouse_wu = false;
@@ -902,8 +962,8 @@ static void sdl3_input_poll(void *data)
             || event.type == SDL_EVENT_KEY_UP)
       {
          uint16_t mod        = sdl3_translate_mod(event.key.mod);
-         unsigned code       = input_keymaps_translate_keysym_to_rk(
-               event.key.key);
+         unsigned code       = sdl3_translate_scancode(sdl,
+               event.key.scancode, event.key.key);
          uint32_t character  = 0;
 
 #ifdef WEBOS
@@ -1017,8 +1077,15 @@ static void sdl3_input_poll(void *data)
       }
       else if (event.type == SDL_EVENT_MOUSE_WHEEL)
       {
+#if SDL_VERSION_ATLEAST(3, 2, 12)
+         /* Whole ticks, so a smooth wheel's fractions don't each
+          * count as one. */
+         float wx = (float)event.wheel.integer_x;
+         float wy = (float)event.wheel.integer_y;
+#else
          float wx = event.wheel.x;
          float wy = event.wheel.y;
+#endif
 
          /* FLIPPED = "natural" scrolling: SDL delivers inverted
           * signs and expects the caller to negate them. */
@@ -1086,6 +1153,6 @@ input_driver_t input_sdl3 = {
    sdl3_grab_mouse,
    NULL,                   /* grab_stdin */
    NULL,                   /* keypress_vibrate */
-   NULL,
+   sdl3_input_survives_video,
    sdl3_keys_down
 };

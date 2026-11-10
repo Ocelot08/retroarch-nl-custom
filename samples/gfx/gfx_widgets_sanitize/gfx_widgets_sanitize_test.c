@@ -60,6 +60,7 @@
 #include "../../../gfx/gfx_widgets.h"
 #include "../../../gfx/gfx_display.h"
 #include "../../../gfx/gfx_animation.h"
+#include "../../../gfx/video_driver.h"
 
 static int failures;
 static int pushes;
@@ -237,6 +238,43 @@ static void test_init_deinit_cycles(void)
    }
 }
 
+static bool shown(const char *msg)
+{
+   size_t i;
+   dispgfx_widget_t *p_dispwidget = dispwidget_get_ptr();
+
+   for (i = 0; i < p_dispwidget->current_msgs_size; i++)
+      if (     p_dispwidget->current_msgs[i]
+            && p_dispwidget->current_msgs[i]->msg
+            && !strcmp(p_dispwidget->current_msgs[i]->msg, msg))
+         return true;
+   return false;
+}
+
+/* A message queued but not shown yet when the video driver goes. */
+static void test_queued_across_reinit(void)
+{
+   gfx_widgets_deinit(false);
+   if (!widgets_up())
+      return;
+   push("queued, persisting", NULL, 0);
+   gfx_widgets_deinit(true);
+   if (!widgets_up())
+      return;
+   pump(1);
+   CHECK(shown("queued, persisting"),
+         "a queued message was lost in a reinit that keeps the widgets");
+
+   push("queued, not persisting", NULL, 0);
+   gfx_widgets_deinit(false);
+   if (!widgets_up())
+      return;
+   pump(1);
+   CHECK(!shown("queued, not persisting"),
+         "a queued message outlived widgets that do not persist");
+   gfx_widgets_deinit(false);
+}
+
 /* An icon draw carries its size to the display driver as one packed
  * word. Asymmetric dimensions, so a transposition cannot pass. */
 extern unsigned stub_draw_dims;
@@ -272,6 +310,126 @@ static void test_icon_draw_size(void)
    gfx_widgets_deinit(false);
 }
 
+/* Under the threaded video wrapper the widgets' fonts are the video
+ * thread's. Deinit takes the worker away and hands the fonts back to
+ * that thread rather than freeing them here or waiting on it. */
+extern unsigned stub_fonts_freed;
+extern unsigned stub_fonts_retired;
+
+static void test_worker_deinit(void)
+{
+   static int fonts[3];
+   dispgfx_widget_t *p_dispwidget = dispwidget_get_ptr();
+
+   video_state_get_ptr()->thread_wrapper_active = true;
+   if (!widgets_up())
+   {
+      CHECK(0, "gfx_widgets_init() refused under the worker");
+      video_state_get_ptr()->thread_wrapper_active = false;
+      return;
+   }
+   CHECK(retro_atomic_load_acquire_int(&p_dispwidget->worker),
+         "the widgets did not go to the worker");
+
+   /* What the worker's layout would have built */
+   p_dispwidget->gfx_widget_fonts.regular.font   = (font_data_t*)&fonts[0];
+   p_dispwidget->gfx_widget_fonts.bold.font      = (font_data_t*)&fonts[1];
+   p_dispwidget->gfx_widget_fonts.msg_queue.font = (font_data_t*)&fonts[2];
+   stub_fonts_freed   = 0;
+   stub_fonts_retired = 0;
+
+   gfx_widgets_deinit(false);
+
+   CHECK(!retro_atomic_load_acquire_int(&p_dispwidget->worker),
+         "the worker kept the widgets");
+   CHECK(stub_fonts_retired == 3,
+         "the worker's fonts were not handed back to it");
+   CHECK(stub_fonts_freed == 0,
+         "the worker's fonts were freed off its thread");
+   CHECK(!p_dispwidget->gfx_widget_fonts.regular.font
+         && !p_dispwidget->gfx_widget_fonts.bold.font
+         && !p_dispwidget->gfx_widget_fonts.msg_queue.font,
+         "a handed-back font is still referenced");
+
+   video_state_get_ptr()->thread_wrapper_active = false;
+}
+
+#if defined(_WIN32) && !defined(_XBOX) && !defined(__WINRT__)
+extern bool stub_win32_modal_active;
+
+static void test_modal_scale(void)
+{
+   static video_frame_info_t frame;
+   dispgfx_widget_t *widgets = dispwidget_get_ptr();
+
+   video_state_get_ptr()->thread_wrapper_active = true;
+   CHECK(widgets_up(), "modal widgets initialize");
+   memset(&frame, 0, sizeof(frame));
+   frame.dims                = VIDEO_SCALE_PACK(960, 540);
+   frame.widget_scale_factor = 1.0f;
+   frame.widget_dir_assets   = "/tmp/nonexistent-assets";
+   frame.widget_path_font    = "";
+   frame.menu_ticker_speed   = 1.0f;
+   stub_win32_modal_active   = true;
+   gfx_widgets_worker_step(&frame, "", 0);
+   CHECK(widgets->last_scale_factor == 1.0f,
+         "first modal frame initializes its scale");
+
+   frame.dims                = VIDEO_SCALE_PACK(1280, 720);
+   frame.widget_scale_factor = 1.5f;
+   gfx_widgets_worker_step(&frame, "", 0);
+   CHECK(widgets->last_video_dims == frame.dims,
+         "modal layout follows the window dimensions");
+   CHECK(widgets->last_scale_factor == 1.0f,
+         "modal resize preserves the initialized scale");
+
+   stub_win32_modal_active = false;
+   gfx_widgets_worker_step(&frame, "", 0);
+   CHECK(widgets->last_scale_factor == 1.5f,
+         "modal release applies the final scale");
+   gfx_widgets_deinit(false);
+   video_state_get_ptr()->thread_wrapper_active = false;
+}
+#endif
+
+extern int stub_media_startup_token;
+extern unsigned stub_widget_flushes;
+
+static void test_media_startup(void)
+{
+   unsigned before;
+   CHECK(widgets_up(), "startup widgets initialize");
+   before = stub_widget_flushes;
+   stub_media_startup_token = 2;
+   pump(1);
+   stub_media_startup_token = 3;
+   pump(1);
+   CHECK(stub_widget_flushes == before, "startup widgets remain hidden");
+   stub_media_startup_token = 0;
+   pump(1);
+   CHECK(stub_widget_flushes > before, "widgets resume after startup");
+   gfx_widgets_deinit(false);
+}
+
+static void test_layout_dims(void)
+{
+   const float crt = 4.0f / 3.0f;
+   CHECK(gfx_widgets_layout_dims(VIDEO_SCALE_PACK(2560, 240), crt)
+         == VIDEO_SCALE_PACK(320, 240), "a super resolution lays out at 4:3");
+   CHECK(gfx_widgets_layout_dims(VIDEO_SCALE_PACK(1920, 224), crt)
+         == VIDEO_SCALE_PACK(299, 224), "whatever its line count");
+   CHECK(gfx_widgets_layout_dims(VIDEO_SCALE_PACK(2560, 480), crt)
+         == VIDEO_SCALE_PACK(640, 480), "or an interlaced one");
+   CHECK(gfx_widgets_layout_dims(VIDEO_SCALE_PACK(256, 224), crt)
+         == VIDEO_SCALE_PACK(256, 224), "a native mode is left alone");
+   CHECK(gfx_widgets_layout_dims(VIDEO_SCALE_PACK(384, 224), crt)
+         == VIDEO_SCALE_PACK(384, 224), "a wide native mode too");
+   CHECK(gfx_widgets_layout_dims(VIDEO_SCALE_PACK(1920, 1080), crt)
+         == VIDEO_SCALE_PACK(1920, 1080), "a 16:9 panel is left alone");
+   CHECK(gfx_widgets_layout_dims(VIDEO_SCALE_PACK(2560, 240), 0.0f)
+         == VIDEO_SCALE_PACK(2560, 240), "no aspect, no change");
+}
+
 int main(void)
 {
    task_queue_init(false, NULL);
@@ -279,7 +437,14 @@ int main(void)
    test_titles();
    test_queue_overflow();
    test_init_deinit_cycles();
+   test_queued_across_reinit();
    test_icon_draw_size();
+   test_worker_deinit();
+#if defined(_WIN32) && !defined(_XBOX) && !defined(__WINRT__)
+   test_modal_scale();
+#endif
+   test_media_startup();
+   test_layout_dims();
 
    printf("pushes=%d frames=%d\n", pushes, iterations);
 

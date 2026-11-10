@@ -29,10 +29,11 @@
 
 #include "slang_process.h"
 #include "slang_rect.h"
+#include "slang_blob.h"
 #include "spirv_opengl.h"
-/* The vendored SPIRV-Cross headers end their enumerator lists with a
- * comma, which the C89 lane rejects under -pedantic; they are upstream
- * files and are not edited here. */
+#if !defined(SLANG_RSLC_ONLY)
+/* The SPIRV-Cross C header ends its enumerator lists with a
+ * comma, which the C89 lane rejects under -pedantic. */
 #if defined(__GNUC__) || defined(__clang__)
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wpedantic"
@@ -41,8 +42,10 @@
 #if defined(__GNUC__) || defined(__clang__)
 #pragma GCC diagnostic pop
 #endif
+#endif
 
 #include "../common/gl3_defines.h"
+#include "../common/spirv_shaders.h"
 
 /* GL_ARB_gl_spirv is desktop only, and glsym does not carry ShaderBinary,
  * SpecializeShader or GetStringi for the GLES targets, so the whole path
@@ -99,6 +102,7 @@ RETRO_BEGIN_DECLS
    void gl3_framebuffer_copy_partial(
          GLuint fb_id,
          GLuint quad_program,
+         GLuint vbo,
          GLint flat_ubo_vertex,
          unsigned size_width, unsigned size_height,
          GLuint image,
@@ -161,6 +165,7 @@ RETRO_BEGIN_DECLS
 
 RETRO_END_DECLS
 
+#if !defined(SLANG_RSLC_ONLY)
 /* Fetch one reflected-resource list; mirrors slang_process.c's helper. */
 static bool gl3_spvc_list(spvc_resources resources, spvc_resource_type type,
       const spvc_reflected_resource **list, size_t *count)
@@ -188,6 +193,7 @@ static void gl3_spvc_rename_by_location(spvc_compiler compiler,
             SpvDecorationLocation);
    }
 }
+#endif
 
 /* A failed compile fails whether or not the driver wrote a log. */
 static GLuint gl3_compile_shader(GLenum stage, const char *source)
@@ -224,6 +230,10 @@ static GLuint gl3_compile_shader(GLenum stage, const char *source)
    return 0;
 }
 
+static GLuint gl3_text_link_program(const char *vertex_source,
+      const char *fragment_source, gl3_buffer_locations *loc, bool flatten);
+
+#if !defined(SLANG_RSLC_ONLY)
 GLuint gl3_cross_compile_program(
       const uint32_t *vertex, size_t vertex_size,
       const uint32_t *fragment, size_t fragment_size,
@@ -529,6 +539,131 @@ error:
       glDeleteProgram(program);
    return 0;
 }
+#else
+static void gl3_text_target(struct slang_text_target *t);
+
+/* The same program from the stages' GLSL source, printed by rslc:
+ * the driver's own pipelines, whose sources are built in beside their
+ * SPIR-V. */
+GLuint gl3_cross_compile_program(
+      const uint32_t *vertex, size_t vertex_size,
+      const uint32_t *fragment, size_t fragment_size,
+      gl3_buffer_locations *loc, bool flatten)
+{
+   struct slang_text_target text;
+   GLuint      program = 0;
+   const char *vs_src  = spirv_shader_glsl(vertex);
+   const char *fs_src  = spirv_shader_glsl(fragment);
+   char       *vs_text = NULL;
+   char       *fs_text = NULL;
+   (void)vertex_size;
+   (void)fragment_size;
+   if (!vs_src || !fs_src)
+   {
+      RARCH_ERR("[GLCore] No GLSL for the stages, and no SPIRV-Cross to print them.\n");
+      return 0;
+   }
+   gl3_text_target(&text);
+   text.flatten = flatten;
+   if (     (vs_text = slang_print_stage(vs_src, false, &text))
+         && (fs_text = slang_print_stage(fs_src, true, &text)))
+      program = gl3_text_link_program(vs_text, fs_text, loc, flatten);
+   free(vs_text);
+   free(fs_text);
+   return program;
+}
+#endif
+
+/* Links a program from GLSL the compiler printed with the interface
+ * named as gl3_cross_compile_program() names it, so the rest of the
+ * pass sees no difference: attributes bound by location, blocks and
+ * push members looked up by name, samplers set to their bindings. */
+static GLuint gl3_text_link_program(const char *vertex_source,
+      const char *fragment_source, gl3_buffer_locations *loc, bool flatten)
+{
+   GLuint vertex_shader, fragment_shader, program;
+   GLint  status = 0;
+   unsigned i;
+
+   vertex_shader   = gl3_compile_shader(GL_VERTEX_SHADER, vertex_source);
+   fragment_shader = gl3_compile_shader(GL_FRAGMENT_SHADER, fragment_source);
+   if (!vertex_shader || !fragment_shader)
+   {
+      RARCH_ERR("[GLCore] One or more printed shaders failed to compile.\n");
+      if (vertex_shader)
+         glDeleteShader(vertex_shader);
+      if (fragment_shader)
+         glDeleteShader(fragment_shader);
+      return 0;
+   }
+   program = glCreateProgram();
+   glAttachShader(program, vertex_shader);
+   glAttachShader(program, fragment_shader);
+   /* slang stages have the two attributes at 0 and 1; the driver's own
+    * pipelines take a colour at 2 */
+   glBindAttribLocation(program, 0, "RARCH_ATTRIBUTE_0");
+   glBindAttribLocation(program, 1, "RARCH_ATTRIBUTE_1");
+   glBindAttribLocation(program, 2, "RARCH_ATTRIBUTE_2");
+   glLinkProgram(program);
+   glDeleteShader(vertex_shader);
+   glDeleteShader(fragment_shader);
+   glGetProgramiv(program, GL_LINK_STATUS, &status);
+   if (!status)
+   {
+      GLint length;
+      glGetProgramiv(program, GL_INFO_LOG_LENGTH, &length);
+      if (length > 0)
+      {
+         char *info_log = (char*)malloc(length);
+         if (info_log)
+         {
+            glGetProgramInfoLog(program, length, &length, info_log);
+            RARCH_ERR("[GLCore] Failed to link printed program: %s\n", info_log);
+            free(info_log);
+         }
+      }
+      else
+         RARCH_ERR("[GLCore] Failed to link printed program.\n");
+      glDeleteProgram(program);
+      return 0;
+   }
+   glUseProgram(program);
+   if (loc)
+   {
+      loc->flat_ubo_fragment          = -1;
+      loc->flat_ubo_vertex            = -1;
+      loc->flat_push_vertex           = -1;
+      loc->flat_push_fragment         = -1;
+      loc->buffer_index_push_vertex   = GL_INVALID_INDEX;
+      loc->buffer_index_push_fragment = GL_INVALID_INDEX;
+      loc->buffer_index_ubo_vertex    = GL_INVALID_INDEX;
+      loc->buffer_index_ubo_fragment  = GL_INVALID_INDEX;
+      if (flatten)
+      {
+         loc->flat_ubo_vertex         = glGetUniformLocation(program, "RARCH_UBO_VERTEX");
+         loc->flat_ubo_fragment       = glGetUniformLocation(program, "RARCH_UBO_FRAGMENT");
+         loc->flat_push_vertex        = glGetUniformLocation(program, "RARCH_PUSH_VERTEX");
+         loc->flat_push_fragment      = glGetUniformLocation(program, "RARCH_PUSH_FRAGMENT");
+      }
+      else
+      {
+         loc->buffer_index_ubo_vertex   = glGetUniformBlockIndex(program, "RARCH_UBO_VERTEX");
+         loc->buffer_index_ubo_fragment = glGetUniformBlockIndex(program, "RARCH_UBO_FRAGMENT");
+      }
+   }
+   for (i = 0; i < SLANG_NUM_BINDINGS; i++)
+   {
+      char  name[64];
+      GLint location;
+      snprintf(name, sizeof(name), "RARCH_TEXTURE_%u", i);
+      if ((location = glGetUniformLocation(program, name)) >= 0)
+         glUniform1i(location, i);
+   }
+   glUseProgram(0);
+   if (!flatten)
+      RARCH_LOG("[GLCore] Linked the compiler's GLSL directly.\n");
+   return program;
+}
 
 #ifdef GL3_HAVE_SPIRV_BINARY
 static GLuint gl3_spirv_compile_stage(GLenum stage,
@@ -686,14 +821,6 @@ GLuint gl3_spirv_link_program(
 }
 #endif
 
-static const uint32_t gl3_opaque_vert[] =
-#include "../drivers/vulkan_shaders/opaque.vert.inc"
-;
-
-static const uint32_t gl3_opaque_frag[] =
-#include "../drivers/vulkan_shaders/opaque.frag.inc"
-;
-
 typedef struct
 {
    gl3_filter_chain_texture texture;
@@ -832,7 +959,17 @@ struct gl3_common_resources
 
    GLuint quad_program;
    GLuint quad_vbo;
+   /* The quad of a copy out of part of a texture, written each copy */
+   GLuint partial_vbo;
    gl3_buffer_locations quad_loc;
+   unsigned source_hdr;
+   unsigned passthrough;
+   unsigned hdr_mode;
+   float paper_white_nits;
+   float peak_nits;
+   unsigned expand_gamut;
+   /* The first pass's SourceSize, from the preset; 0 when off. */
+   unsigned sim_source_dims;
 
    /* Frames may come inside a larger texture: passes are built to read
     * them there, sampling as the first pass samples. */
@@ -856,11 +993,14 @@ static void gl3_common_resources_init(gl3_common_resources *common)
    glGenBuffers(1, &common->quad_vbo);
    glBindBuffer(GL_ARRAY_BUFFER, common->quad_vbo);
    glBufferData(GL_ARRAY_BUFFER, sizeof(quad_data), quad_data, GL_STATIC_DRAW);
+   glGenBuffers(1, &common->partial_vbo);
+   glBindBuffer(GL_ARRAY_BUFFER, common->partial_vbo);
+   glBufferData(GL_ARRAY_BUFFER, sizeof(quad_data), NULL, GL_STREAM_DRAW);
    glBindBuffer(GL_ARRAY_BUFFER, 0);
 
    common->quad_program = gl3_cross_compile_program(
-         gl3_opaque_vert, sizeof(gl3_opaque_vert),
-         gl3_opaque_frag, sizeof(gl3_opaque_frag), &common->quad_loc, true);
+         spirv_opaque_vert, spirv_opaque_vert_size,
+         spirv_opaque_frag, spirv_opaque_frag_size, &common->quad_loc, true);
 }
 
 static void gl3_common_resources_free(gl3_common_resources *common)
@@ -892,6 +1032,8 @@ static void gl3_common_resources_free(gl3_common_resources *common)
       glDeleteProgram(common->quad_program);
    if (common->quad_vbo != 0)
       glDeleteBuffers(1, &common->quad_vbo);
+   if (common->partial_vbo != 0)
+      glDeleteBuffers(1, &common->partial_vbo);
 }
 
 struct gl3_framebuffer
@@ -1088,7 +1230,8 @@ struct gl3_pass
 
    bool final_pass;
 
-   GLuint pipeline;
+   GLuint pipeline;                    /* program->id */
+   struct gl3_program *program;        /* one reference */
    gl3_common_resources *common;
 
    /* The size this pass last rendered at, in VIDEO_SCALE_PACK's
@@ -1097,10 +1240,17 @@ struct gl3_pass
    gl3_viewport curr_vp;
    gl3_filter_chain_pass_info pass_info;
 
-   uint32_t *vertex_shader;
+   struct slang_blob *vertex_blob;     /* the stages, one reference each;
+                                          the pointers below view them */
+   struct slang_blob *fragment_blob;
+   const uint32_t *vertex_shader;
    size_t num_vertex_shader;
-   uint32_t *fragment_shader;
+   const uint32_t *fragment_shader;
    size_t num_fragment_shader;
+   /* GLSL the compiler printed for this driver (rslc), in place of
+    * crossing the SPIR-V; NULL when it did not */
+   char *vertex_text;
+   char *fragment_text;
    struct gl3_framebuffer *framebuffer;
    struct gl3_framebuffer *framebuffer_feedback;
 
@@ -1206,6 +1356,17 @@ static bool gl3_pass_init_feedback(struct gl3_pass *pass);
 static void gl3_pass_set_shader(struct gl3_pass *pass, GLenum stage,
       const uint32_t *spirv,
       size_t spirv_words);
+static void gl3_pass_set_blob(struct gl3_pass *pass, GLenum stage,
+      struct slang_blob *blob);
+/* The compiler's own GLSL for a stage; NULL clears it. */
+static void gl3_pass_set_shader_text(struct gl3_pass *pass, GLenum stage,
+      const char *text)
+{
+   char **slot = stage == GL_VERTEX_SHADER ? &pass->vertex_text : &pass->fragment_text;
+   free(*slot);
+   *slot = text ? strdup(text) : NULL;
+}
+
 static void gl3_pass_add_parameter(struct gl3_pass *pass, unsigned index, const char *id);
 static void gl3_pass_set_semantic_texture(struct gl3_pass *pass, enum slang_texture_semantic semantic,
       const gl3_texture_t *texture);
@@ -1344,17 +1505,79 @@ static void gl3_pass_set_pass_number(struct gl3_pass *pass, unsigned number)
 }
 
 
+static void gl3_text_target(struct slang_text_target *t);
+
 /* Has a pass's stages read the frame where it lies, as slang_rect.h
- * describes; a pass that cannot keeps its stages and needs the frame
- * copied out. */
+ * describes. Stages rslc compiled it compiles again from the pass's
+ * source, printed when the pass links the compiler's text; others are
+ * rewritten on the SPIR-V and cross. A pass that cannot keeps its
+ * stages and needs the frame copied out. */
 static void gl3_pass_read_frame_in_place(struct gl3_pass *pass)
 {
-   pass->frame_copy = slang_rect_remap_pass(
-         &pass->vertex_shader, &pass->num_vertex_shader,
-         &pass->fragment_shader, &pass->num_fragment_shader,
+   enum slang_rect_result res;
+#if !defined(SLANG_RSLC_ONLY)
+   uint32_t *nv = NULL, *nf = NULL;
+   size_t    nvl = 0, nfl = 0;
+#endif
+#ifdef HAVE_RSLC
+   struct slang_text_target   text;
+   struct slang_blob         *vb     = NULL;
+   struct slang_blob         *fb     = NULL;
+   char                      *vt     = NULL;
+   char                      *ft     = NULL;
+   bool                       print  = pass->vertex_text && pass->fragment_text;
+   const struct video_shader *preset = pass->common->shader_preset;
+
+   gl3_text_target(&text);
+   if (     pass->vertex_blob   && pass->vertex_blob->refl
+         && pass->fragment_blob && pass->fragment_blob->refl
+         && preset && pass->pass_number < preset->passes
+         && slang_compile_remapped(preset->pass[pass->pass_number].source.path,
+               pass->vertex_shader, pass->num_vertex_shader,
+               pass->fragment_shader, pass->num_fragment_shader,
+               pass->pass_number == 0, pass->common->frame_linear,
+               pass->common->frame_wrap, print ? &text : NULL,
+               &res, &vb, &fb, &vt, &ft))
+   {
+      pass->frame_copy = res == SLANG_RECT_UNSUPPORTED;
+      if (vb)
+      {
+         gl3_pass_set_blob(pass, GL_VERTEX_SHADER, vb);
+         gl3_pass_set_shader_text(pass, GL_VERTEX_SHADER, vt);
+      }
+      if (fb)
+      {
+         gl3_pass_set_blob(pass, GL_FRAGMENT_SHADER, fb);
+         gl3_pass_set_shader_text(pass, GL_FRAGMENT_SHADER, ft);
+      }
+      free(vt);
+      free(ft);
+      return;
+   }
+#endif
+#if !defined(SLANG_RSLC_ONLY)
+   res = slang_rect_remap_pass(
+         pass->vertex_shader, pass->num_vertex_shader,
+         pass->fragment_shader, pass->num_fragment_shader,
          pass->pass_number == 0, pass->common->frame_linear,
-         pass->common->frame_wrap)
-         == SLANG_RECT_UNSUPPORTED;
+         pass->common->frame_wrap, &nv, &nvl, &nf, &nfl);
+   pass->frame_copy = res == SLANG_RECT_UNSUPPORTED;
+   /* a rewritten stage is a module without tables; it crosses */
+   if (nv)
+      gl3_pass_set_blob(pass, GL_VERTEX_SHADER, slang_blob_adopt_words(nv, nvl));
+   if (nf)
+      gl3_pass_set_blob(pass, GL_FRAGMENT_SHADER, slang_blob_adopt_words(nf, nfl));
+   if (res == SLANG_RECT_REWRITTEN)
+   {
+      /* the rewrite is on the SPIR-V: the compiler's text is behind it */
+      gl3_pass_set_shader_text(pass, GL_VERTEX_SHADER, NULL);
+      gl3_pass_set_shader_text(pass, GL_FRAGMENT_SHADER, NULL);
+   }
+#else
+   /* nothing prints a module the SPIR-V rewrite made: the frame is
+    * copied out instead */
+   pass->frame_copy = true;
+#endif
 }
 
 static bool gl3_pass_build(struct gl3_pass *pass)
@@ -1402,10 +1625,9 @@ static bool gl3_pass_build(struct gl3_pass *pass)
    pass->reflection.semantic_map                 = &semantic_map;
 
    {
-      bool refl_ok = slang_reflect_spirv(
-            pass->vertex_shader, pass->num_vertex_shader,
-            pass->fragment_shader, pass->num_fragment_shader,
-            &pass->reflection);
+      bool refl_ok = pass->vertex_blob && pass->fragment_blob
+         && slang_reflect_pass(pass->vertex_blob, pass->fragment_blob,
+               &pass->reflection);
       /* The parameter map is only needed during pass->reflection; the
        * pass->reflection keeps a dangling pointer otherwise. */
       slang_semantic_name_map_free(&semantic_map);
@@ -1585,9 +1807,110 @@ static void gl3_ubo_ring_init(struct gl3_ubo_ring *ring, size_t size)
    glBindBuffer(GL_UNIFORM_BUFFER, 0);
 }
 
-static bool gl3_pass_init_pipeline(struct gl3_pass *pass)
+/* A linked program, shared by every pass that binds the same two
+ * blobs: the program is a function of the stages alone (the push
+ * block's binding comes from their reflection), so two slots of one
+ * preset naming one .slang, or a chain built while the one it replaces
+ * still holds its passes, link once.  Listed while a pass holds it;
+ * the last pass to let go deletes it.  One GL context, one thread. */
+struct gl3_program
 {
-   size_t mi;
+   struct slang_blob   *vertex;     /* references, so the pair is unique
+                                       while the program is listed */
+   struct slang_blob   *fragment;
+   gl3_buffer_locations locations;
+   GLuint               id;
+   unsigned             refs;
+   bool                 spirv_binary;
+};
+
+static struct
+{
+   struct gl3_program **v;
+   size_t               n;
+   size_t               cap;
+   unsigned             reused;
+} gl3_programs;
+
+static struct gl3_program *gl3_program_find(const struct slang_blob *vs,
+      const struct slang_blob *fs)
+{
+   size_t i;
+   for (i = 0; i < gl3_programs.n; i++)
+   {
+      struct gl3_program *p = gl3_programs.v[i];
+      if (p->vertex != vs || p->fragment != fs)
+         continue;
+      p->refs++;
+      gl3_programs.reused++;
+      return p;
+   }
+   return NULL;
+}
+
+static void gl3_program_list(struct gl3_program *p)
+{
+   if (gl3_programs.n == gl3_programs.cap)
+   {
+      size_t cap              = gl3_programs.cap ? gl3_programs.cap * 2 : 32;
+      struct gl3_program **v  = (struct gl3_program**)realloc(gl3_programs.v,
+            cap * sizeof(*v));
+      if (!v)
+         return; /* unlisted: linked again next time, deleted with its pass */
+      gl3_programs.v   = v;
+      gl3_programs.cap = cap;
+   }
+   gl3_programs.v[gl3_programs.n++] = p;
+}
+
+static void gl3_program_unref(struct gl3_program *p)
+{
+   size_t i;
+   if (!p || --p->refs)
+      return;
+   for (i = 0; i < gl3_programs.n; i++)
+   {
+      if (gl3_programs.v[i] != p)
+         continue;
+      gl3_programs.v[i] = gl3_programs.v[--gl3_programs.n];
+      break;
+   }
+   if (!gl3_programs.n)
+   {
+      free(gl3_programs.v);
+      gl3_programs.v   = NULL;
+      gl3_programs.cap = 0;
+   }
+   glDeleteProgram(p->id);
+   slang_blob_unref(p->vertex);
+   slang_blob_unref(p->fragment);
+   free(p);
+}
+
+/* Links the pass's two stages, or takes the program a pass that binds
+ * the same two blobs already linked. */
+static bool gl3_pass_link(struct gl3_pass *pass)
+{
+   struct gl3_program *p;
+
+   gl3_program_unref(pass->program);
+   pass->program  = NULL;
+   pass->pipeline = 0;
+
+   if ((p = gl3_program_find(pass->vertex_blob, pass->fragment_blob)))
+   {
+      pass->program      = p;
+      pass->pipeline     = p->id;
+      pass->locations    = p->locations;
+      pass->spirv_binary = p->spirv_binary;
+      return true;
+   }
+
+   if (!(p = (struct gl3_program*)calloc(1, sizeof(*p))))
+      return false;
+   p->refs         = 1;
+   p->spirv_binary = false;
+
    /* Handing the SPIR-V straight to the driver skips both SPIRV-Cross and
     * the driver's GLSL front end, which is most of the cost of bringing up
     * a multi-pass preset. Not every module can be expressed under the
@@ -1598,49 +1921,72 @@ static bool gl3_pass_init_pipeline(struct gl3_pass *pass)
        * only ever declares a single UBO, so one other slot always exists. */
       unsigned push_binding = (pass->reflection.ubo_binding == 0) ? 1 : 0;
 
-      if ((pass->pipeline = gl3_spirv_link_program(
+      if ((p->id = gl3_spirv_link_program(
                   pass->vertex_shader,   pass->num_vertex_shader,
                   pass->fragment_shader, pass->num_fragment_shader,
                   push_binding)))
       {
-         pass->spirv_binary                       = true;
+         p->spirv_binary                       = true;
 
-         pass->locations.flat_ubo_vertex          = -1;
-         pass->locations.flat_ubo_fragment        = -1;
-         pass->locations.flat_push_vertex         = -1;
-         pass->locations.flat_push_fragment       = -1;
+         p->locations.flat_ubo_vertex          = -1;
+         p->locations.flat_ubo_fragment        = -1;
+         p->locations.flat_push_vertex         = -1;
+         p->locations.flat_push_fragment       = -1;
 
          /* Block bindings in a SPIR-V shader are immutable and cannot be
           * looked up by name, so they come from pass->reflection rather than
           * glGetUniformBlockIndex(). */
-         pass->locations.buffer_index_ubo_vertex  =
+         p->locations.buffer_index_ubo_vertex  =
             (pass->reflection.ubo_size
              && (pass->reflection.ubo_stage_mask & SLANG_STAGE_VERTEX_MASK))
             ? pass->reflection.ubo_binding : GL_INVALID_INDEX;
-         pass->locations.buffer_index_ubo_fragment =
+         p->locations.buffer_index_ubo_fragment =
             (pass->reflection.ubo_size
              && (pass->reflection.ubo_stage_mask & SLANG_STAGE_FRAGMENT_MASK))
             ? pass->reflection.ubo_binding : GL_INVALID_INDEX;
 
-         pass->locations.buffer_index_push_vertex =
+         p->locations.buffer_index_push_vertex =
             (pass->reflection.push_constant_size
              && (pass->reflection.push_constant_stage_mask & SLANG_STAGE_VERTEX_MASK))
             ? push_binding : GL_INVALID_INDEX;
-         pass->locations.buffer_index_push_fragment =
+         p->locations.buffer_index_push_fragment =
             (pass->reflection.push_constant_size
              && (pass->reflection.push_constant_stage_mask & SLANG_STAGE_FRAGMENT_MASK))
             ? push_binding : GL_INVALID_INDEX;
       }
    }
 
-   if (!pass->pipeline)
+   if (!p->id && pass->vertex_text && pass->fragment_text)
+      p->id = gl3_text_link_program(pass->vertex_text,
+            pass->fragment_text, &p->locations, false);
+
+   if (!p->id)
+      p->id = gl3_cross_compile_program(
+            pass->vertex_shader,   pass->num_vertex_shader   * sizeof(uint32_t),
+            pass->fragment_shader, pass->num_fragment_shader * sizeof(uint32_t),
+            &p->locations, false);
+   if (!p->id)
    {
-      if (!(pass->pipeline = gl3_cross_compile_program(
-                  pass->vertex_shader,   pass->num_vertex_shader   * sizeof(uint32_t),
-                  pass->fragment_shader, pass->num_fragment_shader * sizeof(uint32_t),
-                  &pass->locations, false)))
-         return false;
+      free(p);
+      return false;
    }
+
+   p->vertex          = slang_blob_ref(pass->vertex_blob);
+   p->fragment        = slang_blob_ref(pass->fragment_blob);
+   gl3_program_list(p);
+
+   pass->program      = p;
+   pass->pipeline     = p->id;
+   pass->locations    = p->locations;
+   pass->spirv_binary = p->spirv_binary;
+   return true;
+}
+
+static bool gl3_pass_init_pipeline(struct gl3_pass *pass)
+{
+   size_t mi;
+   if (!gl3_pass_link(pass))
+      return false;
 
    free(pass->uniforms);
    pass->uniforms      = NULL;
@@ -1687,6 +2033,17 @@ static bool gl3_pass_init_pipeline(struct gl3_pass *pass)
    gl3_pass_reflect_parameter(pass, "OriginalAspectRotated", &pass->reflection.semantics[SLANG_SEMANTIC_CORE_ASPECT_ROT]);
    gl3_pass_reflect_parameter(pass, "TotalSubFrames", &pass->reflection.semantics[SLANG_SEMANTIC_TOTAL_SUBFRAMES]);
    gl3_pass_reflect_parameter(pass, "CurrentSubFrame", &pass->reflection.semantics[SLANG_SEMANTIC_CURRENT_SUBFRAME]);
+   gl3_pass_reflect_parameter(pass, "HDRMode", &pass->reflection.semantics[SLANG_SEMANTIC_HDR]);
+   gl3_pass_reflect_parameter(pass, "BrightnessNits", &pass->reflection.semantics[SLANG_SEMANTIC_PAPER_WHITE_NITS]);
+   gl3_pass_reflect_parameter(pass, "PaperWhiteNits", &pass->reflection.semantics[SLANG_SEMANTIC_PAPER_WHITE_ALIAS]);
+   gl3_pass_reflect_parameter(pass, "PeakNits", &pass->reflection.semantics[SLANG_SEMANTIC_PEAK_NITS]);
+   gl3_pass_reflect_parameter(pass, "MaxNits", &pass->reflection.semantics[SLANG_SEMANTIC_MAX_NITS_ALIAS]);
+   gl3_pass_reflect_parameter(pass, "EnableHDR", &pass->reflection.semantics[SLANG_SEMANTIC_ENABLE_HDR]);
+   gl3_pass_reflect_parameter(pass, "MinNits", &pass->reflection.semantics[SLANG_SEMANTIC_MIN_NITS]);
+   gl3_pass_reflect_parameter(pass, "SourceHDR", &pass->reflection.semantics[SLANG_SEMANTIC_SOURCE_HDR]);
+   gl3_pass_reflect_parameter(pass, "Passthrough", &pass->reflection.semantics[SLANG_SEMANTIC_PASSTHROUGH]);
+   gl3_pass_reflect_parameter(pass, "TonemapOperator", &pass->reflection.semantics[SLANG_SEMANTIC_TONEMAP_OPERATOR]);
+   gl3_pass_reflect_parameter(pass, "ExpandGamut", &pass->reflection.semantics[SLANG_SEMANTIC_EXPAND_GAMUT]);
    gl3_pass_reflect_parameter(pass, "Gyroscope", &pass->reflection.semantics[SLANG_SEMANTIC_GYROSCOPE]);
    gl3_pass_reflect_parameter(pass, "Accelerometer", &pass->reflection.semantics[SLANG_SEMANTIC_ACCELEROMETER]);
    gl3_pass_reflect_parameter(pass, "AccelerometerRest", &pass->reflection.semantics[SLANG_SEMANTIC_ACCELEROMETER_REST]);
@@ -2092,8 +2449,12 @@ static void gl3_pass_build_semantic_frame_rect(struct gl3_pass *pass,
 static void gl3_pass_build_semantic_texture(struct gl3_pass *pass, uint8_t *buffer,
       enum slang_texture_semantic semantic, const gl3_texture_t *texture)
 {
-   gl3_pass_build_semantic_texture_vec4(pass, buffer, semantic,
-         texture->texture.dims);
+   unsigned dims = texture->texture.dims;
+   if (     semantic == SLANG_TEXTURE_SEMANTIC_SOURCE
+         && pass->pass_number == 0
+         && pass->common->sim_source_dims)
+      dims = pass->common->sim_source_dims;
+   gl3_pass_build_semantic_texture_vec4(pass, buffer, semantic, dims);
    gl3_pass_set_semantic_texture(pass, semantic, texture);
 }
 
@@ -2180,8 +2541,7 @@ static void gl3_pass_free(struct gl3_pass *pass)
    if (!pass)
       return;
 
-   if (pass->pipeline != 0)
-      glDeleteProgram(pass->pipeline);
+   gl3_program_unref(pass->program);
    /* the unique_ptrs these replaced were released by ~Pass itself */
    gl3_framebuffer_delete(pass->framebuffer);
    gl3_framebuffer_delete(pass->framebuffer_feedback);
@@ -2197,8 +2557,10 @@ static void gl3_pass_free(struct gl3_pass *pass)
    free(pass->parameters);
    free(pass->filtered_parameters);
    free(pass->pass_name);
-   free(pass->vertex_shader);
-   free(pass->fragment_shader);
+   slang_blob_unref(pass->vertex_blob);
+   slang_blob_unref(pass->fragment_blob);
+   free(pass->vertex_text);
+   free(pass->fragment_text);
    free(pass->uniforms);
    free(pass->push_constant_buffer);
    slang_reflection_free(&pass->reflection);
@@ -2207,37 +2569,47 @@ static void gl3_pass_free(struct gl3_pass *pass)
    free(pass);
 }
 
-static void gl3_pass_set_shader(struct gl3_pass *pass, GLenum stage,
-      const uint32_t *spirv,
-      size_t spirv_words)
+/* The pass takes @blob's reference. */
+static void gl3_pass_set_blob(struct gl3_pass *pass, GLenum stage,
+      struct slang_blob *blob)
 {
    switch (stage)
    {
       case GL_VERTEX_SHADER:
-         free(pass->vertex_shader);
-         pass->vertex_shader     = NULL;
-         pass->num_vertex_shader = 0;
-         if (spirv_words &&
-               (pass->vertex_shader = (uint32_t*)malloc(
-                     spirv_words * sizeof(uint32_t))))
-         {
-            memcpy(pass->vertex_shader, spirv, spirv_words * sizeof(uint32_t));
-            pass->num_vertex_shader = spirv_words;
-         }
+         slang_blob_unref(pass->vertex_blob);
+         pass->vertex_blob       = blob;
+         pass->vertex_shader     = blob ? blob->words : NULL;
+         pass->num_vertex_shader = blob ? blob->nwords : 0;
          break;
       case GL_FRAGMENT_SHADER:
-         free(pass->fragment_shader);
-         pass->fragment_shader     = NULL;
-         pass->num_fragment_shader = 0;
-         if (spirv_words &&
-               (pass->fragment_shader = (uint32_t*)malloc(
-                     spirv_words * sizeof(uint32_t))))
-         {
-            memcpy(pass->fragment_shader, spirv, spirv_words * sizeof(uint32_t));
-            pass->num_fragment_shader = spirv_words;
-         }
+         slang_blob_unref(pass->fragment_blob);
+         pass->fragment_blob       = blob;
+         pass->fragment_shader     = blob ? blob->words : NULL;
+         pass->num_fragment_shader = blob ? blob->nwords : 0;
          break;
       default:
+         slang_blob_unref(blob);
+         break;
+   }
+}
+
+/* Words from elsewhere (the built-in stock stages, a caller of the
+ * public API) become a blob of their own. */
+static void gl3_pass_set_shader(struct gl3_pass *pass, GLenum stage,
+      const uint32_t *spirv,
+      size_t spirv_words)
+{
+   uint32_t *words = NULL;
+   if (spirv_words && (words = (uint32_t*)malloc(spirv_words * sizeof(uint32_t))))
+      memcpy(words, spirv, spirv_words * sizeof(uint32_t));
+   switch (stage)
+   {
+      case GL_VERTEX_SHADER:
+      case GL_FRAGMENT_SHADER:
+         gl3_pass_set_blob(pass, stage, words ? slang_blob_adopt_words(words, spirv_words) : NULL);
+         break;
+      default:
+         free(words);
          break;
    }
 }
@@ -2355,6 +2727,24 @@ static void gl3_pass_build_semantics(struct gl3_pass *pass, uint8_t *buffer,
                       pass->total_subframes);
    gl3_pass_build_semantic_uint(pass, buffer, SLANG_SEMANTIC_CURRENT_SUBFRAME,
                       pass->current_subframe);
+   gl3_pass_build_semantic_float(pass, buffer, SLANG_SEMANTIC_MIN_NITS, 0.0f);
+   gl3_pass_build_semantic_uint(pass, buffer, SLANG_SEMANTIC_TONEMAP_OPERATOR, 0);
+   gl3_pass_build_semantic_uint(pass, buffer, SLANG_SEMANTIC_SOURCE_HDR, pass->common->source_hdr);
+   gl3_pass_build_semantic_uint(pass, buffer, SLANG_SEMANTIC_PASSTHROUGH, pass->common->passthrough);
+   gl3_pass_build_semantic_uint(pass, buffer, SLANG_SEMANTIC_HDR,
+                      pass->common->hdr_mode);
+   gl3_pass_build_semantic_float(pass, buffer, SLANG_SEMANTIC_ENABLE_HDR,
+                      pass->common->hdr_mode ? 1.0f : 0.0f);
+   gl3_pass_build_semantic_float(pass, buffer, SLANG_SEMANTIC_PAPER_WHITE_NITS,
+                      pass->common->paper_white_nits);
+   gl3_pass_build_semantic_float(pass, buffer, SLANG_SEMANTIC_PAPER_WHITE_ALIAS,
+                      pass->common->paper_white_nits);
+   gl3_pass_build_semantic_float(pass, buffer, SLANG_SEMANTIC_PEAK_NITS,
+                      pass->common->peak_nits);
+   gl3_pass_build_semantic_float(pass, buffer, SLANG_SEMANTIC_MAX_NITS_ALIAS,
+                      pass->common->peak_nits);
+   gl3_pass_build_semantic_uint(pass, buffer, SLANG_SEMANTIC_EXPAND_GAMUT,
+                      pass->common->expand_gamut);
    /* Each sub-frame is its own present; CurrentSubFrame is 1-based. */
    gl3_pass_build_semantic_uint(pass, buffer, SLANG_SEMANTIC_SWAP_COUNT,
                       (uint32_t)(pass->swap_count
@@ -2388,7 +2778,8 @@ static void gl3_pass_build_semantics(struct gl3_pass *pass, uint8_t *buffer,
    {
       const struct gl3_pass_parameter *m = &pass->parameters[pass->filtered_parameters[i]];
       gl3_pass_build_semantic_parameter(pass, buffer, m->semantic_index,
-            pass->common->shader_preset->parameters[m->index].current);
+            video_shader_param_get(
+               &pass->common->shader_preset->parameters[m->index]));
    }
 
    /* Previous inputs. */
@@ -2646,6 +3037,7 @@ static void gl3_pass_build_commands(struct gl3_pass *pass,
 
 struct gl3_filter_chain
 {
+   struct glslang_last_pass last_pass;
    struct gl3_pass **passes;
    size_t num_passes;
    gl3_filter_chain_pass_info *pass_info;
@@ -2653,9 +3045,18 @@ struct gl3_filter_chain
    struct gl3_framebuffer *copy_framebuffer;
    gl3_common_resources common;
    gl3_filter_chain_texture input_texture;
+   /* The count the last frame's final pass was drawn with. */
+   uint64_t drawn_frame_count;
+   /* num_original_history framebuffers; one more than the shaders read
+    * for a replaying chain, so the frame's input goes where the last
+    * frame did not. */
    struct gl3_framebuffer **original_history;
    size_t num_original_history;
    bool require_clear;
+   /* A frame's final pass was drawn since the passes were built. */
+   bool drawn;
+   /* See gl3_filter_chain_create_from_preset. */
+   bool replay;
    bool alias_initialized;
    /* Every pass reads a frame where it lies: none is copied out. */
    bool frame_in_place;
@@ -2673,14 +3074,34 @@ static bool gl3_chain_init_alias(struct gl3_filter_chain *chain);
 static void gl3_chain_set_pass_info(struct gl3_filter_chain *chain, unsigned pass, const gl3_filter_chain_pass_info info);
 static bool gl3_chain_set_num_passes(struct gl3_filter_chain *chain, unsigned num_passes_);
 static void gl3_chain_set_shader(struct gl3_filter_chain *chain, unsigned pass, GLenum stage, const uint32_t *spirv, size_t spirv_words);
+static void gl3_chain_set_blob(struct gl3_filter_chain *chain, unsigned pass, GLenum stage, struct slang_blob *blob);
 static void gl3_chain_add_parameter(struct gl3_filter_chain *chain, unsigned pass,
       unsigned index, const char *id);
 static bool gl3_chain_init(struct gl3_filter_chain *chain);
 static bool gl3_chain_init_single_pass(struct gl3_filter_chain *chain, unsigned pass_idx);
+static bool gl3_chain_check_last_pass(struct gl3_filter_chain *chain,
+      const glslang_output *output, unsigned pass)
+{
+   if (!slang_last_pass_feedback(&chain->last_pass, output))
+      return false;
+   if (pass == chain->last_pass.index && chain->last_pass.inspect_feedback
+         && !chain->last_pass.needs_target
+         && chain->num_passes == pass + 2)
+   {
+      unsigned copy = pass + 1;
+      gl3_pass_free(chain->passes[copy]);
+      chain->passes[copy] = NULL;
+      chain->num_passes--;
+      chain->passes[pass]->final_pass = true;
+   }
+   return true;
+}
+
 static bool gl3_chain_compile_full_pass(struct gl3_filter_chain *chain, unsigned pass_idx,
       glslang_filter_chain_filter default_filter);
 static bool gl3_chain_init_alias_early(struct gl3_filter_chain *chain);
 static bool gl3_chain_finalize(struct gl3_filter_chain *chain);
+static bool gl3_chain_load_luts(struct gl3_filter_chain *chain);
 static void gl3_chain_clear_history_and_feedback(struct gl3_filter_chain *chain);
 static void gl3_chain_set_input_texture(struct gl3_filter_chain *chain, const gl3_filter_chain_texture texture);
 static bool gl3_chain_add_static_texture(struct gl3_filter_chain *chain, const struct gl3_static_texture *texture);
@@ -2761,7 +3182,7 @@ static void gl3_chain_update_history_info(struct gl3_filter_chain *chain)
 {
    unsigned i;
 
-   for (i = 0; i < chain->num_original_history; i++)
+   for (i = 0; i < chain->common.num_original_history; i++)
    {
       gl3_texture_t *source = (gl3_texture_t*)
          &chain->common.original_history[i];
@@ -2863,7 +3284,25 @@ static void gl3_chain_end_frame(struct gl3_filter_chain *chain)
          gl3_framebuffer_set_size(tmp, chain->input_texture.dims,
                chain->input_texture.format);
 
-      if (tmp->complete)
+      /* A frame read where it lies is copied from there */
+      if (tmp->complete && chain->input_texture.padded_dims)
+      {
+         const gl3_filter_chain_texture *in = &chain->input_texture;
+         float pw = (float)VIDEO_SCALE_W(in->padded_dims);
+         float ph = (float)VIDEO_SCALE_H(in->padded_dims);
+         gl3_framebuffer_copy_partial(
+               tmp->framebuffer,
+               chain->common.quad_program,
+               chain->common.partial_vbo,
+               chain->common.quad_loc.flat_ubo_vertex,
+               VIDEO_SCALE_W(tmp->size_dims), VIDEO_SCALE_H(tmp->size_dims),
+               in->image,
+               (float)VIDEO_SCALE_W(in->origin) / pw,
+               (float)VIDEO_SCALE_H(in->origin) / ph,
+               (float)VIDEO_SCALE_W(in->dims)   / pw,
+               (float)VIDEO_SCALE_H(in->dims)   / ph);
+      }
+      else if (tmp->complete)
          gl3_framebuffer_copy(
                tmp->framebuffer,
                chain->common.quad_program,
@@ -2927,12 +3366,32 @@ static void gl3_chain_build_viewport_pass(struct gl3_filter_chain *chain, const 
 
    /* For feedback FBOs, swap current and previous. */
    if (!again)
+   {
       for (i = 0; i < chain->num_passes; i++)
       {
          struct gl3_framebuffer *fb = gl3_pass_get_feedback_framebuffer(chain->passes[i]);
          if (fb)
             gl3_pass_end_frame(chain->passes[i]);
       }
+      chain->drawn_frame_count =
+         chain->passes[chain->num_passes - 1]->frame_count;
+      chain->drawn             = true;
+   }
+}
+
+/* The last frame's final pass in a later frame, at vp: what it read
+ * then - the passes' outputs and feedback, the history it saw - and its
+ * count. Nothing else runs; feedback does not swap, history stays. */
+static void gl3_chain_replay_viewport_pass(struct gl3_filter_chain *chain,
+      const gl3_viewport vp, const float *mvp)
+{
+   uint64_t count;
+   struct gl3_pass *pass = chain->passes[chain->num_passes - 1];
+
+   count             = pass->frame_count;
+   pass->frame_count = chain->drawn_frame_count;
+   gl3_chain_build_viewport_pass(chain, vp, mvp, true);
+   pass->frame_count = count;
 }
 
 static bool gl3_chain_init_history(struct gl3_filter_chain *chain)
@@ -2967,14 +3426,17 @@ static bool gl3_chain_init_history(struct gl3_filter_chain *chain)
    /* We don't need to store array element #0,
     * since it's aliased with the actual original. */
    required_images--;
+   if (!gl3_texture_array_resize(&chain->common.original_history,
+            &chain->common.num_original_history, required_images))
+      return false;
+   /* And one more to replay: the last frame's history stays. */
+   if (chain->replay)
+      required_images++;
    chain->original_history = (struct gl3_framebuffer**)
       calloc(required_images, sizeof(*chain->original_history));
    if (!chain->original_history)
       return false;
    chain->num_original_history = required_images;
-   if (!gl3_texture_array_resize(&chain->common.original_history,
-            &chain->common.num_original_history, required_images))
-      return false;
 
    for (i = 0; i < required_images; i++)
    {
@@ -2983,7 +3445,8 @@ static bool gl3_chain_init_history(struct gl3_filter_chain *chain)
          return false;
    }
 
-   RARCH_LOG("[GLCore] Using history of %u frames.\n", (unsigned)(required_images));
+   RARCH_LOG("[GLCore] Using history of %u frames.\n",
+         (unsigned)chain->common.num_original_history);
 
    /* On first frame, we need to clear the textures to
     * a known state, but we need
@@ -3145,14 +3608,12 @@ static void gl3_chain_set_pass_info(struct gl3_filter_chain *chain, unsigned pas
    }
 }
 
-/* Whether frames can be read where they lie, once every pass is built
- * and the history is known: history is copied from the frame on its
- * own. */
+/* Whether frames can be read where they lie, once every pass is built.
+ * History is copied straight out of where the frame lies. */
 static void gl3_chain_init_frame_in_place(struct gl3_filter_chain *chain)
 {
    size_t i;
-   chain->frame_in_place = chain->common.frame_rect
-      && !chain->num_original_history;
+   chain->frame_in_place = chain->common.frame_rect;
    for (i = 0; i < chain->num_passes && chain->frame_in_place; i++)
       if (chain->passes[i]->frame_copy)
          chain->frame_in_place = false;
@@ -3201,7 +3662,62 @@ static bool gl3_chain_set_num_passes(struct gl3_filter_chain *chain, unsigned nu
 
 static void gl3_chain_set_shader(struct gl3_filter_chain *chain, unsigned pass, GLenum stage, const uint32_t *spirv, size_t spirv_words)
 {
+#if defined(SLANG_RSLC_ONLY)
+   /* one of the driver's own stages: built from its GLSL, tables and
+    * text, since nothing prints the SPIR-V */
+   const char *source = spirv_shader_glsl(spirv);
+   if (source)
+   {
+      struct slang_text_target text;
+      struct slang_blob       *blob    = NULL;
+      char                    *printed = NULL;
+      gl3_text_target(&text);
+      if (slang_compile_builtin(source, stage == GL_FRAGMENT_SHADER,
+               &text, &blob, &printed))
+      {
+         gl3_pass_set_blob(chain->passes[pass], stage, blob);
+         gl3_pass_set_shader_text(chain->passes[pass], stage, printed);
+         free(printed);
+         return;
+      }
+   }
+#endif
    gl3_pass_set_shader(chain->passes[pass], stage, spirv, spirv_words);
+}
+
+static void gl3_chain_set_blob(struct gl3_filter_chain *chain, unsigned pass, GLenum stage, struct slang_blob *blob)
+{
+   gl3_pass_set_blob(chain->passes[pass], stage, blob);
+}
+
+static void gl3_chain_set_shader_text(struct gl3_filter_chain *chain, unsigned pass,
+      const glslang_output *output)
+{
+   gl3_pass_set_shader_text(chain->passes[pass], GL_VERTEX_SHADER, output->vertex_text);
+   gl3_pass_set_shader_text(chain->passes[pass], GL_FRAGMENT_SHADER, output->fragment_text);
+}
+
+/* What this driver wants printed beside the SPIR-V: GLSL at the
+ * context's version, named as gl3_cross_compile_program() names the
+ * interface. */
+static void gl3_text_target(struct slang_text_target *t)
+{
+   memset(t, 0, sizeof(*t));
+   t->version        = gl3_get_cross_compiler_target_version();
+#if defined(HAVE_OPENGLES3) || defined(HAVE_OPENGLES)
+   t->es             = true;
+#endif
+   t->attr_prefix    = "RARCH_ATTRIBUTE_";
+   t->varying_prefix = "RARCH_VARYING_";
+   t->sampler_prefix = "RARCH_TEXTURE_";
+   t->ubo_block[0]     = "RARCH_UBO_VERTEX";
+   t->ubo_block[1]     = "RARCH_UBO_FRAGMENT";
+   t->ubo_instance[0]  = "RARCH_UBO_VERTEX_INSTANCE";
+   t->ubo_instance[1]  = "RARCH_UBO_FRAGMENT_INSTANCE";
+   t->push_block[0]    = "RARCH_PUSH_VERTEX";
+   t->push_block[1]    = "RARCH_PUSH_FRAGMENT";
+   t->push_instance[0] = "RARCH_PUSH_VERTEX_INSTANCE";
+   t->push_instance[1] = "RARCH_PUSH_FRAGMENT_INSTANCE";
 }
 
 static void gl3_chain_add_parameter(struct gl3_filter_chain *chain, unsigned pass,
@@ -3230,6 +3746,8 @@ static bool gl3_chain_init(struct gl3_filter_chain *chain)
          return false;
    }
 
+   if (!gl3_chain_load_luts(chain))
+      return false;
    chain->require_clear = false;
    if (!gl3_chain_init_history(chain))
       return false;
@@ -3238,6 +3756,8 @@ static bool gl3_chain_init(struct gl3_filter_chain *chain)
    if (!gl3_texture_array_resize(&chain->common.pass_outputs,
             &chain->common.num_pass_outputs, chain->num_passes))
       return false;
+   /* A rebuild remakes what a replay reads. */
+   chain->drawn = false;
    gl3_chain_init_frame_in_place(chain);
    return true;
 }
@@ -3264,6 +3784,7 @@ static bool gl3_chain_compile_full_pass(struct gl3_filter_chain *chain, unsigned
 {
    size_t j;
    glslang_output output;
+   struct slang_text_target text;
    struct gl3_filter_chain_pass_info p_info;
    bool explicit_format;
    struct video_shader_parameter *itr;
@@ -3271,7 +3792,13 @@ static bool gl3_chain_compile_full_pass(struct gl3_filter_chain *chain, unsigned
    const struct video_shader_pass *next_pass;
    struct video_shader *shader = chain->common.shader_preset;
 
-   if (!shader || pass_idx >= chain->num_passes)
+   if (!shader)
+      return false;
+   /* A pruned copy still occupies its originally scheduled compile step. */
+   if (pass_idx == shader->passes && chain->num_passes == shader->passes
+         && chain->last_pass.inspect_feedback)
+      return true;
+   if (pass_idx >= chain->num_passes)
       return false;
 
    /* For the extra opaque pass appended when last_pass_is_fbo,
@@ -3285,10 +3812,17 @@ static bool gl3_chain_compile_full_pass(struct gl3_filter_chain *chain, unsigned
       ? &shader->pass[pass_idx + 1] : NULL;
 
    /* ---- SPIRV cross-compile (CPU) ---- */
-   if (!glslang_compile_shader(pass->source.path, &output))
+   gl3_text_target(&text);
+   if (!glslang_compile_shader_text(pass->source.path, &output, NULL, &text))
    {
       RARCH_ERR("[GLCore] Failed to compile shader: \"%s\".\n",
             pass->source.path);
+      return false;
+   }
+
+   if (!gl3_chain_check_last_pass(chain, &output, pass_idx))
+   {
+      glslang_output_free(&output);
       return false;
    }
 
@@ -3354,11 +3888,12 @@ static bool gl3_chain_compile_full_pass(struct gl3_filter_chain *chain, unsigned
       }
    }
 
-   /* ---- Set SPIRV on the pass ---- */
-   gl3_chain_set_shader(chain, pass_idx, GL_VERTEX_SHADER,
-         output.vertex, output.vertex_len);
-   gl3_chain_set_shader(chain, pass_idx, GL_FRAGMENT_SHADER,
-         output.fragment, output.fragment_len);
+   /* ---- the stages, shared with the output ---- */
+   gl3_chain_set_blob(chain, pass_idx, GL_VERTEX_SHADER,
+         slang_blob_ref(output.vertex_blob));
+   gl3_chain_set_blob(chain, pass_idx, GL_FRAGMENT_SHADER,
+         slang_blob_ref(output.fragment_blob));
+   gl3_chain_set_shader_text(chain, pass_idx, &output);
 
    gl3_chain_set_frame_count_period(chain, pass_idx, pass->frame_count_mod);
 
@@ -3410,13 +3945,18 @@ static bool gl3_chain_compile_full_pass(struct gl3_filter_chain *chain, unsigned
       && pass->mipmap
       ? GLSLANG_FILTER_CHAIN_LINEAR
       : GLSLANG_FILTER_CHAIN_NEAREST;
+   output.meta.rt_format = glslang_hdr_output_format(
+         shader, pass_idx, output.meta.rt_format);
 
    explicit_format = output.meta.rt_format != SLANG_FORMAT_UNKNOWN;
 
    if (output.meta.rt_format == SLANG_FORMAT_UNKNOWN)
       output.meta.rt_format = SLANG_FORMAT_R8G8B8A8_UNORM;
 
-   if (!(pass->fbo.flags & FBO_SCALE_FLAG_VALID))
+   /* A last pass with no target of its own renders to the framebuffer,
+    * whatever scale the preset gave it. */
+   if (     !(pass->fbo.flags & FBO_SCALE_FLAG_VALID)
+         || pass_idx + 1 == chain->num_passes)
    {
       bool scale_viewport = pass_idx + 1 == shader->passes;
       if (scale_viewport)
@@ -3452,6 +3992,8 @@ static bool gl3_chain_compile_full_pass(struct gl3_filter_chain *chain, unsigned
          output.meta.rt_format = SLANG_FORMAT_R16G16B16A16_SFLOAT;
       else if (pass->fbo.flags & FBO_SCALE_FLAG_RGB10_FBO)
          output.meta.rt_format = SLANG_FORMAT_A2B10G10R10_UNORM_PACK32;
+      output.meta.rt_format = glslang_hdr_output_format(
+            shader, pass_idx, output.meta.rt_format);
 
       p_info.rt_format =
          convert_glslang_format(output.meta.rt_format);
@@ -3517,6 +4059,8 @@ static bool gl3_chain_finalize(struct gl3_filter_chain *chain)
       chain->alias_initialized = true;
    }
 
+   if (!gl3_chain_load_luts(chain))
+      return false;
    chain->require_clear = false;
    if (!gl3_chain_init_history(chain))
       return false;
@@ -3525,6 +4069,8 @@ static bool gl3_chain_finalize(struct gl3_filter_chain *chain)
    if (!gl3_texture_array_resize(&chain->common.pass_outputs,
             &chain->common.num_pass_outputs, chain->num_passes))
       return false;
+   /* A rebuild remakes what a replay reads. */
+   chain->drawn = false;
    gl3_chain_init_frame_in_place(chain);
    return true;
 }
@@ -3587,6 +4133,7 @@ static void gl3_chain_set_input_texture(struct gl3_filter_chain *chain, const gl
          gl3_framebuffer_copy_partial(
                chain->copy_framebuffer->framebuffer,
                chain->common.quad_program,
+               chain->common.partial_vbo,
                chain->common.quad_loc.flat_ubo_vertex,
                VIDEO_SCALE_W(chain->copy_framebuffer->size_dims),
                VIDEO_SCALE_H(chain->copy_framebuffer->size_dims),
@@ -3752,6 +4299,8 @@ static bool gl3_filter_chain_load_lut(
    return true;
 }
 
+/* The preset's LUTs, by name only: the semantic map is built from the
+ * names, and each image is loaded once a pass is known to read it. */
 static bool gl3_filter_chain_load_luts(
       struct gl3_filter_chain *chain,
       struct video_shader *shader)
@@ -3759,20 +4308,46 @@ static bool gl3_filter_chain_load_luts(
    unsigned i;
    for (i = 0; i < shader->luts; i++)
    {
+      struct gl3_static_texture entry;
+      memset(&entry, 0, sizeof(entry));
+      if (!(entry.id = strdup(shader->lut[i].id)))
+         return false;
+      if (!gl3_chain_add_static_texture(chain, &entry))
+      {
+         free(entry.id);
+         return false;
+      }
+   }
+
+   return true;
+}
+
+/* Loads the LUTs some pass reads and that are not loaded yet; one no
+ * pass reads is never decoded or uploaded. */
+static bool gl3_chain_load_luts(struct gl3_filter_chain *chain)
+{
+   unsigned i;
+   uint8_t read[GFX_MAX_TEXTURES];
+   struct video_shader *shader = chain->common.shader_preset;
+   if (!shader || !chain->common.num_luts)
+      return true;
+   memset(read, 0, sizeof(read));
+   for (i = 0; i < chain->num_passes; i++)
+      slang_reflection_luts_read(&chain->passes[i]->reflection, read,
+            (unsigned)chain->common.num_luts);
+   for (i = 0; i < chain->common.num_luts; i++)
+   {
       struct gl3_static_texture image;
+      if (!read[i] || chain->common.luts[i].image)
+         continue;
       if (!gl3_filter_chain_load_lut(chain, &shader->lut[i], &image))
       {
          RARCH_ERR("[GLCore] Failed to load LUT \"%s\".\n", shader->lut[i].path);
          return false;
       }
-
-      if (!gl3_chain_add_static_texture(chain, &image))
-      {
-         gl3_static_texture_free(&image);
-         return false;
-      }
+      gl3_static_texture_free(&chain->common.luts[i]);
+      chain->common.luts[i] = image;
    }
-
    return true;
 }
 
@@ -3798,11 +4373,11 @@ gl3_filter_chain_t *gl3_filter_chain_create_default(
    gl3_chain_set_pass_info(chain, 0, pass_info);
 
    gl3_chain_set_shader(chain, 0, GL_VERTEX_SHADER,
-         gl3_opaque_vert,
-         sizeof(gl3_opaque_vert) / sizeof(uint32_t));
+         spirv_opaque_vert,
+         spirv_opaque_vert_size / sizeof(uint32_t));
    gl3_chain_set_shader(chain, 0, GL_FRAGMENT_SHADER,
-         gl3_opaque_frag,
-         sizeof(gl3_opaque_frag) / sizeof(uint32_t));
+         spirv_opaque_frag,
+         spirv_opaque_frag_size / sizeof(uint32_t));
 
    if (!gl3_chain_init(chain))
    {
@@ -3846,9 +4421,9 @@ gl3_filter_chain_t *gl3_filter_chain_create_shrink(void)
    for (i = 0; i < 2; i++)
    {
       gl3_chain_set_shader(chain, i, GL_VERTEX_SHADER,
-            gl3_opaque_vert, sizeof(gl3_opaque_vert) / sizeof(uint32_t));
+            spirv_opaque_vert, spirv_opaque_vert_size / sizeof(uint32_t));
       gl3_chain_set_shader(chain, i, GL_FRAGMENT_SHADER,
-            gl3_opaque_frag, sizeof(gl3_opaque_frag) / sizeof(uint32_t));
+            spirv_opaque_frag, spirv_opaque_frag_size / sizeof(uint32_t));
    }
    if (!gl3_chain_init(chain))
    {
@@ -3859,14 +4434,17 @@ gl3_filter_chain_t *gl3_filter_chain_create_shrink(void)
 }
 
 gl3_filter_chain_t *gl3_filter_chain_create_from_preset(
-      const char *path, glslang_filter_chain_filter filter, bool frame_rect)
+      const char *path, glslang_filter_chain_filter filter, bool frame_rect,
+      bool replay)
 {
    size_t j;
    unsigned i;
    bool last_pass_is_fbo;
+   struct glslang_last_pass last_pass;
    bool explicit_format;
    struct video_shader_parameter *itr;
    struct gl3_filter_chain *chain;
+   void *include_cache;
    struct video_shader *shader = (struct video_shader*)calloc(1, sizeof(*shader));
    if (!shader)
       return NULL;
@@ -3877,21 +4455,33 @@ gl3_filter_chain_t *gl3_filter_chain_create_from_preset(
       return NULL;
    }
 
-   last_pass_is_fbo = shader->pass[shader->passes - 1].fbo.flags &
-      FBO_SCALE_FLAG_VALID;
+   /* One include cache for every pass of this preset.  The passes share
+    * helper .inc files, so without this each pass re-reads them: a
+    * 24-pass preset over 8 shared helpers issues 216 reads for 32
+    * distinct files.  Each exit below frees it explicitly, next to the
+    * chain and preset it already releases. */
+   include_cache    = glslang_include_cache_new();
+
+   glslang_last_pass_init(shader, include_cache, &last_pass);
+   last_pass_is_fbo = last_pass.needs_target || last_pass.inspect_feedback;
 
    chain = gl3_chain_new(shader->passes + (last_pass_is_fbo ? 1 : 0));
    if (!chain)
       {
+         glslang_include_cache_free(include_cache);
          free(shader);
          gl3_chain_free(chain);
          return NULL;
       }
+   chain->common.sim_source_dims = shader->sim_source_dims;
    chain->common.frame_rect = frame_rect;
+   chain->replay            = replay;
+   chain->last_pass = last_pass;
 
    if (      shader->luts
          && !gl3_filter_chain_load_luts(chain, shader))
       {
+         glslang_include_cache_free(include_cache);
          free(shader);
          gl3_chain_free(chain);
          return NULL;
@@ -3899,19 +4489,11 @@ gl3_filter_chain_t *gl3_filter_chain_create_from_preset(
 
    shader->num_parameters = 0;
 
-   /* One include cache for every pass of this preset.  The passes share
-    * helper .inc files, so without this each pass re-reads them: a
-    * 24-pass preset over 8 shared helpers issues 216 reads for 32
-    * distinct files.  The guard frees it on every exit from here,
-    * including the error paths below. */
    {
-   /* The C++ guard freed this on every exit; in C each exit below frees
-    * it explicitly, next to the chain and preset it already released. */
-   void *include_cache = glslang_include_cache_new();
-
    for (i = 0; i < shader->passes; i++)
    {
       glslang_output output;
+      struct slang_text_target text;
       struct gl3_filter_chain_pass_info pass_info;
       const struct video_shader_pass *pass      = &shader->pass[i];
       const struct video_shader_pass *next_pass =
@@ -3927,8 +4509,9 @@ gl3_filter_chain_t *gl3_filter_chain_create_from_preset(
       pass_info.address       = GLSLANG_FILTER_CHAIN_ADDRESS_REPEAT;
       pass_info.max_levels    = 0;
 
-      if (!glslang_compile_shader_cached(pass->source.path, &output,
-               include_cache))
+      gl3_text_target(&text);
+      if (!glslang_compile_shader_text(pass->source.path, &output,
+               include_cache, &text))
       {
          RARCH_ERR("[GLCore] Failed to compile shader: \"%s\".\n",
                pass->source.path);
@@ -3939,6 +4522,16 @@ gl3_filter_chain_t *gl3_filter_chain_create_from_preset(
          return NULL;
       }
       }
+
+      if (!gl3_chain_check_last_pass(chain, &output, i))
+      {
+         glslang_output_free(&output);
+         glslang_include_cache_free(include_cache);
+         free(shader);
+         gl3_chain_free(chain);
+         return NULL;
+      }
+      last_pass_is_fbo = chain->num_passes > shader->passes;
 
       for (j = 0; j < output.meta.num_parameters; j++)
       {
@@ -4012,15 +4605,11 @@ gl3_filter_chain_t *gl3_filter_chain_create_from_preset(
          }
       }
 
-      gl3_chain_set_shader(chain, i,
-            GL_VERTEX_SHADER,
-            output.vertex,
-            output.vertex_len);
-
-      gl3_chain_set_shader(chain, i,
-            GL_FRAGMENT_SHADER,
-            output.fragment,
-            output.fragment_len);
+      gl3_chain_set_blob(chain, i, GL_VERTEX_SHADER,
+            slang_blob_ref(output.vertex_blob));
+      gl3_chain_set_blob(chain, i, GL_FRAGMENT_SHADER,
+            slang_blob_ref(output.fragment_blob));
+      gl3_chain_set_shader_text(chain, i, &output);
 
       gl3_chain_set_frame_count_period(chain, i, pass->frame_count_mod);
 
@@ -4054,6 +4643,8 @@ gl3_filter_chain_t *gl3_filter_chain_create_from_preset(
          && pass->mipmap
          ? GLSLANG_FILTER_CHAIN_LINEAR
          : GLSLANG_FILTER_CHAIN_NEAREST;
+      output.meta.rt_format = glslang_hdr_output_format(
+            shader, i, output.meta.rt_format);
 
       explicit_format = output.meta.rt_format != SLANG_FORMAT_UNKNOWN;
 
@@ -4061,7 +4652,10 @@ gl3_filter_chain_t *gl3_filter_chain_create_from_preset(
       if (output.meta.rt_format == SLANG_FORMAT_UNKNOWN)
          output.meta.rt_format = SLANG_FORMAT_R8G8B8A8_UNORM;
 
-      if (!(pass->fbo.flags & FBO_SCALE_FLAG_VALID))
+      /* A last pass with no target of its own renders to the
+       * framebuffer, whatever scale the preset gave it. */
+      if (     !(pass->fbo.flags & FBO_SCALE_FLAG_VALID)
+            || (i + 1 == shader->passes && !last_pass_is_fbo))
       {
          bool scale_viewport       = i + 1 == shader->passes;
          if (scale_viewport)
@@ -4102,6 +4696,8 @@ gl3_filter_chain_t *gl3_filter_chain_create_from_preset(
             output.meta.rt_format = SLANG_FORMAT_R16G16B16A16_SFLOAT;
          else if (pass->fbo.flags & FBO_SCALE_FLAG_RGB10_FBO)
             output.meta.rt_format = SLANG_FORMAT_A2B10G10R10_UNORM_PACK32;
+         output.meta.rt_format = glslang_hdr_output_format(
+               shader, i, output.meta.rt_format);
 
          pass_info.rt_format = convert_glslang_format(output.meta.rt_format);
          RARCH_LOG("[GLCore] Using render target format %s for pass output #%u.\n",
@@ -4171,13 +4767,13 @@ gl3_filter_chain_t *gl3_filter_chain_create_from_preset(
 
       gl3_chain_set_shader(chain, shader->passes,
             GL_VERTEX_SHADER,
-            gl3_opaque_vert,
-            sizeof(gl3_opaque_vert) / sizeof(uint32_t));
+            spirv_opaque_vert,
+            spirv_opaque_vert_size / sizeof(uint32_t));
 
       gl3_chain_set_shader(chain, shader->passes,
             GL_FRAGMENT_SHADER,
-            gl3_opaque_frag,
-            sizeof(gl3_opaque_frag) / sizeof(uint32_t));
+            spirv_opaque_frag,
+            spirv_opaque_frag_size / sizeof(uint32_t));
    }
 
    gl3_chain_set_shader_preset(chain, shader);
@@ -4203,6 +4799,7 @@ gl3_filter_chain_t *gl3_filter_chain_create_deferred(
    unsigned i;
    unsigned total_passes;
    bool last_pass_is_fbo;
+   struct glslang_last_pass last_pass;
    struct gl3_filter_chain *chain;
    struct video_shader *shader = (struct video_shader*)calloc(1, sizeof(*shader));
    if (!shader)
@@ -4214,8 +4811,8 @@ gl3_filter_chain_t *gl3_filter_chain_create_deferred(
       return NULL;
    }
 
-   last_pass_is_fbo = shader->pass[shader->passes - 1].fbo.flags &
-      FBO_SCALE_FLAG_VALID;
+   glslang_last_pass_init(shader, NULL, &last_pass);
+   last_pass_is_fbo = last_pass.needs_target || last_pass.inspect_feedback;
 
    total_passes = shader->passes + (last_pass_is_fbo ? 1 : 0);
    chain = gl3_chain_new(total_passes);
@@ -4225,7 +4822,9 @@ gl3_filter_chain_t *gl3_filter_chain_create_deferred(
          gl3_chain_free(chain);
          return NULL;
       }
+   chain->common.sim_source_dims = shader->sim_source_dims;
    chain->common.frame_rect = frame_rect;
+   chain->last_pass = last_pass;
 
    if (      shader->luts
          && !gl3_filter_chain_load_luts(chain, shader))
@@ -4246,6 +4845,9 @@ gl3_filter_chain_t *gl3_filter_chain_create_deferred(
          gl3_chain_set_pass_name(chain, i, shader->pass[i].alias);
    }
 
+   if (last_pass.name[0])
+      gl3_chain_set_pass_name(chain, shader->passes - 1, last_pass.name);
+
    if (last_pass_is_fbo)
    {
       struct gl3_filter_chain_pass_info pass_info;
@@ -4264,13 +4866,13 @@ gl3_filter_chain_t *gl3_filter_chain_create_deferred(
 
       gl3_chain_set_shader(chain, shader->passes,
             GL_VERTEX_SHADER,
-            gl3_opaque_vert,
-            sizeof(gl3_opaque_vert) / sizeof(uint32_t));
+            spirv_opaque_vert,
+            spirv_opaque_vert_size / sizeof(uint32_t));
 
       gl3_chain_set_shader(chain, shader->passes,
             GL_FRAGMENT_SHADER,
-            gl3_opaque_frag,
-            sizeof(gl3_opaque_frag) / sizeof(uint32_t));
+            spirv_opaque_frag,
+            spirv_opaque_frag_size / sizeof(uint32_t));
    }
 
    gl3_chain_set_shader_preset(chain, shader);
@@ -4343,6 +4945,18 @@ bool gl3_filter_chain_init(gl3_filter_chain_t *chain)
    return gl3_chain_init(chain);
 }
 
+void gl3_filter_chain_set_passthrough(
+      gl3_filter_chain_t *chain, unsigned passthrough)
+{
+   chain->common.passthrough = passthrough ? 1 : 0;
+}
+
+void gl3_filter_chain_set_source_hdr(
+      gl3_filter_chain_t *chain, unsigned source_hdr)
+{
+   chain->common.source_hdr = source_hdr ? 1 : 0;
+}
+
 void gl3_filter_chain_set_input_texture(
       gl3_filter_chain_t *chain,
       const struct gl3_filter_chain_texture *texture)
@@ -4381,6 +4995,16 @@ void gl3_filter_chain_set_frame_time_delta(
       uint32_t time_delta)
 {
    gl3_chain_set_frame_time_delta(chain, time_delta);
+}
+
+void gl3_filter_chain_set_hdr_parameters(
+      gl3_filter_chain_t *chain, unsigned mode,
+      float paper_white_nits, unsigned expand_gamut, float peak_nits)
+{
+   chain->common.hdr_mode         = mode;
+   chain->common.paper_white_nits = paper_white_nits;
+   chain->common.peak_nits        = peak_nits;
+   chain->common.expand_gamut     = expand_gamut;
 }
 
 void gl3_filter_chain_set_original_fps(
@@ -4479,6 +5103,18 @@ void gl3_filter_chain_build_viewport_pass_again(
       const gl3_viewport *vp, const float *mvp)
 {
    gl3_chain_build_viewport_pass(chain, *vp, mvp, true);
+}
+
+bool gl3_filter_chain_replay_ready(const gl3_filter_chain_t *chain)
+{
+   return chain->drawn;
+}
+
+void gl3_filter_chain_build_viewport_pass_replay(
+      gl3_filter_chain_t *chain,
+      const gl3_viewport *vp, const float *mvp)
+{
+   gl3_chain_replay_viewport_pass(chain, *vp, mvp);
 }
 
 void gl3_filter_chain_end_frame(gl3_filter_chain_t *chain)

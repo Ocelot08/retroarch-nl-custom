@@ -174,6 +174,8 @@ void gx_joypad_read_mouse(unsigned port, int *irx, int *iry, uint32_t *button)
 
 static const char *gx_joypad_name(unsigned pad)
 {
+   if (pad >= DEFAULT_MAX_PADS)
+      return NULL;
    switch (pad_type[pad])
    {
 #ifdef HW_RVL
@@ -432,7 +434,7 @@ static int16_t WPAD_StickY(WPADData *data, u8 right)
 
 static bool gx_joypad_query_pad(unsigned pad)
 {
-   return pad < MAX_USERS && pad_type[pad] != WPAD_EXP_NOCONTROLLER;
+   return pad < DEFAULT_MAX_PADS && pad_type[pad] != WPAD_EXP_NOCONTROLLER;
 }
 
 static void gx_joypad_poll(void)

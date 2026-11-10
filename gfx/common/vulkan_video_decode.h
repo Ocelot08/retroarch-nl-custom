@@ -16,11 +16,12 @@
 #ifndef __VULKAN_VIDEO_DECODE_H
 #define __VULKAN_VIDEO_DECODE_H
 
-/* H.264 decoded on the GPU with the Vulkan video extensions, as rh264's
- * hardware backend: rh264 keeps the sequencing, the GPU reconstructs
- * into the pictures of a DPB, and each picture to be shown is copied
- * out into an image of its own that the driver imports
- * (video_poke_interface::import_texture). Everything stays on the GPU.
+/* H.264, HEVC Main/Main10, VP9 Profile 0/2 and AV1 Main on Vulkan Video.
+ * The codec owner keeps sequencing; the GPU reconstructs
+ * into a DPB. Unified video layouts allow direct sampled exports with
+ * physical-slot renaming; other devices copy each visible picture into
+ * an independent output image. The driver imports either export through
+ * video_poke_interface::import_texture. Everything stays on the GPU.
  *
  * The device must have been made with the decode and transfer queues
  * (vulkan_context_t::video_lanes). */
@@ -32,9 +33,14 @@
 
 RETRO_BEGIN_DECLS
 
-/* Offers the backend to rh264 for @ctx's device. Main thread, once the
+/* Offers supported codecs to rh264/rh265/rvp9/rav1 for @ctx's device. Main thread, once the
  * device is up; false when the device has no video queues. */
 bool vulkan_video_decode_init(const vulkan_context_t *ctx);
+
+#if defined(_WIN32) && !defined(__WINRT__) \
+   && (defined(HAVE_D3D11) || defined(HAVE_D3D12))
+bool vulkan_video_decode_win32_fallback_init(const vulkan_context_t *ctx, unsigned formats);
+#endif
 
 /* Withdraws it and frees what closed decoders left, before the device
  * goes and once the driver has waited it idle. Every decoder must be

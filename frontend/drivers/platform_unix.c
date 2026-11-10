@@ -40,17 +40,23 @@
 #include "../../config.h"
 #endif
 
-/* Builds without config.h keep GameMode; configure builds follow
+/* Builds without config.h keep Game Mode; configure builds follow
  * --enable/--disable-gamemode. */
-#if defined(__linux__) && !defined(ANDROID) && __STDC_VERSION__ >= 199901L \
+#include "gamemode_linux.h"
+#if defined(RARCH_HAVE_GAMEMODE_LINUX) \
       && (!defined(HAVE_CONFIG_H) || defined(HAVE_GAMEMODE))
-#include "../../deps/feralgamemode/gamemode_client.h"
-#define FERAL_GAMEMODE
+#define UNIX_GAMEMODE
 #endif
 
 #ifdef ANDROID
 #include <android/log.h>
+#include <android/native_window_jni.h>
 #include <sys/system_properties.h>
+#include <lists/string_list.h>
+#include "../../audio/common/android_audio.h"
+#ifdef HAVE_AAUDIO
+#include "../../audio/audio_driver.h"
+#endif
 #ifdef HAVE_SAF
 #include <vfs/vfs_implementation_saf.h>
 #include "../../menu/menu_cbs.h"
@@ -58,7 +64,7 @@
 #endif
 
 #if defined(DINGUX)
-#include "../../dingux/dingux_utils.h"
+#include "../../os/dingux/dingux_utils.h"
 #endif
 
 #include <boolean.h>
@@ -99,6 +105,10 @@
 #include <formats/rjson.h>
 #endif
 
+#ifdef HAVE_VULKAN_CUSTOM_DRIVER
+#include "../../gfx/common/vulkan_custom_driver.h"
+#endif
+
 #ifdef ANDROID
 static void frontend_unix_set_sustained_performance_mode(bool on);
 
@@ -116,11 +126,20 @@ enum platform_android_flags
 {
    PLAT_ANDROID_FLAG_GAME_CONSOLE_DEVICE = (1 << 0),
    PLAT_ANDROID_FLAG_ANDROID_TV_DEVICE   = (1 << 1),
-   PLAT_ANDROID_FLAG_XPERIA_PLAY_DEVICE  = (1 << 2)
+   PLAT_ANDROID_FLAG_XPERIA_PLAY_DEVICE  = (1 << 2),
+   /* A device quirk above picked the audio latency; the first-run
+    * defaults leave it alone. */
+   PLAT_ANDROID_FLAG_LATENCY_QUIRK       = (1 << 3)
 };
 
 static char app_dir[DIR_MAX_LENGTH];
 static char apk_dir[DIR_MAX_LENGTH];
+/* Where cores may load from: dataDir and nativeLibraryDir, realpath'd */
+static char android_core_dirs[2][DIR_MAX_LENGTH];
+/* And any "<package>-" code folder of ours in the install folder:
+ * Play installs move the code folder mid-session. */
+static char android_install_dir[DIR_MAX_LENGTH];
+static char android_code_prefix[NAME_MAX_LENGTH];
 static char android_config_path[PATH_MAX_LENGTH];
 /* Set in android_app_create on the UI thread, so the
  * permissionsResolved upcall can reach the app state before the
@@ -163,64 +182,6 @@ static retro_atomic_int_t unix_sighandler_quit = RETRO_ATOMIC_INT_INITIALIZER(0)
 #ifndef ANDROID
 static enum frontend_fork unix_fork_mode = FRONTEND_FORK_NONE;
 #endif
-
-int system_property_get(const char *command,
-      const char *args, char *value, size_t value_size)
-{
-   FILE *pipe;
-   char buffer[BUFSIZ];
-   char cmd[NAME_MAX_LENGTH];
-   char *pos                  = NULL;
-   size_t __len               = 0;
-   size_t _len                = strlcpy(cmd, command, sizeof(cmd));
-
-   if (value_size == 0)
-      return 0;
-
-   cmd[  _len]                = ' ';
-   cmd[++_len]                = '\0';
-
-   strlcpy(cmd + _len, args, sizeof(cmd) - _len);
-
-   if (!(pipe = popen(cmd, "r")))
-   {
-      RARCH_ERR("Could not create pipe.\n");
-      return 0;
-   }
-
-   pos = value;
-
-   while (!feof(pipe))
-   {
-      if (fgets(buffer, sizeof(buffer), pipe))
-      {
-         size_t _len = strlen(buffer);
-         
-         /* Prevent buffer overflow by checking available space */
-         if (__len + _len >= value_size - 1)
-         {
-            /* Copy only what fits, leaving space for null terminator */
-            size_t remaining = value_size - __len - 1;
-            if (remaining > 0)
-            {
-               memcpy(pos, buffer, remaining);
-               pos += remaining;
-               __len += remaining;
-            }
-            break;
-         }
-
-         memcpy(pos, buffer, _len);
-
-         pos   += _len;
-         __len += _len;
-      }
-   }
-
-   *pos = '\0';
-   pclose(pipe);
-   return __len;
-}
 
 bool test_permissions(const char *path)
 {
@@ -331,6 +292,322 @@ static void android_app_set_window(struct android_app *android_app,
          (int)ticket, true, -1);
 }
 
+void android_second_surface_free(struct android_second_surface *node)
+{
+   ANativeWindow_release(node->window);
+   free(node);
+}
+
+void android_second_display_request(unsigned ordinal, bool given_up)
+{
+   JNIEnv *env;
+   unsigned number;
+   struct android_app *android_app = (struct android_app*)g_android;
+   struct android_second_display *second;
+
+   if (!android_app || !android_app->setSecondDisplay)
+      return;
+   if (!(env = jni_thread_getenv()))
+      return;
+   second = &android_app->second_display;
+   number = (unsigned)retro_atomic_fetch_add_int(&second->requests, 1) + 1;
+   /* Before Java can act on the hide */
+   if (given_up && !ordinal)
+      retro_atomic_store_release_int(&second->released, (int)number);
+   CALL_VOID_METHOD_PARAM(env, android_app->activity->clazz,
+         android_app->setSecondDisplay, (jint)ordinal, (jint)number);
+}
+
+void android_activity_move_request(int display_id, unsigned move)
+{
+   JNIEnv *env;
+   struct android_app *android_app = (struct android_app*)g_android;
+
+   if (!android_app)
+      return;
+   /* Not asked is a failure placement hears of on the next frame */
+   if (     !android_app->moveToDisplay
+         || display_id < 0
+         || !(env = jni_thread_getenv()))
+   {
+      retro_atomic_store_release_int(
+            &android_app->second_display.move_failed, (int)move);
+      return;
+   }
+   CALL_VOID_METHOD_PARAM(env, android_app->activity->clazz,
+         android_app->moveToDisplay, (jint)display_id, (jint)move);
+}
+
+unsigned android_activity_move_failed(void)
+{
+   struct android_app *android_app = (struct android_app*)g_android;
+   return android_app ? (unsigned)retro_atomic_exchange_int(
+         &android_app->second_display.move_failed, 0) : 0;
+}
+
+/* UI thread: the second display's window goes. Never waits for the
+ * renderer: its own references keep the window alive, a frame still
+ * drawing into it gets an error from the abandoned queue, and the
+ * next frame lets it go (android_windows_poll()). */
+static void android_second_surface_term(struct android_app *android_app)
+{
+   struct android_second_display *second = &android_app->second_display;
+   struct android_second_surface *node   = (struct android_second_surface*)
+      retro_atomic_exchange_ptr(&second->surface, NULL);
+
+   if (node)
+      android_second_surface_free(node);
+   retro_atomic_store_release_int(&second->surface_gone,
+         retro_atomic_load_acquire_int(&second->surface_generation));
+   android_app->posted_second_window = NULL;
+   android_app->posted_second_dims   = 0;
+   /* A failure the going surface caused is not held against the next */
+   if (!android_app_thread_gone(android_app))
+      android_app_write_cmd(android_app, APP_CMD_SECOND_WINDOW_CHANGED);
+}
+
+/* Filled by SecondDisplayController on the UI thread just before the
+ * native call that names it and read in place during that call, so
+ * what it holds crosses JNI with nothing copied. The Java class's
+ * SHARED_ sizes follow this layout. */
+typedef struct android_second_shared
+{
+   /* For each pointer: VIDEO_POS_PACK, then id << 1 | down */
+   int32_t touches[MAX_TOUCH * 2];
+   /* For each display: id, connection, ANDROID_DISPLAY_ flags, and
+    * VIDEO_SCALE_PACK of its size, 0 where unknown */
+   int32_t displays[VIDEO_WINDOW_DISPLAYS_MAX * 4];
+} android_second_shared_t;
+
+static android_second_shared_t *android_second_shared = NULL;
+
+/* Element @i of @strings into @s, "" for none */
+static void android_jni_string_at(JNIEnv *env, jobjectArray strings,
+      jsize i, char *s, size_t len)
+{
+   jstring str = (jstring)(*env)->GetObjectArrayElement(env, strings, i);
+   s[0]        = '\0';
+   if (!str)
+      return;
+   {
+      const char *utf = (*env)->GetStringUTFChars(env, str, NULL);
+      if (utf)
+      {
+         strlcpy(s, utf, len);
+         (*env)->ReleaseStringUTFChars(env, str, utf);
+      }
+      else
+         JNI_EXCEPTION(env);
+   }
+   (*env)->DeleteLocalRef(env, str);
+}
+
+JNIEXPORT void JNICALL Java_com_retroarch_browser_retroactivity_SecondDisplayController_nativeDisplaysChanged(
+      JNIEnv *env, jclass clazz, jint count, jobjectArray names,
+      jobjectArray models)
+{
+   video_window_display_t list[VIDEO_WINDOW_DISPLAYS_MAX];
+   jint i;
+   struct android_app *android_app = g_android_early;
+   const android_second_shared_t *shared = android_second_shared;
+
+   if (!android_app || !shared || !names || !models)
+      return;
+   if (count > VIDEO_WINDOW_DISPLAYS_MAX)
+      count = VIDEO_WINDOW_DISPLAYS_MAX;
+
+   for (i = 0; i < count; i++)
+   {
+      video_window_display_t *d = &list[i];
+      const int32_t *fields     = &shared->displays[i * 4];
+      int32_t bits              = fields[2];
+      memset(d, 0, sizeof(*d));
+      d->ordinal    = (unsigned)i + 1;
+      d->id         = fields[0];
+      d->connection = (fields[1] >= 0
+            && fields[1] <= VIDEO_WINDOW_CONNECTION_TRANSITIVE)
+         ? (unsigned)fields[1] : VIDEO_WINDOW_CONNECTION_UNKNOWN;
+      d->own        = (bits & ANDROID_DISPLAY_OWN)      != 0;
+      d->valid      = (bits & ANDROID_DISPLAY_VALID)    != 0;
+      d->on         = (bits & ANDROID_DISPLAY_ON)       != 0;
+      d->is_private = (bits & ANDROID_DISPLAY_PRIVATE)  != 0;
+      d->physical   = (bits & ANDROID_DISPLAY_PHYSICAL) != 0;
+      d->refused    = (bits & ANDROID_DISPLAY_REFUSED)  != 0;
+      d->is_default = (bits & ANDROID_DISPLAY_DEFAULT)  != 0;
+      d->type       = (bits & ANDROID_DISPLAY_EXTERNAL)
+         ? VIDEO_WINDOW_TYPE_EXTERNAL
+         : (bits & ANDROID_DISPLAY_INTERNAL)
+         ? VIDEO_WINDOW_TYPE_INTERNAL : VIDEO_WINDOW_TYPE_UNKNOWN;
+      d->dims       = (unsigned)fields[3];
+      android_jni_string_at(env, names, i, d->name, sizeof(d->name));
+      android_jni_string_at(env, models, i, d->model, sizeof(d->model));
+   }
+
+   video_driver_publish_window_displays(list, (unsigned)count);
+   android_app_write_cmd(android_app, APP_CMD_SECOND_WINDOW_CHANGED);
+}
+
+JNIEXPORT jint JNICALL Java_com_retroarch_browser_retroactivity_SecondDisplayController_nativeSurfaceChanged(
+      JNIEnv *env, jclass clazz, jobject surface, jint width, jint height,
+      jint request)
+{
+   ANativeWindow *window;
+   struct android_second_surface *node;
+   struct android_second_surface *stale;
+   unsigned dims;
+   int generation;
+   struct android_app *android_app = g_android_early;
+   struct android_second_display *second;
+
+   if (!android_app || !surface || width <= 0 || height <= 0)
+      return 0;
+   if (!(window = ANativeWindow_fromSurface(env, surface)))
+   {
+      RARCH_ERR("[Android] Second display: its surface has no window.\n");
+      return 0;
+   }
+   second     = &android_app->second_display;
+   dims       = VIDEO_SCALE_PACK(width, height);
+   generation = retro_atomic_load_acquire_int(&second->surface_generation);
+
+   if (window == android_app->posted_second_window)
+   {
+      if (dims == android_app->posted_second_dims)
+      {
+         ANativeWindow_release(window);
+         return generation;
+      }
+   }
+   else
+   {
+      if (android_app->posted_second_window)
+         android_second_surface_term(android_app);
+      if (++generation <= 0)
+         generation = 1;
+      retro_atomic_store_release_int(&second->surface_generation,
+            generation);
+   }
+
+   if (!(node = (struct android_second_surface*)malloc(sizeof(*node))))
+   {
+      ANativeWindow_release(window);
+      return 0;
+   }
+   node->window                       = window;
+   node->dims                         = dims;
+   node->generation                   = generation;
+   node->request                      = (int)request;
+   android_app->posted_second_window  = window;
+   android_app->posted_second_dims    = dims;
+
+   if ((stale = (struct android_second_surface*)retro_atomic_exchange_ptr(
+               &second->surface, node)))
+      android_second_surface_free(stale);
+   android_app_write_cmd(android_app, APP_CMD_SECOND_WINDOW_CHANGED);
+   return generation;
+}
+
+JNIEXPORT void JNICALL Java_com_retroarch_browser_retroactivity_SecondDisplayController_nativeSurfaceDestroyed(
+      JNIEnv *env, jclass clazz)
+{
+   struct android_app *android_app = g_android_early;
+
+   if (android_app && android_app->posted_second_window)
+      android_second_surface_term(android_app);
+}
+
+/* UI thread: an app thread asleep in its looper while paused reads the
+ * second display's rings only once woken */
+static void android_second_wake(struct android_app *android_app)
+{
+   ALooper *looper = (ALooper*)retro_atomic_load_acquire_ptr(
+         &android_app->looper_to_wake);
+   if (looper)
+      ALooper_wake(looper);
+}
+
+/* A MotionEvent's pointers, read where Java wrote them: one crossing
+ * and one wake for the event, whatever its finger count. Downs and
+ * moves keep room in the ring for every finger's up. */
+JNIEXPORT void JNICALL Java_com_retroarch_browser_retroactivity_SecondDisplayController_nativeTouches(
+      JNIEnv *env, jclass clazz, jint count, jint generation)
+{
+   /* Ids whose last record written was a down; UI thread only */
+   static uint32_t down_ids        = 0;
+   android_second_touch_t touch;
+   size_t room;
+   jint i;
+   bool wrote                      = false;
+   struct android_app *android_app = g_android_early;
+   const android_second_shared_t *shared = android_second_shared;
+
+   if (!android_app || !shared)
+      return;
+   if (count > MAX_TOUCH)
+      count = MAX_TOUCH;
+   room = retro_spsc_write_avail(&android_app->second_display.touches);
+   for (i = 0; i < count; i++)
+   {
+      uint32_t bit;
+      int32_t word     = shared->touches[i * 2 + 1];
+      int32_t id       = word >> 1;
+      bool down        = (word & 1) != 0;
+#ifdef DEBUG_ANDROID_INPUT
+      RARCH_LOG("[RA Input] Second display touch id=%d pos=%08x down=%d"
+            " surface=%d\n", (int)id, (unsigned)shared->touches[i * 2],
+            (int)down, (int)generation);
+#endif
+      /* MotionEvent ids are 0-31 */
+      if (id < 0 || id > 31)
+         continue;
+      bit = (uint32_t)1 << id;
+      if (down)
+      {
+         if (room < (MAX_TOUCH + 1) * sizeof(touch))
+            continue;
+         down_ids |= bit;
+      }
+      else
+      {
+         if (!(down_ids & bit) || room < sizeof(touch))
+            continue;
+         down_ids &= ~bit;
+      }
+      touch.pointer_id = id;
+      touch.pos        = (uint32_t)shared->touches[i * 2];
+      touch.generation = generation;
+      touch.down       = down;
+      retro_spsc_write(&android_app->second_display.touches, &touch,
+            sizeof(touch));
+      room            -= sizeof(touch);
+      wrote            = true;
+   }
+   if (wrote)
+      android_second_wake(android_app);
+}
+
+/* The memory the two sides share, once per Activity */
+JNIEXPORT void JNICALL Java_com_retroarch_browser_retroactivity_SecondDisplayController_nativeShare(
+      JNIEnv *env, jclass clazz, jobject buffer)
+{
+   if ((*env)->GetDirectBufferCapacity(env, buffer)
+         >= (jlong)sizeof(android_second_shared_t))
+      android_second_shared = (android_second_shared_t*)
+         (*env)->GetDirectBufferAddress(env, buffer);
+}
+
+/* Java could not start move @move, which
+ * android_activity_move_request() asked for */
+JNIEXPORT void JNICALL Java_com_retroarch_browser_retroactivity_SecondDisplayController_nativeMoveFailed(
+      JNIEnv *env, jclass clazz, jint move)
+{
+   struct android_app *android_app = g_android_early;
+
+   if (android_app)
+      retro_atomic_store_release_int(
+            &android_app->second_display.move_failed, (int)move);
+}
+
 /* Upper bound on how long a lifecycle callback will block waiting for the
  * app thread to pick the command up. The app thread only reads the command
  * pipe between frames, so anything that keeps it out of the looper - a core
@@ -413,10 +690,30 @@ static void android_app_free(struct android_app* android_app)
 
    sthread_join(android_app->thread);
 
+   {
+      ALooper *looper = (ALooper*)retro_atomic_exchange_ptr(
+            &android_app->looper_to_wake, NULL);
+      if (looper)
+         ALooper_release(looper);
+   }
+
    close(android_app->msgread);
    close(android_app->msgwrite);
    android_lifecycle_free(&android_app->lc);
+   {
+      struct android_second_surface *node = (struct android_second_surface*)
+         retro_atomic_exchange_ptr(&android_app->second_display.surface,
+               NULL);
+      if (node)
+         android_second_surface_free(node);
+   }
+   retro_spsc_free(&android_app->second_display.touches);
+   retro_spsc_free(&android_app->input_reader.events);
+   retro_eventcount_free(&android_app->input_reader.room);
 
+   /* A re-created activity's create may have replaced it already */
+   if (g_android_early == android_app)
+      g_android_early = NULL;
    free(android_app);
 }
 
@@ -686,6 +983,11 @@ static struct android_app* android_app_create(ANativeActivity* activity,
    android_app->msgread  = msgpipe[0];
    android_app->msgwrite = msgpipe[1];
 
+   /* A ring that cannot be made drops the second display's touches;
+    * nothing else depends on them */
+   retro_spsc_init(&android_app->second_display.touches,
+         64 * sizeof(android_second_touch_t));
+
    android_app->thread   = sthread_create(android_app_entry, android_app);
    /* NULL-check sthread_create: on OOM the thread won't be
     * spawned and nothing will set ANDROID_LC_RUNNING, so the wait
@@ -698,6 +1000,7 @@ static struct android_app* android_app_create(ANativeActivity* activity,
       close(msgpipe[1]);
       if (android_app->savedState)
          free(android_app->savedState);
+      retro_spsc_free(&android_app->second_display.touches);
       android_lifecycle_free(&android_app->lc);
       free(android_app);
       g_android_early = NULL;
@@ -732,6 +1035,7 @@ static struct android_app* android_app_create(ANativeActivity* activity,
       close(android_app->msgwrite);
       if (android_app->savedState)
          free(android_app->savedState);
+      retro_spsc_free(&android_app->second_display.touches);
       android_lifecycle_free(&android_app->lc);
       free(android_app);
       g_android_early = NULL;
@@ -793,7 +1097,13 @@ void frontend_android_get_manufacturer_model(char *s, size_t len)
 
 void frontend_android_get_name(char *s, size_t len)
 {
-   system_property_get("getprop", "ro.product.model", s, len);
+   char model[PROP_VALUE_MAX] = {0};
+
+   if (!s || len == 0)
+      return;
+
+   __system_property_get("ro.product.model", model);
+   strlcpy(s, model, len);
 }
 
 void frontend_android_get_version(int32_t *major,
@@ -828,11 +1138,222 @@ void frontend_android_get_version(int32_t *major,
 
 void frontend_android_get_version_sdk(int32_t *sdk)
 {
+   /* Read the property in-process, not by running getprop through
+    * popen(), a fork and exec of a shell for one number: this is asked
+    * on the startup path. */
    char os_version_str[PROP_VALUE_MAX] = {0};
-   system_property_get("getprop", "ro.build.version.sdk", os_version_str, sizeof(os_version_str));
+   __system_property_get("ro.build.version.sdk", os_version_str);
    *sdk = 0;
    if (os_version_str[0])
       *sdk = (int32_t)strtol(os_version_str, NULL, 10);
+}
+
+static const char *android_audio_device_type(jint type)
+{
+   switch (type)
+   {
+      case 1:  return "earpiece";
+      case 2:  return "speaker";
+      case 3:  return "wired headset";
+      case 4:  return "wired headphones";
+      case 5:  return "analog line";
+      case 6:  return "digital line";
+      case 7:  return "Bluetooth SCO";
+      case 8:  return "Bluetooth A2DP";
+      case 9:  return "HDMI";
+      case 10: return "HDMI ARC";
+      case 11: return "USB device";
+      case 12: return "USB accessory";
+      case 13: return "dock";
+      case 21: return "bus";
+      case 22: return "USB headset";
+      case 23: return "hearing aid";
+      case 26: return "BLE headset";
+      case 27: return "BLE speaker";
+      case 29: return "HDMI eARC";
+      case 30: return "BLE broadcast";
+      default: break;
+   }
+   return NULL;
+}
+
+/* The largest entry of an int[] from Java; 0 when it is empty. With
+ * find, whether find is among them instead (1 or 0). */
+static jint android_int_array_scan(JNIEnv *env, jobject arr, jint find,
+      bool want_find)
+{
+   jsize n, k;
+   jint best = 0;
+   jint *v;
+   if (!arr)
+      return 0;
+   n = (*env)->GetArrayLength(env, (jintArray)arr);
+   if (n <= 0 || !(v = (*env)->GetIntArrayElements(env, (jintArray)arr, NULL)))
+      return 0;
+   for (k = 0; k < n; k++)
+   {
+      if (want_find && v[k] == find)
+         best = 1;
+      else if (!want_find && v[k] > best)
+         best = v[k];
+   }
+   (*env)->ReleaseIntArrayElements(env, (jintArray)arr, v, JNI_ABORT);
+   return best;
+}
+
+/* Walks AudioManager's outputs: appends each to list where one is
+ * given, and fills the caps of the output with want_id where that is
+ * not zero. True when that output was found. */
+static bool android_audio_outputs_walk(struct string_list *list,
+      int32_t want_id, unsigned *max_channels, bool *ac3)
+{
+   union string_list_elem_attr attr;
+   jclass ctx_class, am_class, dev_class = NULL;
+   jmethodID get_service, get_devices;
+   jmethodID get_id = NULL, get_type = NULL, get_name = NULL, to_string = NULL;
+   jmethodID get_counts = NULL, get_encodings = NULL;
+   jobject am, devices;
+   jstring svc;
+   jsize i, count;
+   bool found  = false;
+   JNIEnv *env = jni_thread_getenv();
+
+   if (!env || !g_android || !g_android->activity)
+      return false;
+   if ((*env)->PushLocalFrame(env, 16) != 0)
+   {
+      JNI_EXCEPTION(env);
+      return false;
+   }
+   attr.i = 0;
+
+   svc = (*env)->NewStringUTF(env, "audio");
+   GET_OBJECT_CLASS(env, ctx_class, g_android->activity->clazz);
+   if (!svc || !ctx_class)
+      goto done;
+   GET_METHOD_ID(env, get_service, ctx_class, "getSystemService",
+         "(Ljava/lang/String;)Ljava/lang/Object;");
+   if (!get_service)
+      goto done;
+   CALL_OBJ_METHOD_PARAM(env, am, g_android->activity->clazz,
+         get_service, svc);
+   if (!am)
+      goto done;
+   GET_OBJECT_CLASS(env, am_class, am);
+   if (!am_class)
+      goto done;
+   GET_METHOD_ID(env, get_devices, am_class, "getDevices",
+         "(I)[Landroid/media/AudioDeviceInfo;");
+   if (!get_devices)
+      goto done;
+   /* AudioManager.GET_DEVICES_OUTPUTS */
+   CALL_OBJ_METHOD_PARAM(env, devices, am, get_devices, (jint)2);
+   if (!devices)
+      goto done;
+
+   count = (*env)->GetArrayLength(env, (jobjectArray)devices);
+   for (i = 0; i < count && !found; i++)
+   {
+      jobject dev;
+      jint     id   = 0;
+      jint     type = 0;
+
+      if ((*env)->PushLocalFrame(env, 8) != 0)
+      {
+         JNI_EXCEPTION(env);
+         break;
+      }
+      dev = (*env)->GetObjectArrayElement(env, (jobjectArray)devices, i);
+      JNI_EXCEPTION(env);
+      if (dev && !dev_class)
+      {
+         jclass obj_class;
+         /* Popped with the frame below; the IDs outlive it. */
+         GET_OBJECT_CLASS(env, dev_class, dev);
+         FIND_CLASS(env, obj_class, "java/lang/Object");
+         if (dev_class)
+         {
+            GET_METHOD_ID(env, get_id,        dev_class, "getId", "()I");
+            GET_METHOD_ID(env, get_type,      dev_class, "getType", "()I");
+            GET_METHOD_ID(env, get_name,      dev_class, "getProductName",
+                  "()Ljava/lang/CharSequence;");
+            GET_METHOD_ID(env, get_counts,    dev_class, "getChannelCounts", "()[I");
+            GET_METHOD_ID(env, get_encodings, dev_class, "getEncodings", "()[I");
+         }
+         if (obj_class)
+            GET_METHOD_ID(env, to_string, obj_class, "toString",
+                  "()Ljava/lang/String;");
+      }
+      if (!dev || !get_id || !get_type)
+      {
+         (*env)->PopLocalFrame(env, NULL);
+         continue;
+      }
+      CALL_INT_METHOD(env, id, dev, get_id);
+      CALL_INT_METHOD(env, type, dev, get_type);
+
+      if (want_id && id == want_id)
+      {
+         jobject counts = NULL, encodings = NULL;
+         found = true;
+         if (get_counts)
+            CALL_OBJ_METHOD(env, counts, dev, get_counts);
+         if (get_encodings)
+            CALL_OBJ_METHOD(env, encodings, dev, get_encodings);
+         if (max_channels)
+            *max_channels = (unsigned)android_int_array_scan(env, counts, 0, false);
+         /* AudioFormat.ENCODING_AC3 */
+         if (ac3)
+            *ac3 = android_int_array_scan(env, encodings, 5, true) != 0;
+      }
+
+      /* Telephony and remote submix are not places to play to. */
+      if (list && get_name && to_string && id > 0 && type != 18 && type != 25)
+      {
+         char entry[256];
+         const char *name = NULL;
+         const char *kind = android_audio_device_type(type);
+         jobject cs  = NULL;
+         jstring str = NULL;
+         CALL_OBJ_METHOD(env, cs, dev, get_name);
+         if (cs)
+            CALL_OBJ_METHOD(env, str, cs, to_string);
+         if (str)
+            name = (*env)->GetStringUTFChars(env, str, NULL);
+         if (kind)
+            snprintf(entry, sizeof(entry), "%d (%s, %s)", (int)id,
+                  (name && *name) ? name : "Unknown", kind);
+         else
+            snprintf(entry, sizeof(entry), "%d (%s)", (int)id,
+                  (name && *name) ? name : "Unknown");
+         if (name)
+            (*env)->ReleaseStringUTFChars(env, str, name);
+         string_list_append(list, entry, attr);
+      }
+      (*env)->PopLocalFrame(env, NULL);
+   }
+
+done:
+   (*env)->PopLocalFrame(env, NULL);
+   return found;
+}
+
+struct string_list *frontend_android_audio_outputs_new(void)
+{
+   struct string_list *list = string_list_new();
+   if (list)
+      android_audio_outputs_walk(list, 0, NULL, NULL);
+   return list;
+}
+
+bool frontend_android_audio_device_caps(int32_t id,
+      unsigned *max_channels, bool *ac3)
+{
+   *max_channels = 0;
+   *ac3          = false;
+   if (id <= 0)
+      return false;
+   return android_audio_outputs_walk(NULL, id, max_channels, ac3);
 }
 
 static bool device_is_xperia_play(const char *name)
@@ -936,9 +1457,48 @@ static bool android_env_file_path(JNIEnv *env, jobject file,
    return android_env_jstring_copy(env, jpath, buf, len);
 }
 
-/* getApplicationInfo().dataDir / .sourceDir for absent DATADIR / APK. */
+/* sourceDir is <install dir>/[~~X/]<package>-Y/base.apk. */
+static bool android_env_derive_install_dir(JNIEnv *env,
+      jobject appinfo, jclass appinfo_class)
+{
+   char *s;
+   size_t _len;
+   jfieldID fid = (*env)->GetFieldID(env, appinfo_class,
+         "packageName", "Ljava/lang/String;");
+   if (     android_env_exception(env, "ApplicationInfo.packageName")
+         || !android_env_jstring_copy(env,
+               (jstring)(*env)->GetObjectField(env, appinfo, fid),
+               android_code_prefix, sizeof(android_code_prefix)))
+      return false;
+   _len = strlcat(android_code_prefix, "-", sizeof(android_code_prefix));
+   if (_len >= sizeof(android_code_prefix))
+      return false;
+   fid = (*env)->GetFieldID(env, appinfo_class,
+         "sourceDir", "Ljava/lang/String;");
+   if (     android_env_exception(env, "ApplicationInfo.sourceDir")
+         || !android_env_jstring_copy(env,
+               (jstring)(*env)->GetObjectField(env, appinfo, fid),
+               android_install_dir, sizeof(android_install_dir))
+         || !path_resolve_realpath(android_install_dir,
+               sizeof(android_install_dir), true)
+         || !(s = strrchr(android_install_dir, '/')))
+      return false;
+   *s = '\0';
+   if (     !(s = strrchr(android_install_dir, '/'))
+         || strncmp(s + 1, android_code_prefix, _len))
+      return false;
+   *s = '\0';
+   if ((s = strrchr(android_install_dir, '/')) && s[1] == '~' && s[2] == '~')
+      *s = '\0';
+   return (*android_install_dir != '\0');
+}
+
+/* getApplicationInfo().dataDir / .sourceDir for absent DATADIR / APK,
+ * and the core folders, which no extra may move. */
 static void android_env_derive_application_info(JNIEnv *env, jobject activity)
 {
+   static const char *core_dir_fields[] = { "dataDir", "nativeLibraryDir" };
+   size_t i;
    jclass activity_class;
    jclass appinfo_class;
    jmethodID get_application_info;
@@ -973,8 +1533,80 @@ static void android_env_derive_application_info(JNIEnv *env, jobject activity)
                (jstring)(*env)->GetObjectField(env, appinfo, fid),
                apk_dir, sizeof(apk_dir));
    }
+   for (i = 0; i < ARRAY_SIZE(android_core_dirs); i++)
+   {
+      jfieldID fid = (*env)->GetFieldID(env, appinfo_class,
+            core_dir_fields[i], "Ljava/lang/String;");
+      if (     android_env_exception(env, core_dir_fields[i])
+            || !android_env_jstring_copy(env,
+                  (jstring)(*env)->GetObjectField(env, appinfo, fid),
+                  android_core_dirs[i], sizeof(android_core_dirs[i]))
+            || !path_resolve_realpath(android_core_dirs[i],
+                  sizeof(android_core_dirs[i]), true))
+         *android_core_dirs[i] = '\0';
+      __android_log_print(ANDROID_LOG_INFO,
+         "RetroArch", "[ENV] Core folder: \"%s\".\n", android_core_dirs[i]);
+   }
+   if (!android_env_derive_install_dir(env, appinfo, appinfo_class))
+   {
+      *android_install_dir = '\0';
+      *android_code_prefix = '\0';
+      __android_log_print(ANDROID_LOG_INFO, "RetroArch",
+         "[ENV] Core folder: no install folder found.\n");
+   }
+   else
+      __android_log_print(ANDROID_LOG_INFO, "RetroArch",
+         "[ENV] Core folder: \"%s\" (%s*).\n",
+         android_install_dir, android_code_prefix);
    (*env)->DeleteLocalRef(env, appinfo_class);
    (*env)->DeleteLocalRef(env, appinfo);
+}
+
+static bool android_core_real_path_allowed(const char *real_path)
+{
+   const char *s;
+   size_t _len;
+   size_t i;
+
+   for (i = 0; i < ARRAY_SIZE(android_core_dirs); i++)
+   {
+      _len = strlen(android_core_dirs[i]);
+      if (     _len
+            && !strncmp(real_path, android_core_dirs[i], _len)
+            && real_path[_len] == '/')
+         return true;
+   }
+   /* <install dir>/[~~X/]<package>-Y/... */
+   _len = strlen(android_install_dir);
+   if (     !_len
+         || strncmp(real_path, android_install_dir, _len)
+         || real_path[_len] != '/')
+      return false;
+   s = real_path + _len + 1;
+   if (s[0] == '~' && s[1] == '~')
+   {
+      if (!(s = strchr(s, '/')))
+         return false;
+      s++;
+   }
+   _len = strlen(android_code_prefix);
+   return (!strncmp(s, android_code_prefix, _len)
+         && s[_len] != '/'
+         && strchr(s + _len, '/'));
+}
+
+bool android_core_path_resolve(const char *path, char *s, size_t len)
+{
+   if (     !path || !*path
+         || strlcpy(s, path, len) >= len
+         || !path_resolve_realpath(s, len, true)
+         || !android_core_real_path_allowed(s))
+   {
+      if (len)
+         *s = '\0';
+      return false;
+   }
+   return true;
 }
 
 /* getPackageManager().getPackageInfo(getPackageName(), 0).versionCode. */
@@ -2485,6 +3117,26 @@ static void frontend_unix_get_env(int *argc,
          args->config_path = android_config_path;
    }
 
+#ifdef HAVE_VULKAN_CUSTOM_DRIVER
+   /* Safe mode, from the "Safe start" launcher shortcut. */
+   CALL_OBJ_METHOD_PARAM(env, jstr, obj, android_app->getStringExtra,
+         (*env)->NewStringUTF(env, "VULKAN_DRIVER"));
+
+   {
+      bool safe_mode = false;
+      if (android_app->getStringExtra && jstr)
+      {
+         const char *argv = (*env)->GetStringUTFChars(env, jstr, 0);
+
+         safe_mode = string_is_equal(argv, "system");
+         __android_log_print(ANDROID_LOG_INFO,
+            "RetroArch", "[ENV] Vulkan driver: \"%s\".\n", argv);
+         (*env)->ReleaseStringUTFChars(env, jstr, argv);
+      }
+      vulkan_custom_driver_set_safe_mode(safe_mode);
+   }
+#endif
+
    /* Current IME. */
    CALL_OBJ_METHOD_PARAM(env, jstr, obj, android_app->getStringExtra,
          (*env)->NewStringUTF(env, "IME"));
@@ -2690,9 +3342,8 @@ static void frontend_unix_get_env(int *argc,
    /* Anything the intent did not supply is derived from the
     * application context, so a direct launch of the native activity
     * behaves like one through the Java launcher.  Extras always win:
-    * every derivation below runs only for a value still unset. */
-   if (!*app_dir || !*apk_dir)
-      android_env_derive_application_info(env, android_app->activity->clazz);
+    * a value an extra can set is derived only while it is still unset. */
+   android_env_derive_application_info(env, android_app->activity->clazz);
    if (!*internal_storage_path || !*internal_storage_app_path)
       android_env_derive_storage(env, android_app->activity->clazz);
    if (!*android_app->current_ime)
@@ -2898,13 +3549,19 @@ static void frontend_unix_get_env(int *argc,
       }
    }
 
-   system_property_get("getprop", "ro.product.model", device_model, sizeof(device_model));
+   __system_property_get("ro.product.model", device_model);
 
    /* Set automatic default values per device */
    if (g_platform_android_flags & PLAT_ANDROID_FLAG_XPERIA_PLAY_DEVICE)
+   {
       g_defaults.settings_out_latency = 128;
+      g_platform_android_flags       |= PLAT_ANDROID_FLAG_LATENCY_QUIRK;
+   }
    else if (strstr(device_model, "GAMEMID_BT"))
+   {
       g_defaults.settings_out_latency = 160;
+      g_platform_android_flags       |= PLAT_ANDROID_FLAG_LATENCY_QUIRK;
+   }
    else if (strstr(device_model, "SHIELD"))
    {
       g_defaults.settings_video_refresh_rate = 60.0;
@@ -3229,8 +3886,7 @@ static void android_app_destroy(struct android_app *android_app)
       retro_vfs_deinit_saf();
 #endif
 
-   if (android_app->inputQueue)
-      AInputQueue_detachLooper(android_app->inputQueue);
+   android_input_reader_stop(android_app);
 
    AConfiguration_delete(android_app->config);
    android_lifecycle_set_flags(&android_app->lc, ANDROID_LC_DESTROYED);
@@ -3238,70 +3894,12 @@ static void android_app_destroy(struct android_app *android_app)
 }
 #endif
 
+#ifdef UNIX_GAMEMODE
 static bool frontend_unix_set_gamemode(bool on)
 {
-#ifdef FERAL_GAMEMODE
-   /* Once gamemode_query_status() reports failure (typically because
-    * libgamemode.so is not installed), there is no point repeatedly
-    * re-probing on every config load or menu toggle - the result will
-    * not change for the lifetime of the process, and each probe emits
-    * a warning. Latch the unavailable state and short-circuit. */
-   static bool gamemode_unavailable = false;
-   /* Only leave GameMode if this process entered it, so shutdown
-    * with the setting off never loads libgamemode. */
-   static bool gamemode_entered     = false;
-   int gamemode_status;
-   bool gamemode_active;
-
-   if (gamemode_unavailable)
-      return false;
-   if (!on && !gamemode_entered)
-      return true;
-
-   gamemode_status  = gamemode_query_status();
-   gamemode_active  = (gamemode_status == 2);
-
-   if (gamemode_status < 0)
-   {
-      if (on)
-         RARCH_WARN("[GameMode] GameMode cannot be enabled on this system (\"%s.\") "
-               "https://github.com/FeralInteractive/gamemode needs to be installed.\n",
-               gamemode_error_string());
-
-      gamemode_unavailable = true;
-      return false;
-   }
-
-   if (gamemode_active == on)
-   {
-      gamemode_entered = on;
-      return true;
-   }
-
-   if (on)
-   {
-      if (gamemode_request_start() != 0)
-      {
-         RARCH_WARN("[GameMode] Failed to enter GameMode: %s.\n", gamemode_error_string());
-         return false;
-      }
-      gamemode_entered = true;
-   }
-   else
-   {
-      if (gamemode_request_end() != 0)
-      {
-         RARCH_WARN("[GameMode] Failed to exit GameMode: %s.\n", gamemode_error_string());
-         return false;
-      }
-      gamemode_entered = false;
-   }
-
-   return true;
-#else
-   return false;
-#endif
+   return gamemode_linux_set(on, false);
 }
+#endif
 
 static void frontend_unix_deinit(void *data)
 {
@@ -3321,7 +3919,9 @@ static void frontend_unix_deinit(void *data)
       frontend_unix_set_screen_brightness(DEFAULT_SCREEN_BRIGHTNESS);
 #endif
 
-   frontend_unix_set_gamemode(false);
+#ifdef UNIX_GAMEMODE
+   gamemode_linux_set(false, true);
+#endif
 }
 
 static void frontend_unix_init(void *data)
@@ -3338,6 +3938,16 @@ static void frontend_unix_init(void *data)
    if (!android_app)
       return;
 
+#ifdef HAVE_AAUDIO
+   /* AAudio is Android 8.0 (API 26) and up. */
+   {
+      int32_t sdk = 0;
+      frontend_android_get_version_sdk(&sdk);
+      if (sdk < 26)
+         audio_driver_list_remove(&audio_aaudio);
+   }
+#endif
+
    android_app->config             = AConfiguration_new();
    AConfiguration_fromAssetManager(android_app->config,
          android_app->activity->assetManager);
@@ -3346,12 +3956,23 @@ static void frontend_unix_init(void *data)
    ALooper_addFd(looper, android_app->msgread, LOOPER_ID_MAIN,
          ALOOPER_EVENT_INPUT, NULL, NULL);
    android_app->looper = looper;
+   /* Held for the UI thread's wakes until android_app_free() */
+   ALooper_acquire(looper);
    retro_atomic_store_release_ptr(&android_app->looper_to_wake, looper);
    retro_atomic_thread_fence_seq_cst();
    android_lifecycle_set_flags(&android_app->lc, ANDROID_LC_RUNNING);
 
    memset(&g_android, 0, sizeof(g_android));
    g_android = (struct android_app*)android_app;
+
+   /* Before the first command is read: it may hand over the input
+    * queue, which only the reader reads */
+   if (!android_input_reader_start(android_app))
+   {
+      frontend_unix_deinit(android_app);
+      frontend_android_shutdown(android_app);
+      return;
+   }
 
    while (!android_app_window(android_app))
    {
@@ -3457,6 +4078,14 @@ static void frontend_unix_init(void *data)
          "showKeyboard", "(Ljava/lang/String;Ljava/lang/String;)V");
    GET_METHOD_ID(env, android_app->hideKeyboard, class,
          "hideKeyboard", "()V");
+   GET_METHOD_ID(env, android_app->setSecondDisplay, class,
+         "setSecondDisplay", "(II)V");
+   GET_METHOD_ID(env, android_app->moveToDisplay, class,
+         "moveToDisplay", "(II)V");
+#ifdef HAVE_VULKAN_CUSTOM_DRIVER
+   GET_METHOD_ID(env, android_app->addSafeStartShortcut, class,
+         "addSafeStartShortcut", "()V");
+#endif
 
    CALL_BOOLEAN_METHOD(env, android_app->is_play_store_build,
          android_app->activity->clazz, android_app->isPlayStoreBuild);
@@ -3489,7 +4118,7 @@ static void frontend_unix_init(void *data)
          g_platform_android_flags |= PLAT_ANDROID_FLAG_ANDROID_TV_DEVICE;
    }
 
-   system_property_get("getprop", "ro.product.model", device_model, sizeof(device_model));
+   __system_property_get("ro.product.model", device_model);
 
    /* Check if we are a game console device */
    if (device_is_game_console(device_model))
@@ -3967,6 +4596,117 @@ static void frontend_unix_destroy_signal_handler_state(void)
    retro_atomic_store_release_int(&unix_sighandler_quit, 0);
 }
 
+#ifdef ANDROID
+#ifdef HAVE_VULKAN
+/* Whether the device declares Vulkan 1.1 or later, from
+ * PackageManager.hasSystemFeature("android.hardware.vulkan.version",
+ * 0x00401000).  The feature is what the device's Vulkan driver passed
+ * conformance at, so it is read from the system rather than by loading
+ * the driver and creating an instance.  The (String, int) overload is
+ * API 24; nothing older declares a Vulkan version at all. */
+static bool android_has_vulkan_1_1(JNIEnv *env, jobject activity)
+{
+   jclass activity_class;
+   jclass pm_class;
+   jmethodID get_package_manager;
+   jmethodID has_feature;
+   jobject pm;
+   jstring name;
+   jboolean ret = JNI_FALSE;
+
+   activity_class      = (*env)->GetObjectClass(env, activity);
+   get_package_manager = (*env)->GetMethodID(env, activity_class,
+         "getPackageManager", "()Landroid/content/pm/PackageManager;");
+   (*env)->DeleteLocalRef(env, activity_class);
+   if (android_env_exception(env, "getPackageManager lookup"))
+      return false;
+
+   pm = (*env)->CallObjectMethod(env, activity, get_package_manager);
+   if (android_env_exception(env, "getPackageManager") || !pm)
+      return false;
+
+   pm_class    = (*env)->GetObjectClass(env, pm);
+   has_feature = (*env)->GetMethodID(env, pm_class,
+         "hasSystemFeature", "(Ljava/lang/String;I)Z");
+   (*env)->DeleteLocalRef(env, pm_class);
+   if (!android_env_exception(env, "hasSystemFeature lookup"))
+   {
+      if ((name = (*env)->NewStringUTF(env,
+                  "android.hardware.vulkan.version")))
+      {
+         ret = (*env)->CallBooleanMethod(env, pm, has_feature, name,
+               (jint)0x00401000);
+         if (android_env_exception(env, "hasSystemFeature"))
+            ret = JNI_FALSE;
+         (*env)->DeleteLocalRef(env, name);
+      }
+   }
+   (*env)->DeleteLocalRef(env, pm);
+   return ret != JNI_FALSE;
+}
+#endif
+
+/* The drivers and audio latency this device is best served by, set as
+ * the settings' own values.  Applied on a fresh install's first start,
+ * when no config file exists yet, and on "Reset to Default
+ * Configuration"; never to a config that is only being loaded.
+ *
+ * The built-in defaults stay what they always were (OpenGL ES, OpenSL
+ * ES, 128 ms): a config saved with "save minimal" leaves out every key
+ * that matches them, so changing them would move those installs to new
+ * drivers on update.  Set as values, these are saved with the rest of
+ * the config whatever the save mode.
+ *
+ * - Vulkan when the device declares Vulkan 1.1.  Devices with only a
+ *   1.0 driver, or none, keep OpenGL ES, as before.
+ * - AAudio from Android 8.1 (API 27).  8.0 has AAudio but with the
+ *   bugs that make Oboe use OpenSL ES there; older releases keep
+ *   OpenSL ES, as before.  With AAudio the latency drops to 64 ms,
+ *   unless a device quirk above chose one. */
+void android_apply_device_defaults(settings_t *settings)
+{
+   int32_t sdk = 0;
+
+   if (!settings)
+      return;
+
+   frontend_android_get_version_sdk(&sdk);
+
+#ifdef HAVE_VULKAN
+   if (     sdk >= 24
+         && g_android && g_android->activity
+         && driver_find_index("video_driver", "vulkan") >= 0)
+   {
+      JNIEnv *env = jni_thread_getenv();
+
+      if (env && android_has_vulkan_1_1(env, g_android->activity->clazz))
+      {
+         configuration_set_string(settings,
+               settings->arrays.video_driver, "vulkan");
+         RARCH_LOG("[Config] Device defaults: Vulkan 1.1, "
+               "video driver \"vulkan\".\n");
+      }
+   }
+#endif
+
+#ifdef HAVE_AAUDIO
+   if (     sdk >= 27
+         && driver_find_index("audio_driver", "aaudio") >= 0)
+   {
+      configuration_set_string(settings,
+            settings->arrays.audio_driver, "aaudio");
+      if (!(g_platform_android_flags & PLAT_ANDROID_FLAG_LATENCY_QUIRK))
+         configuration_set_uint(settings,
+               settings->uints.audio_latency, 64);
+      RARCH_LOG("[Config] Device defaults: Android API %d, audio driver "
+            "\"aaudio\", latency %u ms.\n",
+            (int)sdk, settings->uints.audio_latency);
+   }
+#endif
+   (void)sdk;
+}
+#endif /* ANDROID */
+
 /* To free change_data, call the function again with a NULL 
  * string_list while providing change_data again */
 void android_app_set_window_settings(bool notch_write_over,
@@ -4393,7 +5133,7 @@ frontend_ctx_driver_t frontend_ctx_unix = {
    is_narrator_running_android,                         /* is_narrator_running */
    accessibility_speak_android,                         /* accessibility_speak */
 #endif
-#ifdef FERAL_GAMEMODE
+#ifdef UNIX_GAMEMODE
    frontend_unix_set_gamemode,
 #else
    NULL,

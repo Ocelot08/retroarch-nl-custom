@@ -41,15 +41,16 @@
 #include "../../driver.h"
 #include "../../retroarch.h"
 #include "../../audio/audio_driver.h"
+#include "../../input/input_remapping.h"
 #include "../../msg_hash_lbl_str.h"
 #ifdef HAVE_NETWORKING
 #include "../../network/netplay/netplay.h"
 #endif
 #include "../../playlist.h"
 #include "../../manual_content_scan.h"
-#include "../misc/cpufreq/cpufreq.h"
+#include "../../os/lakka/cpufreq/cpufreq.h"
 #ifdef HAVE_LAKKA_SWITCH
-#include "../../misc/reboot2payload/reboot2payload.h"
+#include "../../os/lakka/reboot2payload/reboot2payload.h"
 #endif
 
 #ifndef BIND_ACTION_LEFT
@@ -67,9 +68,9 @@ static int generic_shader_action_parameter_left(
       struct video_shader_parameter *param,
       unsigned type, const char *label, bool wraparound)
 {
-   param->current -= param->step;
-   param->current  = MIN(MAX(param->minimum, param->current),
-         param->maximum);
+   float v = video_shader_param_get(param) - param->step;
+   video_shader_param_set(param, MIN(MAX(param->minimum, v),
+         param->maximum));
    return 0;
 }
 
@@ -89,16 +90,16 @@ static int shader_action_parameter_left_internal(unsigned type, const char *labe
    if (!shader_info.data || !param_menu)
       return -1;
 
-   /* See menu_cbs_right.c: step a local copy, submit through the
-    * owning-thread setter. */
+   /* See menu_cbs_right.c: step a local copy, set through the
+    * driver-level setter. */
    {
       struct video_shader_parameter param_copy =
          shader_info.data->parameters[type - offset];
       ret = generic_shader_action_parameter_left(&param_copy, type,
             label, wraparound);
       video_shader_driver_set_parameter(shader_info.data,
-            type - offset, param_copy.current);
-      param_menu->current = param_copy.current;
+            type - offset, video_shader_param_get(&param_copy));
+      video_shader_param_set(param_menu, video_shader_param_get(&param_copy));
    }
 
    shader->flags      |= SHDR_FLAG_MODIFIED;
@@ -146,6 +147,24 @@ static int action_left_cheat(unsigned type, const char *label,
 }
 #endif
 
+/* A controller's player, one down: Auto below 1, Max Users below Auto. */
+static int action_left_input_plays_as(unsigned type, const char *label,
+      bool wraparound)
+{
+   unsigned row       = type - MENU_SETTINGS_INPUT_PLAYS_AS_BEGIN;
+   unsigned max_users = config_get_ptr()->uints.input_max_users;
+   unsigned player    = (row < MAX_INPUT_DEVICES)
+      ? input_config_plays_as_player(row)
+      : input_config_plays_as_entry_player(row - MAX_INPUT_DEVICES);
+
+   if (max_users > MAX_USERS)
+      max_users = MAX_USERS;
+   if (player > max_users)
+      player = max_users + 1;
+   menu_input_plays_as_change(row, player ? player - 1 : max_users);
+   return 0;
+}
+
 static int action_left_input_desc(unsigned type, const char *label,
       bool wraparound)
 {
@@ -157,7 +176,7 @@ static int action_left_input_desc(unsigned type, const char *label,
       unsigned bind_idx;
       unsigned user_idx    = (type - MENU_SETTINGS_INPUT_DESC_BEGIN) / RARCH_ANALOG_BIND_LIST_END;
       unsigned btn_idx     = (type - MENU_SETTINGS_INPUT_DESC_BEGIN) - RARCH_ANALOG_BIND_LIST_END * user_idx;
-      unsigned mapped_port = settings->uints.input_remap_ports[user_idx];
+      unsigned mapped_port = input_remapping_user_port(user_idx);
       unsigned remap_idx   = settings->uints.input_remap_ids[user_idx][btn_idx];
 
       if (mapped_port >= MAX_USERS)
@@ -1012,7 +1031,7 @@ static int action_left_video_gpu_index(unsigned type, const char *label,
       {
          struct string_list *list = video_driver_get_gpu_api_devices(api);
 
-         if (list)
+         if (list && list->size)
          {
             settings_t *settings = config_get_ptr();
             int vulkan_gpu_index = settings->ints.vulkan_gpu_index;
@@ -1029,6 +1048,8 @@ static int action_left_video_gpu_index(unsigned type, const char *label,
                      settings->ints.vulkan_gpu_index,
                      (int)list->size - 1);
             }
+            video_driver_gpu_index_select(api,
+                  settings->ints.vulkan_gpu_index);
          }
 
          break;
@@ -1040,13 +1061,15 @@ static int action_left_video_gpu_index(unsigned type, const char *label,
       {
          struct string_list *list = video_driver_get_gpu_api_devices(api);
 
-         if (list)
+         if (list && list->size)
          {
             settings_t *settings = config_get_ptr();
             int gl_gpu_index     = settings->ints.gl_gpu_index;
             configuration_set_int(settings,
                   settings->ints.gl_gpu_index,
                   gl_gpu_index > 0 ? gl_gpu_index - 1 : (int)list->size - 1);
+            video_driver_gpu_index_select(api,
+                  settings->ints.gl_gpu_index);
          }
 
          break;
@@ -1057,7 +1080,7 @@ static int action_left_video_gpu_index(unsigned type, const char *label,
       {
          struct string_list *list = video_driver_get_gpu_api_devices(api);
 
-         if (list)
+         if (list && list->size)
          {
             settings_t *settings = config_get_ptr();
             int d3d10_gpu_index  = settings->ints.d3d10_gpu_index;
@@ -1071,8 +1094,10 @@ static int action_left_video_gpu_index(unsigned type, const char *label,
             {
                configuration_set_int(settings,
                      settings->ints.d3d10_gpu_index,
-                     list->size - 1);
+                     (int)list->size - 1);
             }
+            video_driver_gpu_index_select(api,
+                  settings->ints.d3d10_gpu_index);
          }
 
          break;
@@ -1083,7 +1108,7 @@ static int action_left_video_gpu_index(unsigned type, const char *label,
       {
          struct string_list *list = video_driver_get_gpu_api_devices(api);
 
-         if (list)
+         if (list && list->size)
          {
             settings_t *settings = config_get_ptr();
             int d3d11_gpu_index  = settings->ints.d3d11_gpu_index;
@@ -1097,8 +1122,10 @@ static int action_left_video_gpu_index(unsigned type, const char *label,
             {
                configuration_set_int(settings,
                      settings->ints.d3d11_gpu_index,
-                     list->size - 1);
+                     (int)list->size - 1);
             }
+            video_driver_gpu_index_select(api,
+                  settings->ints.d3d11_gpu_index);
          }
 
          break;
@@ -1109,7 +1136,7 @@ static int action_left_video_gpu_index(unsigned type, const char *label,
       {
          struct string_list *list = video_driver_get_gpu_api_devices(api);
 
-         if (list)
+         if (list && list->size)
          {
             settings_t *settings = config_get_ptr();
             int d3d12_gpu_index  = settings->ints.d3d12_gpu_index;
@@ -1123,8 +1150,10 @@ static int action_left_video_gpu_index(unsigned type, const char *label,
             {
                configuration_set_int(settings,
                      settings->ints.d3d12_gpu_index,
-                     list->size - 1);
+                     (int)list->size - 1);
             }
+            video_driver_gpu_index_select(api,
+                  settings->ints.d3d12_gpu_index);
          }
 
          break;
@@ -1135,7 +1164,7 @@ static int action_left_video_gpu_index(unsigned type, const char *label,
       {
          struct string_list *list = video_driver_get_gpu_api_devices(api);
 
-         if (list)
+         if (list && list->size)
          {
             settings_t *settings = config_get_ptr();
             int metal_gpu_index  = settings->ints.metal_gpu_index;
@@ -1151,6 +1180,8 @@ static int action_left_video_gpu_index(unsigned type, const char *label,
                      settings->ints.metal_gpu_index,
                      (int)list->size - 1);
             }
+            video_driver_gpu_index_select(api,
+                  settings->ints.metal_gpu_index);
          }
 
          break;
@@ -1427,6 +1458,11 @@ static int menu_cbs_init_bind_left_compare_type(menu_file_list_cbs_t *cbs,
          && type <= MENU_SETTINGS_INPUT_DESC_END)
    {
       BIND_ACTION_LEFT(cbs, action_left_input_desc);
+   }
+   else if (type >= MENU_SETTINGS_INPUT_PLAYS_AS_BEGIN
+         && type <= MENU_SETTINGS_INPUT_PLAYS_AS_END)
+   {
+      BIND_ACTION_LEFT(cbs, action_left_input_plays_as);
    }
    else if (type >= MENU_SETTINGS_INPUT_DESC_KBD_BEGIN
       && type <= MENU_SETTINGS_INPUT_DESC_KBD_END)
