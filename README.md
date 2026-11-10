@@ -82,30 +82,36 @@ Layout**, or **Quick Menu → On-Screen Overlay → Touch Layout** in a game.
   - **Save as Gamepad**: a copy of the gamepad shown, as laid out, to
     lay out apart, say for one game.
   - **Load Gamepad**: switch gamepads, the way RetroArch's Overlay
-    Preset works. While a game runs, the change lasts until it closes;
+    Preset works; the one in use is ticked. While a game runs, the change lasts until it closes;
     to keep it, save an override (Quick Menu > Overrides > Save Core
     Overrides or Save Game Overrides). With no game running, it is the
     gamepad for all content, apart from DS and 3DS cores, which start
     on their own unless an override says otherwise. Picking a gamepad
-    file as Overlay Preset (Settings > On-Screen Display > On-Screen
+    file as Overlay Preset (Settings > User Interface > On-Screen
     Overlay) does the same; the files are in `overlays/gamepads/custom`.
   - **Delete Gamepad**: delete one you saved.
-- **Reset Gamepad**: put a built-in gamepad back as it comes.
+  - **Reset Gamepad**: put a built-in gamepad back as it comes. A
+    built-in one that is missing is made again.
 
 #### Screenshots
 
-Portrait, with the bundled Neo RetroPad overlay and the Highlighter
-theme.
+Portrait, with the Main gamepad (drawn from the bundled Neo RetroPad
+overlay) and the Highlighter theme.
 
 <table>
   <tr>
     <td align="center"><img src="docs/touch-layout/touch-layout-menu.png" width="200" alt="Touch Layout menu"><br>Touch Layout menu</td>
-    <td align="center"><img src="docs/touch-layout/editor.png" width="200" alt="Layout editor with its bar and grid"><br>Editor, bar and grid</td>
-    <td align="center"><img src="docs/touch-layout/editor-controls.png" width="200" alt="Controls list in the editor"><br>Controls list</td>
+    <td align="center"><img src="docs/touch-layout/editor.png" width="200" alt="Layout editor with its bar, grid and the game screen box"><br>Editor, bar and grid</td>
+    <td align="center"><img src="docs/touch-layout/editor-size.png" width="200" alt="Face buttons selected, with Size and Shape sliders"><br>Size and Shape</td>
   </tr>
   <tr>
-    <td align="center"><img src="docs/touch-layout/editor-analog.png" width="200" alt="Editor on the analog page"><br>Analog page</td>
-    <td align="center"><img src="docs/touch-layout/controls-menu.png" width="200" alt="Controls menu"><br>Controls menu</td>
+    <td align="center"><img src="docs/touch-layout/custom-buttons.png" width="200" alt="Custom Buttons menu, with C sending L1 and DS switching gamepads"><br>Custom buttons</td>
+    <td align="center"><img src="docs/touch-layout/button-style-filled.png" width="200" alt="Button Style set to Filled"><br>Filled style</td>
+    <td align="center"><img src="docs/touch-layout/load-gamepad.png" width="200" alt="Load Gamepad, with the gamepad in use ticked"><br>Load Gamepad</td>
+  </tr>
+  <tr>
+    <td align="center"><img src="docs/touch-layout/ds-gamepad.png" width="200" alt="Nintendo DS gamepad in a game"><br>Nintendo DS gamepad</td>
+    <td></td>
     <td></td>
   </tr>
 </table>
@@ -113,9 +119,10 @@ theme.
 Gamepads are kept in `overlays/gamepads/custom/` as ordinary overlay
 config files, which any RetroArch can load: buttons where you put them,
 with RetroArch's standard images. This build draws its own buttons in
-their place, from extra settings other versions ignore. The gamepad a
-core or game uses is in `config/overlay_layouts/<core>[/<game>]/controller.cfg`.
-Layouts from before gamepads are turned into gamepads the first time.
+their place, from extra settings other versions ignore (`_pack`,
+`_label`, `_custom`, `_gamepad`, `overlay_button_style`, ...). Which
+gamepad a core or game uses is kept the way RetroArch keeps an overlay
+preset: in core and game overrides (`input_overlay`).
 
 ### Android defaults
 
