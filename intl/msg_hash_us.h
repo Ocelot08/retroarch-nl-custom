@@ -15683,7 +15683,7 @@ MSG_HASH(
    )
 MSG_HASH(
    MENU_ENUM_LABEL_VALUE_OVERLAY_LAYOUT_CONTROLS,
-   "Controls"
+   "Toggle Controls"
    )
 MSG_HASH(
    MENU_ENUM_SUBLABEL_OVERLAY_LAYOUT_CONTROLS,
@@ -15712,6 +15712,14 @@ MSG_HASH(
 MSG_HASH(
    MENU_ENUM_SUBLABEL_OVERLAY_LAYOUT_STROKE,
    "The outline of every drawn button, the same width whatever its size."
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_VALUE_OVERLAY_LAYOUT_FILL_OPACITY,
+   "Fill Opacity"
+   )
+MSG_HASH(
+   MENU_ENUM_SUBLABEL_OVERLAY_LAYOUT_FILL_OPACITY,
+   "How solid the dark middle of an outlined button is, on the scale of Overlay Opacity, which applies on top. Its outline and label stay solid."
    )
 MSG_HASH(
    MENU_ENUM_LABEL_VALUE_OVERLAY_LAYOUT_DRAWN,

@@ -537,8 +537,10 @@ struct input_overlay
    /* Its buttons were drawn, and filled, as the layout asked */
    bool drawn;
    bool filled;
-   /* Their outline, in sixteenths of a grid cell */
+   /* Their outline, in pixels on the screen */
    uint8_t stroke;
+   /* The opacity of an outlined one's middle, in hundredths */
+   uint8_t fill;
    uint8_t flags;
 };
 
@@ -591,8 +593,10 @@ typedef struct
     * pack takes them over with the images. */
    struct string_list *anim_list;
    size_t size;
-   /* The drawn buttons' outline, in sixteenths of a grid cell */
+   /* The drawn buttons' outline, in pixels on the screen, and their
+    * middle's opacity when outlined, in hundredths */
    unsigned stroke;
+   unsigned fill;
    uint16_t overlay_types;
    uint8_t flags;
 } overlay_task_data_t;

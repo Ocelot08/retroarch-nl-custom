@@ -453,8 +453,10 @@ bool input_overlay_draw_render(struct texture_image *img,
       radius = short_px * 0.16f;
    else if (draw->shape == OVERLAY_DRAW_RING)
       stroke = MAX(1.5f, short_px * 0.02f);
-   if (draw->stroke > 0.0f)
-      stroke = MIN(draw->stroke, short_px * 0.25f);
+   /* None at 0, but for a ring, which is nothing but its outline */
+   if (draw->stroke >= 0.0f)
+      stroke = MIN(hollow ? MAX(draw->stroke, 1.25f) : draw->stroke,
+            short_px * 0.25f);
    if (draw->shape == OVERLAY_DRAW_ARROW)
       overlay_draw_arrow_points(draw->dir, (float)w, (float)h,
             ((draw->dir < 2) ? pack_w : pack_h) * grow * 0.68f,
@@ -505,7 +507,9 @@ bool input_overlay_draw_render(struct texture_image *img,
          {
             value = OVERLAY_DRAW_LINE
                + (OVERLAY_DRAW_FILL - OVERLAY_DRAW_LINE) * inner;
-            alpha = outer;
+            /* The middle as see-through as asked; the outline solid */
+            alpha = draw->filled ? outer
+               : outer * (1.0f - inner * (1.0f - draw->fill));
          }
          text  = cover[y * w + x] * inner;
          if (draw->filled && !hollow)
@@ -515,7 +519,11 @@ bool input_overlay_draw_render(struct texture_image *img,
                + (OVERLAY_DRAW_FILL - OVERLAY_DRAW_LINE) * text;
          }
          else
+         {
+            /* The label solid, however see-through its middle */
             value = value + (OVERLAY_DRAW_LINE - value) * text;
+            alpha = alpha + (outer - alpha) * text;
+         }
 
          v = (unsigned)(value + 0.5f);
          a = (unsigned)(alpha * 255.0f + 0.5f);

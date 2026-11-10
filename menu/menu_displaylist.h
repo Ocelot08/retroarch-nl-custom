@@ -33,6 +33,10 @@
 
 RETRO_BEGIN_DECLS
 
+#ifdef HAVE_OVERLAY
+extern bool menu_displaylist_overlay_stroke_picked;
+#endif
+
 /* NOTE: Order matters - only add new entries at
  * the bottom */
 enum menu_displaylist_parse_type
@@ -235,6 +239,7 @@ enum menu_displaylist_ctl_state
    DISPLAYLIST_OVERLAY_CUSTOM_BUTTONS_LIST,
    DISPLAYLIST_OVERLAY_CUSTOM_BUTTON_LIST,
    DISPLAYLIST_OVERLAY_CUSTOM_INPUT_LIST,
+   DISPLAYLIST_OVERLAY_STROKE_LIST,
 #endif
    DISPLAYLIST_AI_SERVICE_SETTINGS_LIST,
 #ifdef HAVE_SMBCLIENT

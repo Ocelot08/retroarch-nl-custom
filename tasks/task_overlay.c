@@ -89,6 +89,7 @@ struct overlay_loader
    bool draw_auto_scale;
    /* The outline's width in sixteenths of a grid cell */
    unsigned draw_stroke;
+   unsigned draw_fill;
 #endif
 
    uint16_t overlay_types;
@@ -783,11 +784,9 @@ static bool task_overlay_load_desc_drawn(
    draw.width  = (unsigned)MIN(1024.0f, MAX(8.0f, 2.0f * rx * w * 1.25f));
    draw.height = (unsigned)MIN(1024.0f, MAX(8.0f, 2.0f * ry * h * 1.25f));
    draw.filled      = (loader->flags & OVERLAY_LOADER_FILLED) != 0;
-   /* Sixteenths of a grid cell (OVERLAY_EDIT_GRID to the longer side
-    * of the screen), drawn 1.25 times as the button is */
-   draw.stroke      = loader->draw_stroke
-      * MAX(VIDEO_SCALE_W(loader->draw_dims),
-            VIDEO_SCALE_H(loader->draw_dims)) / 50.0f / 16.0f * 1.25f;
+   draw.fill        = loader->draw_fill / 100.0f;
+   /* Screen pixels, drawn 1.25 times as the button is */
+   draw.stroke      = loader->draw_stroke * 1.25f;
    draw.pack_width  = (unsigned)MAX(1.0f, 2.0f * pack_rx * w * 1.25f);
    draw.pack_height = (unsigned)MAX(1.0f, 2.0f * pack_ry * h * 1.25f);
 
@@ -1991,6 +1990,7 @@ static void task_overlay_handler(retro_task_t *task)
       data->flags                       = loader->flags;
 #ifdef RARCH_INTERNAL
       data->stroke                      = loader->draw_stroke;
+      data->fill                        = loader->draw_fill;
 #endif
       data->overlay_types               = loader->overlay_types;
       data->overlay_path                = loader->overlay_path;
@@ -2220,9 +2220,24 @@ bool task_push_overlay_load_default(
             && string_is_equal(style, "filled"))
          loader->flags |= OVERLAY_LOADER_FILLED;
       config_get_bool(conf, "overlay_drawn_buttons", &drawn);
-      loader->draw_stroke = 2;
-      config_get_uint(conf, "overlay_button_stroke", &loader->draw_stroke);
-      loader->draw_stroke = MAX(1, MIN(loader->draw_stroke, 8));
+      /* Pixels on the screen; before, sixteenths of a grid cell */
+      loader->draw_stroke = 6;
+      if (!config_get_uint(conf, "overlay_button_stroke_px",
+               &loader->draw_stroke))
+      {
+         unsigned sixteenths = 0;
+         if (config_get_uint(conf, "overlay_button_stroke", &sixteenths))
+         {
+            unsigned dims = video_driver_get_output_dims();
+            loader->draw_stroke = (unsigned)(MIN(sixteenths, 8)
+                  * MAX(VIDEO_SCALE_W(dims), VIDEO_SCALE_H(dims))
+                  / 50.0f / 16.0f + 0.5f);
+         }
+      }
+      loader->draw_stroke = MIN(loader->draw_stroke, 20);
+      loader->draw_fill   = 100;
+      config_get_uint(conf, "overlay_button_fill_opacity", &loader->draw_fill);
+      loader->draw_fill   = MIN(loader->draw_fill, 100);
       if (drawn && !is_osk)
       {
          /* The font this build keeps with its overlays, else the

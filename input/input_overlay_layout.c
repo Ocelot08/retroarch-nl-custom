@@ -2407,31 +2407,57 @@ bool input_overlay_layout_filled(void)
    return ol && ol->filled;
 }
 
-/* The outline width as Stroke Width shows it: pixels on this screen */
+/* The outline width, in pixels on the screen */
 unsigned input_overlay_layout_stroke(void)
 {
-   unsigned dims       = video_driver_get_output_dims();
    input_overlay_t *ol = input_overlay_layout_target();
-   float px            = (ol ? ol->stroke : 2)
-      * MAX(VIDEO_SCALE_W(dims), VIDEO_SCALE_H(dims))
-      / (float)OVERLAY_EDIT_GRID / 16.0f;
-   return (unsigned)MAX(1.0f, px + 0.5f);
+   return ol ? ol->stroke : 6;
 }
 
-/* One step thicker or thinner, from 1 to 8 sixteenths of a cell */
+bool input_overlay_layout_stroke_set(unsigned px)
+{
+   char val[8];
+   snprintf(val, sizeof(val), "%u", MIN(px, 20));
+   return input_overlay_layout_set("overlay_button_stroke_px", val);
+}
+
+/* A pixel thicker or thinner, from 0 to 20, wrapping round */
 bool input_overlay_layout_stroke_step(int dir)
+{
+   input_overlay_t *ol = input_overlay_layout_target();
+   int stroke;
+   if (!ol)
+      return false;
+   stroke = (int)ol->stroke + dir;
+   if (stroke < 0)
+      stroke = 20;
+   else if (stroke > 20)
+      stroke = 0;
+   return input_overlay_layout_stroke_set((unsigned)stroke);
+}
+
+/* The opacity of an outlined button's middle, in hundredths */
+unsigned input_overlay_layout_fill_opacity(void)
+{
+   input_overlay_t *ol = input_overlay_layout_target();
+   return ol ? ol->fill : 100;
+}
+
+/* A twentieth more or less opaque, from 0 to 1, wrapping round */
+bool input_overlay_layout_fill_opacity_step(int dir)
 {
    char val[8];
    input_overlay_t *ol = input_overlay_layout_target();
-   int stroke          = (ol ? ol->stroke : 2) + dir;
+   int fill;
    if (!ol)
       return false;
-   if (stroke < 1)
-      stroke = 8;
-   else if (stroke > 8)
-      stroke = 1;
-   snprintf(val, sizeof(val), "%d", stroke);
-   return input_overlay_layout_set("overlay_button_stroke", val);
+   fill = ((int)ol->fill + 2) / 5 * 5 + dir * 5;
+   if (fill < 0)
+      fill = 100;
+   else if (fill > 100)
+      fill = 0;
+   snprintf(val, sizeof(val), "%d", fill);
+   return input_overlay_layout_set("overlay_button_fill_opacity", val);
 }
 
 /* Filled buttons, or outlined, from now on for the scope chosen */

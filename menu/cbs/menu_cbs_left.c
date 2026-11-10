@@ -1247,6 +1247,12 @@ static int action_left_overlay_layout_stroke(unsigned type, const char *label,
    return input_overlay_layout_stroke_step(-1) ? 0 : -1;
 }
 
+static int action_left_overlay_layout_fill_opacity(unsigned type,
+      const char *label, bool wraparound)
+{
+   return input_overlay_layout_fill_opacity_step(-1) ? 0 : -1;
+}
+
 static int action_left_overlay_layout_drawn(unsigned type, const char *label,
       bool wraparound)
 {
@@ -1362,6 +1368,9 @@ static int menu_cbs_init_bind_left_compare_label(menu_file_list_cbs_t *cbs,
                break;
             case MENU_ENUM_LABEL_OVERLAY_LAYOUT_STROKE:
                BIND_ACTION_LEFT(cbs, action_left_overlay_layout_stroke);
+               break;
+            case MENU_ENUM_LABEL_OVERLAY_LAYOUT_FILL_OPACITY:
+               BIND_ACTION_LEFT(cbs, action_left_overlay_layout_fill_opacity);
                break;
 #endif
             case MENU_ENUM_LABEL_PLAYLIST_MANAGER_RIGHT_THUMBNAIL_MODE:

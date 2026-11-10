@@ -14114,6 +14114,7 @@ static void input_overlay_loaded(retro_task_t *task,
    ol->drawn       = (data->flags & OVERLAY_LOADER_DRAWN) != 0;
    ol->filled      = (data->flags & OVERLAY_LOADER_FILLED) != 0;
    ol->stroke      = (uint8_t)data->stroke;
+   ol->fill        = (uint8_t)data->fill;
    input_overlay_layout_loaded(ol);
    ol->num_images  = data->image_list->size;
    ol->next_index  = (unsigned)((ol->index + 1) % ol->size);

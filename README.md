@@ -43,19 +43,25 @@ Layout**, or **Quick Menu → On-Screen Overlay → Touch Layout** in a game.
   - **Half grid**: snap to half cells.
   - **Analog**: switch to the overlay's analog-stick page, or back to
     the D-pad page, so either one can be laid out.
-- **Button Style**, for all the buttons of the gamepad shown:
-  - **Style**: Outline (dark buttons, light outline and labels) or
-    Filled (light buttons, dark labels).
+- **Button Style**, for all the buttons of the gamepad shown, the
+  settings that apply showing only:
   - **Drawn Buttons** (on by default): the face buttons, shoulder
     buttons, Start, Select, D-pad and sticks are drawn in code, with
     their labels as text in the menu's font, rather than shown from the
     overlay's images. They stay sharp at any size, and a button made
     wider or taller keeps round ends and upright letters: it is drawn
     again when a slider is let go. Hotkeys (menu, fast-forward, save
-    state, ...) keep their icons, in either style. Off shows the images.
-  - **Stroke Width**: the outline of every drawn button, the same
-    whatever its size.
-- **Controls**: every control in one list, each on or off. First the
+    state, ...) keep their icons, in either style. Off shows the images,
+    and nothing else here.
+  - **Style**: Outline (dark buttons, light outline and labels) or
+    Filled (light buttons, dark labels).
+  - **Stroke Width** (Outline): the outline of every drawn button, from
+    a list of 0 to 20 pixels (6 by default), whatever its size; 0 for
+    none.
+  - **Fill Opacity** (Outline): how solid the dark middle is, 0.00 to
+    1.00 as Overlay Opacity, which applies on top. The outline and
+    label stay solid.
+- **Toggle Controls**: every control in one list, each on or off. First the
   controls of the page shown, then those the overlay has on its other
   pages (an analog stick, save/load state, turbo, the keyboard, ...),
   then each D-pad arrow and face button on its own, next to the

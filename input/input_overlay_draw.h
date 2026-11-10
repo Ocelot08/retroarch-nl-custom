@@ -53,11 +53,14 @@ typedef struct
    unsigned pack_width;
    unsigned pack_height;
    /* The outline's width in the same pixels, the same for every
-    * button whatever its size; 0 for a width by its size */
+    * button whatever its size, 0 for none; below 0, a width by its
+    * size */
    float stroke;
    /* Filled: a light button with dark label, rather than a dark one
     * with a light outline and label */
    bool filled;
+   /* The opacity of the middle, when not filled */
+   float fill;
    char label[16];
    /* Labels sized as this one is, when not empty, so that buttons of a
     * pair have letters of one size */

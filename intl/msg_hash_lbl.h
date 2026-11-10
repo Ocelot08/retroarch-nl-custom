@@ -1684,6 +1684,18 @@ MSG_HASH(
    "overlay_layout_stroke"
    )
 MSG_HASH(
+   MENU_ENUM_LABEL_OVERLAY_LAYOUT_FILL_OPACITY,
+   "overlay_layout_fill_opacity"
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_OVERLAY_LAYOUT_STROKE_ITEM,
+   "overlay_layout_stroke_item"
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_DEFERRED_OVERLAY_STROKE_LIST,
+   "deferred_overlay_stroke_list"
+   )
+MSG_HASH(
    MENU_ENUM_LABEL_DEFERRED_OVERLAY_BUTTON_STYLE_LIST,
    "deferred_overlay_button_style_list"
    )

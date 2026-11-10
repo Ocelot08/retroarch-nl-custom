@@ -2512,7 +2512,10 @@ bool input_overlay_layout_filled_toggle(void);
 /* Stroke Width of the drawn buttons, in pixels of this screen, and a
  * step up or down */
 unsigned input_overlay_layout_stroke(void);
+bool input_overlay_layout_stroke_set(unsigned px);
 bool input_overlay_layout_stroke_step(int dir);
+unsigned input_overlay_layout_fill_opacity(void);
+bool input_overlay_layout_fill_opacity_step(int dir);
 
 /* Named copies of the layout shown, kept apart for each overlay:
  * saved from what all the scopes make of it, loaded into the scope

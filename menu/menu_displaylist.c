@@ -198,6 +198,12 @@ struct menu_displaylist_state
    enum filebrowser_enums filebrowser_types;
 };
 
+
+#ifdef HAVE_OVERLAY
+/* A stroke width was just picked from its list */
+bool menu_displaylist_overlay_stroke_picked = false;
+#endif
+
 static struct menu_displaylist_state menu_displist_st = {
    FILEBROWSER_NONE /* filebrowser_types */
 };
@@ -13796,14 +13802,14 @@ unsigned menu_displaylist_build_list(
       case DISPLAYLIST_OVERLAY_TOUCH_LAYOUT_LIST:
          {
             static const enum msg_hash_enums rows[][2] = {
-               { MENU_ENUM_LABEL_OVERLAY_LAYOUT_STYLE,
-                  MENU_ENUM_LABEL_VALUE_OVERLAY_LAYOUT_STYLE },
                { MENU_ENUM_LABEL_OVERLAY_EDIT_LAYOUT,
                   MENU_ENUM_LABEL_VALUE_OVERLAY_EDIT_LAYOUT },
                { MENU_ENUM_LABEL_OVERLAY_LAYOUT_CONTROLS,
                   MENU_ENUM_LABEL_VALUE_OVERLAY_LAYOUT_CONTROLS },
                { MENU_ENUM_LABEL_OVERLAY_CUSTOM_BUTTONS,
                   MENU_ENUM_LABEL_VALUE_OVERLAY_CUSTOM_BUTTONS },
+               { MENU_ENUM_LABEL_OVERLAY_LAYOUT_STYLE,
+                  MENU_ENUM_LABEL_VALUE_OVERLAY_LAYOUT_STYLE },
                { MENU_ENUM_LABEL_OVERLAY_LAYOUT_PROFILE_SAVE,
                   MENU_ENUM_LABEL_VALUE_OVERLAY_LAYOUT_PROFILE_SAVE },
                { MENU_ENUM_LABEL_OVERLAY_LAYOUT_PROFILE_LOAD,
@@ -13840,16 +13846,31 @@ unsigned menu_displaylist_build_list(
          break;
       case DISPLAYLIST_OVERLAY_BUTTON_STYLE_LIST:
          {
+            /* Style only for drawn buttons, and the outline's own
+             * settings only for outlined ones */
             static const enum msg_hash_enums rows[][2] = {
-               { MENU_ENUM_LABEL_OVERLAY_LAYOUT_FILL,
-                  MENU_ENUM_LABEL_VALUE_OVERLAY_LAYOUT_FILL },
                { MENU_ENUM_LABEL_OVERLAY_LAYOUT_DRAWN,
                   MENU_ENUM_LABEL_VALUE_OVERLAY_LAYOUT_DRAWN },
+               { MENU_ENUM_LABEL_OVERLAY_LAYOUT_FILL,
+                  MENU_ENUM_LABEL_VALUE_OVERLAY_LAYOUT_FILL },
                { MENU_ENUM_LABEL_OVERLAY_LAYOUT_STROKE,
                   MENU_ENUM_LABEL_VALUE_OVERLAY_LAYOUT_STROKE },
+               { MENU_ENUM_LABEL_OVERLAY_LAYOUT_FILL_OPACITY,
+                  MENU_ENUM_LABEL_VALUE_OVERLAY_LAYOUT_FILL_OPACITY },
             };
+            size_t shown = !input_overlay_layout_drawn() ? 1
+               : input_overlay_layout_filled() ? 2 : ARRAY_SIZE(rows);
 
-            for (i = 0; i < ARRAY_SIZE(rows); i++)
+            /* Back from Stroke Width's list, on Stroke Width, once it
+             * shows again: the gamepad reloads with the width picked,
+             * and until it has, there is none to show rows for */
+            if (menu_displaylist_overlay_stroke_picked && shown > 2)
+            {
+               menu_state_get_ptr()->selection_ptr    = 2;
+               menu_displaylist_overlay_stroke_picked = false;
+            }
+
+            for (i = 0; i < shown; i++)
                if (menu_entries_append(list,
                         msg_hash_to_str(rows[i][1]),
                         msg_hash_to_str(rows[i][0]),
@@ -13931,6 +13952,32 @@ unsigned menu_displaylist_build_list(
                         msg_hash_to_str(rows[i][0]),
                         rows[i][0], MENU_SETTING_ACTION, 0, 0, NULL))
                   count++;
+         }
+         break;
+      case DISPLAYLIST_OVERLAY_STROKE_LIST:
+         {
+            /* 0 to 20 pixels, the one set ticked and selected */
+            unsigned px, now = input_overlay_layout_stroke();
+            for (px = 0; px <= 20; px++)
+            {
+               char text[16];
+               snprintf(text, sizeof(text),
+                     msg_hash_to_str(MSG_OVERLAY_BUTTON_STROKE_PX), px);
+               if (!menu_entries_append(list, text,
+                        msg_hash_to_str(MENU_ENUM_LABEL_OVERLAY_LAYOUT_STROKE_ITEM),
+                        MENU_ENUM_LABEL_OVERLAY_LAYOUT_STROKE_ITEM,
+                        MENU_SETTING_DROPDOWN_ITEM, 0, px, NULL))
+                  continue;
+               if (px == now)
+               {
+                  menu_file_list_cbs_t *cbs = (menu_file_list_cbs_t*)
+                     list->list[list->size - 1].actiondata;
+                  if (cbs)
+                     cbs->checked = true;
+                  menu_state_get_ptr()->selection_ptr = list->size - 1;
+               }
+               count++;
+            }
          }
          break;
       case DISPLAYLIST_OVERLAY_CUSTOM_INPUT_LIST:
@@ -18122,6 +18169,7 @@ static bool menu_displaylist_ctl_internal(
          case DISPLAYLIST_OVERLAY_CUSTOM_BUTTONS_LIST:
          case DISPLAYLIST_OVERLAY_CUSTOM_BUTTON_LIST:
          case DISPLAYLIST_OVERLAY_CUSTOM_INPUT_LIST:
+         case DISPLAYLIST_OVERLAY_STROKE_LIST:
          case DISPLAYLIST_OVERLAY_BUTTON_STYLE_LIST:
 #endif
          case DISPLAYLIST_ACCOUNTS_CHEEVOS_LIST:
