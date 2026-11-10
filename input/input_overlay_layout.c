@@ -2485,6 +2485,13 @@ bool input_overlay_layout_fill_opacity_step(int dir)
    return input_overlay_layout_set("overlay_button_fill_opacity", val);
 }
 
+bool input_overlay_layout_fill_opacity_set(unsigned fill)
+{
+   char val[8];
+   snprintf(val, sizeof(val), "%u", MIN(fill, 100));
+   return input_overlay_layout_set("overlay_button_fill_opacity", val);
+}
+
 /* Filled buttons, or outlined, from now on for the scope chosen */
 bool input_overlay_layout_filled_toggle(void)
 {

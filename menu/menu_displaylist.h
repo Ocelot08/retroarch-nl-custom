@@ -34,7 +34,7 @@
 RETRO_BEGIN_DECLS
 
 #ifdef HAVE_OVERLAY
-extern bool menu_displaylist_overlay_stroke_picked;
+extern size_t menu_displaylist_overlay_style_row;
 #endif
 
 /* NOTE: Order matters - only add new entries at
@@ -240,6 +240,7 @@ enum menu_displaylist_ctl_state
    DISPLAYLIST_OVERLAY_CUSTOM_BUTTON_LIST,
    DISPLAYLIST_OVERLAY_CUSTOM_INPUT_LIST,
    DISPLAYLIST_OVERLAY_STROKE_LIST,
+   DISPLAYLIST_OVERLAY_FILL_OPACITY_LIST,
 #endif
    DISPLAYLIST_AI_SERVICE_SETTINGS_LIST,
 #ifdef HAVE_SMBCLIENT

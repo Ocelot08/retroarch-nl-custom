@@ -200,8 +200,8 @@ struct menu_displaylist_state
 
 
 #ifdef HAVE_OVERLAY
-/* A stroke width was just picked from its list */
-bool menu_displaylist_overlay_stroke_picked = false;
+/* The Button Style row a value was just picked for from its list */
+size_t menu_displaylist_overlay_style_row = 0;
 #endif
 
 static struct menu_displaylist_state menu_displist_st = {
@@ -13865,13 +13865,15 @@ unsigned menu_displaylist_build_list(
             size_t shown = !input_overlay_layout_drawn() ? 1
                : input_overlay_layout_filled() ? 2 : ARRAY_SIZE(rows);
 
-            /* Back from Stroke Width's list, on Stroke Width, once it
-             * shows again: the gamepad reloads with the width picked,
-             * and until it has, there is none to show rows for */
-            if (menu_displaylist_overlay_stroke_picked && shown > 2)
+            /* Back from a value's list, on its row, once it shows
+             * again: the gamepad reloads with the value picked, and
+             * until it has, there is none to show rows for */
+            if (     menu_displaylist_overlay_style_row
+                  && menu_displaylist_overlay_style_row < shown)
             {
-               menu_state_get_ptr()->selection_ptr    = 2;
-               menu_displaylist_overlay_stroke_picked = false;
+               menu_state_get_ptr()->selection_ptr =
+                  menu_displaylist_overlay_style_row;
+               menu_displaylist_overlay_style_row  = 0;
             }
 
             for (i = 0; i < shown; i++)
@@ -13961,6 +13963,31 @@ unsigned menu_displaylist_build_list(
                         msg_hash_to_str(rows[i][0]),
                         rows[i][0], MENU_SETTING_ACTION, 0, 0, NULL))
                   count++;
+         }
+         break;
+      case DISPLAYLIST_OVERLAY_FILL_OPACITY_LIST:
+         {
+            /* 0.00 to 1.00 by twentieths, the one set ticked and selected */
+            unsigned fill, now = input_overlay_layout_fill_opacity();
+            for (fill = 0; fill <= 100; fill += 5)
+            {
+               char text[16];
+               snprintf(text, sizeof(text), "%u.%02u", fill / 100, fill % 100);
+               if (!menu_entries_append(list, text,
+                        msg_hash_to_str(MENU_ENUM_LABEL_OVERLAY_LAYOUT_FILL_OPACITY_ITEM),
+                        MENU_ENUM_LABEL_OVERLAY_LAYOUT_FILL_OPACITY_ITEM,
+                        MENU_SETTING_DROPDOWN_ITEM, 0, fill, NULL))
+                  continue;
+               if (fill == (now + 2) / 5 * 5)
+               {
+                  menu_file_list_cbs_t *cbs = (menu_file_list_cbs_t*)
+                     list->list[list->size - 1].actiondata;
+                  if (cbs)
+                     cbs->checked = true;
+                  menu_state_get_ptr()->selection_ptr = list->size - 1;
+               }
+               count++;
+            }
          }
          break;
       case DISPLAYLIST_OVERLAY_STROKE_LIST:
@@ -18179,6 +18206,7 @@ static bool menu_displaylist_ctl_internal(
          case DISPLAYLIST_OVERLAY_CUSTOM_BUTTON_LIST:
          case DISPLAYLIST_OVERLAY_CUSTOM_INPUT_LIST:
          case DISPLAYLIST_OVERLAY_STROKE_LIST:
+         case DISPLAYLIST_OVERLAY_FILL_OPACITY_LIST:
          case DISPLAYLIST_OVERLAY_BUTTON_STYLE_LIST:
 #endif
          case DISPLAYLIST_ACCOUNTS_CHEEVOS_LIST:

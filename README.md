@@ -58,8 +58,8 @@ Layout**, or **Quick Menu → On-Screen Overlay → Touch Layout** in a game.
   - **Stroke Width** (Outline): the outline of every drawn button, from
     a list of 0 to 20 pixels (6 by default), whatever its size; 0 for
     none.
-  - **Fill Opacity** (Outline): how solid the dark middle is, 0.00 to
-    1.00 as Overlay Opacity, which applies on top. The outline and
+  - **Fill Opacity** (Outline): how solid the dark middle is, from a
+    list of 0.00 to 1.00 as Overlay Opacity, which applies on top. The outline and
     label stay solid.
 - **Toggle Controls**: every control in one list, each on or off. First the
   controls of the page shown, then those the overlay has on its other

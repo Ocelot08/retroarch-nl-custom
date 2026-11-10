@@ -2516,6 +2516,7 @@ bool input_overlay_layout_stroke_set(unsigned px);
 bool input_overlay_layout_stroke_step(int dir);
 unsigned input_overlay_layout_fill_opacity(void);
 bool input_overlay_layout_fill_opacity_step(int dir);
+bool input_overlay_layout_fill_opacity_set(unsigned fill);
 
 /* Named copies of the layout shown, kept apart for each overlay:
  * saved from what all the scopes make of it, loaded into the scope

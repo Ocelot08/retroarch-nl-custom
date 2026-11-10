@@ -449,6 +449,8 @@ static enum msg_hash_enums action_ok_dl_to_enum(unsigned lbl)
          return MENU_ENUM_LABEL_DEFERRED_OVERLAY_BUTTON_STYLE_LIST;
       case ACTION_OK_DL_OVERLAY_STROKE_LIST:
          return MENU_ENUM_LABEL_DEFERRED_OVERLAY_STROKE_LIST;
+      case ACTION_OK_DL_OVERLAY_FILL_OPACITY_LIST:
+         return MENU_ENUM_LABEL_DEFERRED_OVERLAY_FILL_OPACITY_LIST;
       case ACTION_OK_DL_OVERLAY_CUSTOM_BUTTONS_LIST:
          return MENU_ENUM_LABEL_DEFERRED_OVERLAY_CUSTOM_BUTTONS_LIST;
       case ACTION_OK_DL_OVERLAY_CUSTOM_BUTTON_LIST:
@@ -1940,6 +1942,7 @@ int generic_action_ok_displaylist_push(
       case ACTION_OK_DL_OVERLAY_CUSTOM_INPUT_LIST:
       case ACTION_OK_DL_OVERLAY_BUTTON_STYLE_LIST:
       case ACTION_OK_DL_OVERLAY_STROKE_LIST:
+      case ACTION_OK_DL_OVERLAY_FILL_OPACITY_LIST:
       case ACTION_OK_DL_MENU_SETTINGS_LIST:
 #ifdef _3DS
       case ACTION_OK_DL_MENU_BOTTOM_SETTINGS_LIST:
@@ -2161,6 +2164,7 @@ static const ok_dl_map_t ok_dl_map[] = {
    { MENU_ENUM_LABEL_OVERLAY_LAYOUT_PROFILE_LOAD, ACTION_OK_DL_OVERLAY_LAYOUT_PROFILE_LOAD_LIST },
    { MENU_ENUM_LABEL_OVERLAY_LAYOUT_STYLE, ACTION_OK_DL_OVERLAY_BUTTON_STYLE_LIST },
    { MENU_ENUM_LABEL_OVERLAY_LAYOUT_STROKE, ACTION_OK_DL_OVERLAY_STROKE_LIST },
+   { MENU_ENUM_LABEL_OVERLAY_LAYOUT_FILL_OPACITY, ACTION_OK_DL_OVERLAY_FILL_OPACITY_LIST },
    { MENU_ENUM_LABEL_OVERLAY_LAYOUT_PROFILE_DELETE, ACTION_OK_DL_OVERLAY_LAYOUT_PROFILE_DELETE_LIST },
    { MENU_ENUM_LABEL_OVERLAY_CUSTOM_BUTTONS, ACTION_OK_DL_OVERLAY_CUSTOM_BUTTONS_LIST },
    { MENU_ENUM_LABEL_OVERLAY_CUSTOM_INPUT, ACTION_OK_DL_OVERLAY_CUSTOM_INPUT_LIST },
@@ -6791,10 +6795,14 @@ static int action_ok_overlay_layout_fill(const char *path,
    return input_overlay_layout_filled_toggle() ? 0 : -1;
 }
 
-static int action_ok_overlay_layout_fill_opacity(const char *path,
+/* An opacity picked from Fill Opacity's list, and back to its row */
+static int action_ok_overlay_layout_fill_opacity_item(const char *path,
       const char *label, unsigned type, size_t idx, size_t entry_idx)
 {
-   return input_overlay_layout_fill_opacity_step(1) ? 0 : -1;
+   if (!input_overlay_layout_fill_opacity_set((unsigned)entry_idx))
+      return -1;
+   menu_displaylist_overlay_style_row = 3;
+   return action_cancel_pop_default(NULL, NULL, 0, 0);
 }
 
 /* A width picked from Stroke Width's list, and back to Button Style */
@@ -6803,7 +6811,7 @@ static int action_ok_overlay_layout_stroke_item(const char *path,
 {
    if (!input_overlay_layout_stroke_set((unsigned)entry_idx))
       return -1;
-   menu_displaylist_overlay_stroke_picked = true;
+   menu_displaylist_overlay_style_row = 2;
    return action_cancel_pop_default(NULL, NULL, 0, 0);
 }
 
@@ -10530,7 +10538,7 @@ static int menu_cbs_init_bind_ok_compare_label(menu_file_list_cbs_t *cbs,
          {MENU_ENUM_LABEL_OVERLAY_LAYOUT_DRAWN,                action_ok_overlay_layout_drawn},
          {MENU_ENUM_LABEL_OVERLAY_LAYOUT_FILL,                 action_ok_overlay_layout_fill},
          {MENU_ENUM_LABEL_OVERLAY_LAYOUT_STROKE_ITEM,          action_ok_overlay_layout_stroke_item},
-         {MENU_ENUM_LABEL_OVERLAY_LAYOUT_FILL_OPACITY,         action_ok_overlay_layout_fill_opacity},
+         {MENU_ENUM_LABEL_OVERLAY_LAYOUT_FILL_OPACITY_ITEM,    action_ok_overlay_layout_fill_opacity_item},
          {MENU_ENUM_LABEL_OVERLAY_LAYOUT_CONTROL,              action_ok_overlay_layout_control},
          {MENU_ENUM_LABEL_OVERLAY_LAYOUT_PROFILE_SAVE,         action_ok_overlay_layout_profile_save},
          {MENU_ENUM_LABEL_OVERLAY_LAYOUT_PROFILE_LOAD_ITEM,    action_ok_overlay_layout_profile_load_item},

@@ -205,6 +205,7 @@ GENERIC_DEFERRED_PUSH(deferred_push_overlay_custom_buttons_list,    DISPLAYLIST_
 GENERIC_DEFERRED_PUSH(deferred_push_overlay_custom_button_list,     DISPLAYLIST_OVERLAY_CUSTOM_BUTTON_LIST)
 GENERIC_DEFERRED_PUSH(deferred_push_overlay_custom_input_list,      DISPLAYLIST_OVERLAY_CUSTOM_INPUT_LIST)
 GENERIC_DEFERRED_PUSH(deferred_push_overlay_stroke_list,            DISPLAYLIST_OVERLAY_STROKE_LIST)
+GENERIC_DEFERRED_PUSH(deferred_push_overlay_fill_opacity_list,      DISPLAYLIST_OVERLAY_FILL_OPACITY_LIST)
 #endif
 GENERIC_DEFERRED_PUSH(deferred_push_menu_file_browser_settings_list,DISPLAYLIST_MENU_FILE_BROWSER_SETTINGS_LIST)
 GENERIC_DEFERRED_PUSH(deferred_push_media_player_settings_list,DISPLAYLIST_MEDIA_PLAYER_SETTINGS_LIST)
@@ -728,6 +729,7 @@ static int menu_cbs_init_bind_deferred_push_compare_label(
       {MENU_ENUM_LABEL_DEFERRED_OVERLAY_CUSTOM_BUTTON_LIST, deferred_push_overlay_custom_button_list},
       {MENU_ENUM_LABEL_DEFERRED_OVERLAY_CUSTOM_INPUT_LIST, deferred_push_overlay_custom_input_list},
       {MENU_ENUM_LABEL_DEFERRED_OVERLAY_STROKE_LIST, deferred_push_overlay_stroke_list},
+      {MENU_ENUM_LABEL_DEFERRED_OVERLAY_FILL_OPACITY_LIST, deferred_push_overlay_fill_opacity_list},
 #endif
       {MENU_ENUM_LABEL_DEFERRED_MENU_FILE_BROWSER_SETTINGS_LIST, deferred_push_menu_file_browser_settings_list},
       {MENU_ENUM_LABEL_DEFERRED_MEDIA_PLAYER_SETTINGS_LIST, deferred_push_media_player_settings_list},
@@ -1140,6 +1142,9 @@ static int menu_cbs_init_bind_deferred_push_compare_label(
             break;
          case MENU_ENUM_LABEL_DEFERRED_OVERLAY_STROKE_LIST:
             BIND_ACTION_DEFERRED_PUSH(cbs, deferred_push_overlay_stroke_list);
+            break;
+         case MENU_ENUM_LABEL_DEFERRED_OVERLAY_FILL_OPACITY_LIST:
+            BIND_ACTION_DEFERRED_PUSH(cbs, deferred_push_overlay_fill_opacity_list);
             break;
          case MENU_ENUM_LABEL_DEFERRED_OVERLAY_LAYOUT_PROFILE_DELETE_LIST:
             BIND_ACTION_DEFERRED_PUSH(cbs, deferred_push_overlay_layout_profile_delete_list);
