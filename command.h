@@ -307,6 +307,8 @@ enum event_command
    CMD_EVENT_OVERLAY_GAMEPAD_DELETE,
    /* Resets Default and makes it the gamepad for all content */
    CMD_EVENT_OVERLAY_GAMEPAD_RESET,
+   /* Imports the gamepad file Import Gamepad asked about */
+   CMD_EVENT_OVERLAY_GAMEPAD_IMPORT,
    CMD_EVENT_OSK_TOGGLE,
    CMD_EVENT_RELOAD_CONFIG,
 #ifdef HAVE_MICROPHONE

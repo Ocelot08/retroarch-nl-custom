@@ -33194,6 +33194,22 @@ MSG_HASH(
    "Default reset, and used for all content."
    )
 MSG_HASH(
+   MSG_OVERLAY_GAMEPADS_EXPORTED,
+   "Exported %d gamepads to %s"
+   )
+MSG_HASH(
+   MSG_OVERLAY_GAMEPADS_EXPORT_FAILED,
+   "Could not export gamepads to %s"
+   )
+MSG_HASH(
+   MSG_OVERLAY_GAMEPAD_IMPORT_CONFIRM,
+   "Press again to import this gamepad (it replaces one of the same name)..."
+   )
+MSG_HASH(
+   MSG_OVERLAY_GAMEPAD_IMPORTED,
+   "Imported gamepad: %s"
+   )
+MSG_HASH(
    MSG_OVERLAY_LAYOUT_RESET_CONFIRM,
    "Press again to reset Default and use it for all content..."
    )
@@ -33256,6 +33272,22 @@ MSG_HASH(
 MSG_HASH(
    MSG_OVERLAY_CONTROL_KEY,
    "Keyboard Key"
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_VALUE_OVERLAY_GAMEPAD_EXPORT,
+   "Export Gamepads"
+   )
+MSG_HASH(
+   MENU_ENUM_SUBLABEL_OVERLAY_GAMEPAD_EXPORT,
+   "Copy every gamepad, with its images, to the RetroArch folder on shared storage (RetroArch/overlay), where other apps can reach them."
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_VALUE_OVERLAY_GAMEPAD_IMPORT,
+   "Import Gamepad"
+   )
+MSG_HASH(
+   MENU_ENUM_SUBLABEL_OVERLAY_GAMEPAD_IMPORT,
+   "Pick a gamepad file (.cfg) to copy in among the gamepads. One of the same name is replaced."
    )
 MSG_HASH(
    MENU_ENUM_LABEL_VALUE_OVERLAY_CUSTOM_BUTTONS,

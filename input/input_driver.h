@@ -2543,6 +2543,12 @@ bool input_overlay_layout_profile_delete(const char *name);
  * deleted (CMD_EVENT_OVERLAY_GAMEPAD_DELETE) */
 void input_overlay_layout_profile_delete_ask(const char *name);
 void input_overlay_layout_profile_delete_asked(void);
+/* Gamepads out to shared storage (the number, or -1), and one in from
+ * a file asked about, then answered (CMD_EVENT_OVERLAY_GAMEPAD_IMPORT) */
+void input_overlay_layout_profiles_export_dir(char *s, size_t len);
+int input_overlay_layout_profiles_export(void);
+void input_overlay_layout_profile_import_ask(const char *path);
+void input_overlay_layout_profile_import_asked(void);
 struct string_list *input_overlay_layout_profile_list(bool builtin);
 size_t input_overlay_layout_profile_current(char *s, size_t len);
 

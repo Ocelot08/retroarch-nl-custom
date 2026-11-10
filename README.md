@@ -104,6 +104,14 @@ Layout**, or **Quick Menu → On-Screen Overlay → Touch Layout** in a game.
     ships it (`system_overlays/Default.cfg` when there is one, else made
     from Neo RetroPad) and make it the gamepad for all content without
     an override of its own; a deleted Nintendo DS or 3DS comes back too.
+  - **Export Gamepads**: copy every gamepad, and the images by it, to
+    the RetroArch folder on shared storage, `RetroArch/overlay`
+    (`/storage/emulated/0/RetroArch/overlay` on a phone), where a file
+    manager or another app can reach them. The gamepads themselves are
+    kept in the app's private data, which only RetroArch reaches.
+  - **Import Gamepad**: browse to a gamepad file (`.cfg`), starting in
+    that folder, and after asking, copy it in among the gamepads; one of
+    the same name is replaced.
 
 #### Screenshots
 

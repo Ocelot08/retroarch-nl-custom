@@ -13818,6 +13818,10 @@ unsigned menu_displaylist_build_list(
                   MENU_ENUM_LABEL_VALUE_OVERLAY_LAYOUT_PROFILE_DELETE },
                { MENU_ENUM_LABEL_OVERLAY_RESET_LAYOUT,
                   MENU_ENUM_LABEL_VALUE_OVERLAY_RESET_LAYOUT },
+               { MENU_ENUM_LABEL_OVERLAY_GAMEPAD_EXPORT,
+                  MENU_ENUM_LABEL_VALUE_OVERLAY_GAMEPAD_EXPORT },
+               { MENU_ENUM_LABEL_OVERLAY_GAMEPAD_IMPORT,
+                  MENU_ENUM_LABEL_VALUE_OVERLAY_GAMEPAD_IMPORT },
             };
 
             for (i = 0; i < ARRAY_SIZE(rows); i++)

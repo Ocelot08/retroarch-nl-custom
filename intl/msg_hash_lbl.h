@@ -1688,6 +1688,14 @@ MSG_HASH(
    "overlay_layout_fill_opacity"
    )
 MSG_HASH(
+   MENU_ENUM_LABEL_OVERLAY_GAMEPAD_EXPORT,
+   "overlay_gamepad_export"
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_OVERLAY_GAMEPAD_IMPORT,
+   "overlay_gamepad_import"
+   )
+MSG_HASH(
    MENU_ENUM_LABEL_OVERLAY_LAYOUT_STROKE_ITEM,
    "overlay_layout_stroke_item"
    )

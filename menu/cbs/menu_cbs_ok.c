@@ -1451,6 +1451,20 @@ int generic_action_ok_displaylist_push(
             dl_type            = DISPLAYLIST_FILE_BROWSER_SELECT_FILE;
          }
          break;
+#ifdef HAVE_OVERLAY
+      case ACTION_OK_DL_OVERLAY_GAMEPAD_IMPORT:
+         /* From where Export Gamepads puts them */
+         input_overlay_layout_profiles_export_dir(tmp, sizeof(tmp));
+         if (!path_is_directory(tmp))
+            strlcpy(tmp, settings->paths.directory_overlay, sizeof(tmp));
+         filebrowser_clear_type();
+         info.type          = type;
+         info.directory_ptr = idx;
+         info_path          = tmp;
+         info_label         = label;
+         dl_type            = DISPLAYLIST_FILE_BROWSER_SELECT_FILE;
+         break;
+#endif
       case ACTION_OK_DL_OVERRIDE_FILE:
          {
             struct retro_system_info *sysinfo = &runloop_state_get_ptr()->system.info;
@@ -6711,6 +6725,50 @@ static int action_ok_overlay_edit_layout(const char *path,
    return generic_action_ok_command(CMD_EVENT_RESUME);
 }
 
+static int action_ok_overlay_gamepad_export(const char *path,
+      const char *label, unsigned type, size_t idx, size_t entry_idx)
+{
+   char dir[DIR_MAX_LENGTH];
+   char _msg[DIR_MAX_LENGTH + 64];
+   size_t _len;
+   int count = input_overlay_layout_profiles_export();
+   input_overlay_layout_profiles_export_dir(dir, sizeof(dir));
+   if (count < 0)
+      _len = snprintf(_msg, sizeof(_msg),
+            msg_hash_to_str(MSG_OVERLAY_GAMEPADS_EXPORT_FAILED), dir);
+   else
+      _len = snprintf(_msg, sizeof(_msg),
+            msg_hash_to_str(MSG_OVERLAY_GAMEPADS_EXPORTED), count, dir);
+   runloop_msg_queue_push(_msg, MIN(_len, sizeof(_msg) - 1), 1, 240, true,
+         NULL, MESSAGE_QUEUE_ICON_DEFAULT, MESSAGE_QUEUE_CATEGORY_INFO);
+   return count < 0 ? -1 : 0;
+}
+
+/* A gamepad file picked to import: asked about first, as Quit is */
+static int action_ok_overlay_gamepad_import_file(const char *path,
+      const char *label, unsigned type, size_t idx, size_t entry_idx)
+{
+   char file[PATH_MAX_LENGTH];
+   const char *menu_path      = NULL;
+   struct menu_state *menu_st = menu_state_get_ptr();
+   settings_t *settings       = config_get_ptr();
+
+   menu_entries_get_last_stack(&menu_path, NULL, NULL, NULL, NULL);
+   if (!path || !*path)
+      return -1;
+   fill_pathname_join_special(file, menu_path ? menu_path : "", path,
+         sizeof(file));
+   input_overlay_layout_profile_import_ask(file);
+   if (settings->bools.menu_show_confirm)
+   {
+      menu_dialog_confirm_set(menu_st,
+            MSG_OVERLAY_GAMEPAD_IMPORT_CONFIRM,
+            CMD_EVENT_OVERLAY_GAMEPAD_IMPORT);
+      return action_ok_dialog_init(menu_st);
+   }
+   return generic_action_ok_command(CMD_EVENT_OVERLAY_GAMEPAD_IMPORT);
+}
+
 /* Asked about first, as Quit is, when confirmations are shown */
 static int action_ok_overlay_reset_layout(const char *path,
       const char *label, unsigned type, size_t idx, size_t entry_idx)
@@ -7688,6 +7746,9 @@ STATIC_DEFAULT_ACTION_OK_FUNC(action_ok_record_configfile, ACTION_OK_DL_RECORD_C
 STATIC_DEFAULT_ACTION_OK_FUNC(action_ok_stream_configfile, ACTION_OK_DL_STREAM_CONFIGFILE)
 STATIC_DEFAULT_ACTION_OK_FUNC(action_ok_remap_file, ACTION_OK_DL_REMAP_FILE)
 STATIC_DEFAULT_ACTION_OK_FUNC(action_ok_override_file, ACTION_OK_DL_OVERRIDE_FILE)
+#ifdef HAVE_OVERLAY
+STATIC_DEFAULT_ACTION_OK_FUNC(action_ok_overlay_gamepad_import, ACTION_OK_DL_OVERLAY_GAMEPAD_IMPORT)
+#endif
 #if defined(HAVE_CG) || defined(HAVE_GLSL) || defined(HAVE_SLANG) || defined(HAVE_HLSL)
 STATIC_DEFAULT_ACTION_OK_FUNC(action_ok_shader_preset, ACTION_OK_DL_SHADER_PRESET)
 STATIC_DEFAULT_ACTION_OK_FUNC(action_ok_shader_preset_prepend, ACTION_OK_DL_SHADER_PRESET_PREPEND)
@@ -10479,6 +10540,8 @@ static int menu_cbs_init_bind_ok_compare_label(menu_file_list_cbs_t *cbs,
          {MENU_ENUM_LABEL_OVERLAY_CUSTOM_LABEL,                action_ok_overlay_custom_label},
          {MENU_ENUM_LABEL_OVERLAY_CUSTOM_INPUT_ITEM,           action_ok_overlay_custom_input_item},
          {MENU_ENUM_LABEL_OVERLAY_CUSTOM_REMOVE,               action_ok_overlay_custom_remove},
+         {MENU_ENUM_LABEL_OVERLAY_GAMEPAD_EXPORT,              action_ok_overlay_gamepad_export},
+         {MENU_ENUM_LABEL_OVERLAY_GAMEPAD_IMPORT,              action_ok_overlay_gamepad_import},
 #endif
          {MENU_ENUM_LABEL_ADD_TO_FAVORITES_PLAYLIST,           action_ok_add_to_favorites_playlist},
          {MENU_ENUM_LABEL_ADD_ENTRY_TO_PLAYLIST,               action_ok_add_entry_to_playlist},
@@ -11061,6 +11124,13 @@ static int menu_cbs_init_bind_ok_compare_type(menu_file_list_cbs_t *cbs,
                BIND_ACTION_OK(cbs, action_ok_override_file_load);
                break;
             }
+#ifdef HAVE_OVERLAY
+            if (string_is_equal(menu_label, MENU_ENUM_LABEL_OVERLAY_GAMEPAD_IMPORT_STR))
+            {
+               BIND_ACTION_OK(cbs, action_ok_overlay_gamepad_import_file);
+               break;
+            }
+#endif
             BIND_ACTION_OK(cbs, action_ok_config_load);
             break;
          case FILE_TYPE_PARENT_DIRECTORY:

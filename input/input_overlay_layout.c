@@ -41,6 +41,7 @@
 #include "input_remapping.h"
 #include "input_overlay_layout.h"
 #include "../configuration.h"
+#include "../defaults.h"
 #include "../file_path_special.h"
 #include "../msg_hash.h"
 #include "../paths.h"
@@ -3070,6 +3071,174 @@ bool input_overlay_layout_profile_load(const char *name)
    menu_state_get_ptr()->flags |= MENU_ST_FLAG_ENTRIES_NEED_REFRESH;
 #endif
    return true;
+}
+
+/* Where gamepads are exported to, and imported from by default: the
+ * folder RetroArch keeps saves in, on shared storage where it can */
+void input_overlay_layout_profiles_export_dir(char *s, size_t len)
+{
+   char base[DIR_MAX_LENGTH];
+   if (*g_defaults.dirs[DEFAULT_DIR_SRAM])
+      fill_pathname_parent_dir(base, g_defaults.dirs[DEFAULT_DIR_SRAM],
+            sizeof(base));
+   else
+      fill_pathname_basedir(base, path_get(RARCH_PATH_CONFIG), sizeof(base));
+   fill_pathname_join_special(s, base, "overlay", len);
+}
+
+static bool input_overlay_copy_file(const char *from, const char *to)
+{
+   void *buf    = NULL;
+   int64_t blen = 0;
+   bool ret;
+   if (!filestream_read_file(from, &buf, &blen))
+      return false;
+   ret = filestream_write_file(to, buf, blen);
+   free(buf);
+   return ret;
+}
+
+/* The gamepads, and the images they have by them, copied to where
+ * other apps reach them; the number copied, or -1 */
+int input_overlay_layout_profiles_export(void)
+{
+   size_t i;
+   int count = 0;
+   char dir[DIR_MAX_LENGTH];
+   char out[DIR_MAX_LENGTH];
+   char from[PATH_MAX_LENGTH];
+   char to[PATH_MAX_LENGTH];
+   struct string_list *files;
+
+   input_overlay_profiles_ensure();
+   input_overlay_profiles_dir(dir, sizeof(dir));
+   input_overlay_layout_profiles_export_dir(out, sizeof(out));
+   if (!path_is_directory(out) && !path_mkdir(out))
+      return -1;
+   if ((files = dir_list_new(dir, "cfg", false, false, false, false)))
+   {
+      for (i = 0; i < files->size; i++)
+      {
+         fill_pathname_join_special(to, out,
+               path_basename(files->elems[i].data), sizeof(to));
+         if (!input_overlay_copy_file(files->elems[i].data, to))
+         {
+            string_list_free(files);
+            return -1;
+         }
+         count++;
+      }
+      string_list_free(files);
+   }
+   fill_pathname_join_special(from, dir, "img", sizeof(from));
+   fill_pathname_join_special(to, out, "img", sizeof(to));
+   if (     path_is_directory(from)
+         && (files = dir_list_new(from, "png", false, false, false, false)))
+   {
+      if (!path_is_directory(to))
+         path_mkdir(to);
+      for (i = 0; i < files->size; i++)
+      {
+         char img[PATH_MAX_LENGTH];
+         fill_pathname_join_special(img, to,
+               path_basename(files->elems[i].data), sizeof(img));
+         input_overlay_copy_file(files->elems[i].data, img);
+      }
+      string_list_free(files);
+   }
+   return count;
+}
+
+/* The gamepad file Import Gamepad asks about, until it is answered */
+static char input_overlay_profile_import[PATH_MAX_LENGTH];
+
+void input_overlay_layout_profile_import_ask(const char *path)
+{
+   strlcpy(input_overlay_profile_import, path ? path : "",
+         sizeof(input_overlay_profile_import));
+}
+
+/* Copied in among the gamepads, as one of the same name is replaced,
+ * with the images by it (img/) it names that are not there */
+void input_overlay_layout_profile_import_asked(void)
+{
+   char _msg[PATH_MAX_LENGTH + 64];
+   char name[NAME_MAX_LENGTH];
+   char dir[DIR_MAX_LENGTH];
+   char to[PATH_MAX_LENGTH];
+   size_t _len;
+   bool ok             = false;
+   input_overlay_t *ol = input_overlay_layout_target();
+
+   if (!*input_overlay_profile_import)
+      return;
+   strlcpy(name, path_basename(input_overlay_profile_import), sizeof(name));
+   path_remove_extension(name);
+   input_overlay_profiles_ensure();
+   input_overlay_profiles_dir(dir, sizeof(dir));
+   if (!path_is_directory(dir))
+      path_mkdir(dir);
+   input_overlay_profile_file(to, sizeof(to), name);
+
+   if (     !string_is_equal(input_overlay_profile_import, to)
+         && input_overlay_copy_file(input_overlay_profile_import, to))
+   {
+      config_file_t *conf = config_file_new_from_path_to_string(to);
+      ok                  = true;
+      if (conf)
+      {
+         char src_dir[DIR_MAX_LENGTH];
+         char img_dir[DIR_MAX_LENGTH];
+         char overlays[DIR_MAX_LENGTH];
+         struct config_entry_list *e;
+         fill_pathname_basedir(src_dir, input_overlay_profile_import,
+               sizeof(src_dir));
+         fill_pathname_join_special(img_dir, dir, "img", sizeof(img_dir));
+         fill_pathname_expand_special(overlays,
+               config_get_ptr()->paths.directory_overlay, sizeof(overlays));
+         for (e = conf->entries; e; e = e->next)
+         {
+            char want[PATH_MAX_LENGTH];
+            char from[PATH_MAX_LENGTH];
+            size_t klen = e->key ? strlen(e->key) : 0;
+            if (     klen <= STRLEN_CONST("_overlay")
+                  || !string_is_equal(e->key + klen
+                     - STRLEN_CONST("_overlay"), "_overlay")
+                  || !e->value || strncmp(e->value, "img/", 4))
+               continue;
+            fill_pathname_join_special(want, dir, e->value, sizeof(want));
+            if (path_is_valid(want))
+               continue;
+            if (!path_is_directory(img_dir))
+               path_mkdir(img_dir);
+            fill_pathname_join_special(from, src_dir, e->value, sizeof(from));
+            if (!path_is_valid(from))
+            {
+               fill_pathname_join_special(from, overlays,
+                     "gamepads/neo-custom", sizeof(from));
+               fill_pathname_join_special(from, from, e->value, sizeof(from));
+            }
+            input_overlay_copy_file(from, want);
+         }
+         config_file_free(conf);
+      }
+   }
+   *input_overlay_profile_import = '\0';
+
+   _len = snprintf(_msg, sizeof(_msg), msg_hash_to_str(ok
+         ? MSG_OVERLAY_GAMEPAD_IMPORTED : MSG_OVERLAY_LAYOUT_PROFILE_FAILED),
+         name);
+   runloop_msg_queue_push(_msg, MIN(_len, sizeof(_msg) - 1), 1, 180, true,
+         NULL, MESSAGE_QUEUE_ICON_DEFAULT, MESSAGE_QUEUE_CATEGORY_INFO);
+   /* The one shown, replaced */
+   if (ok && ol && ol->path && string_is_equal(ol->path, to))
+   {
+      input_overlay_edit_finish(input_driver_st.overlay_ptr, false);
+      input_overlay_layout_reload(ol);
+   }
+#ifdef HAVE_MENU
+   menu_state_get_ptr()->flags |= MENU_ST_FLAG_ENTRIES_NEED_REFRESH;
+#endif
 }
 
 /* The gamepad Delete Gamepad asks about, until it is answered */
