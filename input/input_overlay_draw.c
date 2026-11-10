@@ -36,6 +36,8 @@ typedef struct
    int x, y, w, h;
    int ox, oy;
    int advance;
+   /* The rows inked, in the box; ink_h 0 for none */
+   int ink_y, ink_h;
 } overlay_draw_glyph_t;
 
 struct overlay_draw_font
@@ -79,21 +81,53 @@ overlay_draw_font_t *input_overlay_draw_font_new(const char *font_path)
       font->glyphs[i].oy      = g->draw_offset_y;
       font->glyphs[i].advance = g->advance_x;
    }
-   font->cap = font->glyphs['H' - OVERLAY_DRAW_FONT_FIRST].h;
 
    atlas = drv->get_atlas(handle);
    if (     atlas && atlas->buffer && atlas->format == FONT_ATLAS_FORMAT_A8
-         && font->cap > 0
+         && font->glyphs['H' - OVERLAY_DRAW_FONT_FIRST].h > 0
          && (font->atlas = (uint8_t*)malloc(atlas->width * atlas->height)))
    {
       memcpy(font->atlas, atlas->buffer, atlas->width * atlas->height);
       font->atlas_w = atlas->width;
       font->atlas_h = atlas->height;
    }
-   drv->free(handle);
 
-   if (!font->atlas)
+   /* What each glyph inks: a renderer's glyph box can be a cell with
+    * room round the letter (stb's is), not the letter */
+   if (font->atlas)
    {
+      for (i = 0; i < OVERLAY_DRAW_FONT_COUNT; i++)
+      {
+         overlay_draw_glyph_t *g = &font->glyphs[i];
+         int y, x, top = -1, bottom = -1;
+         for (y = 0; y < g->h; y++)
+         {
+            int ay     = g->y + y;
+            bool inked = false;
+            if (ay < 0 || ay >= (int)font->atlas_h)
+               continue;
+            for (x = 0; x < g->w && !inked; x++)
+            {
+               int ax = g->x + x;
+               inked  = ax >= 0 && ax < (int)font->atlas_w
+                  && font->atlas[ay * font->atlas_w + ax] > 127;
+            }
+            if (inked)
+            {
+               if (top < 0)
+                  top = y;
+               bottom = y;
+            }
+         }
+         g->ink_y = MAX(top, 0);
+         g->ink_h = (top >= 0) ? bottom - top + 1 : 0;
+      }
+      font->cap = font->glyphs['H' - OVERLAY_DRAW_FONT_FIRST].ink_h;
+   }
+
+   if (!font->atlas || font->cap <= 0)
+   {
+      free(font->atlas);
       free(font);
       return NULL;
    }
@@ -117,23 +151,24 @@ bool input_overlay_draw_classify(const char *action, bool movable,
       enum overlay_draw_shape shape;
       unsigned dir;
       const char *label;
+      const char *fit;
    } buttons[] = {
-      { "a",      OVERLAY_DRAW_ROUND, 0, "A"      },
-      { "b",      OVERLAY_DRAW_ROUND, 0, "B"      },
-      { "x",      OVERLAY_DRAW_ROUND, 0, "X"      },
-      { "y",      OVERLAY_DRAW_ROUND, 0, "Y"      },
-      { "l",      OVERLAY_DRAW_RECT,  0, "L1"     },
-      { "r",      OVERLAY_DRAW_RECT,  0, "R1"     },
-      { "l2",     OVERLAY_DRAW_RECT,  0, "L2"     },
-      { "r2",     OVERLAY_DRAW_RECT,  0, "R2"     },
-      { "l3",     OVERLAY_DRAW_RECT,  0, "L3"     },
-      { "r3",     OVERLAY_DRAW_RECT,  0, "R3"     },
-      { "start",  OVERLAY_DRAW_ROUND, 0, "START"  },
-      { "select", OVERLAY_DRAW_ROUND, 0, "SELECT" },
-      { "up",     OVERLAY_DRAW_ARROW, 0, ""       },
-      { "down",   OVERLAY_DRAW_ARROW, 1, ""       },
-      { "left",   OVERLAY_DRAW_ARROW, 2, ""       },
-      { "right",  OVERLAY_DRAW_ARROW, 3, ""       }
+      { "a",      OVERLAY_DRAW_ROUND, 0, "A",      NULL },
+      { "b",      OVERLAY_DRAW_ROUND, 0, "B",      NULL },
+      { "x",      OVERLAY_DRAW_ROUND, 0, "X",      NULL },
+      { "y",      OVERLAY_DRAW_ROUND, 0, "Y",      NULL },
+      { "l",      OVERLAY_DRAW_RECT,  0, "L1",     NULL },
+      { "r",      OVERLAY_DRAW_RECT,  0, "R1",     NULL },
+      { "l2",     OVERLAY_DRAW_RECT,  0, "L2",     NULL },
+      { "r2",     OVERLAY_DRAW_RECT,  0, "R2",     NULL },
+      { "l3",     OVERLAY_DRAW_RECT,  0, "L3",     NULL },
+      { "r3",     OVERLAY_DRAW_RECT,  0, "R3",     NULL },
+      { "start",  OVERLAY_DRAW_ROUND, 0, "ST",     "SEL" },
+      { "select", OVERLAY_DRAW_ROUND, 0, "SEL",    "SEL" },
+      { "up",     OVERLAY_DRAW_ARROW, 0, "",       NULL },
+      { "down",   OVERLAY_DRAW_ARROW, 1, "",       NULL },
+      { "left",   OVERLAY_DRAW_ARROW, 2, "",       NULL },
+      { "right",  OVERLAY_DRAW_ARROW, 3, "",       NULL }
    };
    size_t i;
 
@@ -152,6 +187,8 @@ bool input_overlay_draw_classify(const char *action, bool movable,
             out->shape = buttons[i].shape;
             out->dir   = buttons[i].dir;
             strlcpy(out->label, buttons[i].label, sizeof(out->label));
+            if (buttons[i].fit)
+               strlcpy(out->fit, buttons[i].fit, sizeof(out->fit));
             break;
          }
       /* Round, whatever it sends, and blank with no label of its own */
@@ -160,6 +197,7 @@ bool input_overlay_draw_classify(const char *action, bool movable,
          out->shape    = OVERLAY_DRAW_ROUND;
          out->dir      = 0;
          out->label[0] = '\0';
+         out->fit[0]   = '\0';
       }
       if (out->shape == OVERLAY_DRAW_NONE)
          return false;
@@ -286,19 +324,35 @@ static void overlay_draw_arrow_points(unsigned dir, float w, float h,
             &tri[2 * i], &tri[2 * i + 1]);
 }
 
-/* @label's coverage over the w x h @cover, centred, its capitals
- * @cap_px high or less where it is wide */
-static void overlay_draw_label(float *cover, unsigned w, unsigned h,
-      const char *label, const overlay_draw_font_t *font, float cap_px,
-      float max_w)
+/* How wide @label is in the font's pixels */
+static float overlay_draw_label_width(const char *label,
+      const overlay_draw_font_t *font)
 {
    const unsigned char *c;
-   float s, pen, top = 1e9f, bottom = -1e9f, width = 0.0f;
+   float width = 0.0f;
+   for (c = (const unsigned char*)label; *c; c++)
+      if (     *c >= OVERLAY_DRAW_FONT_FIRST
+            && *c <  OVERLAY_DRAW_FONT_FIRST + OVERLAY_DRAW_FONT_COUNT)
+         width += font->glyphs[*c - OVERLAY_DRAW_FONT_FIRST].advance;
+   return width;
+}
+
+/* @label's coverage over the w x h @cover, centred, its capitals
+ * @cap_px high or less where @fit (or @label) is wide */
+static void overlay_draw_label(float *cover, unsigned w, unsigned h,
+      const char *label, const char *fit, const overlay_draw_font_t *font,
+      float cap_px, float max_w)
+{
+   const unsigned char *c;
+   float s, pen, fit_w, top = 1e9f, bottom = -1e9f, width = 0.0f;
 
    if (!font || !label || !*label)
       return;
 
-   s = cap_px / font->cap;
+   s     = cap_px / font->cap;
+   fit_w = overlay_draw_label_width((fit && *fit) ? fit : label, font);
+   if (fit_w * s > max_w)
+      s = max_w / fit_w;
    for (c = (const unsigned char*)label; *c; c++)
    {
       const overlay_draw_glyph_t *g;
@@ -307,16 +361,14 @@ static void overlay_draw_label(float *cover, unsigned w, unsigned h,
          continue;
       g     = &font->glyphs[*c - OVERLAY_DRAW_FONT_FIRST];
       width += g->advance;
-      if (g->h > 0)
+      if (g->ink_h > 0)
       {
-         top    = MIN(top, (float)g->oy);
-         bottom = MAX(bottom, (float)(g->oy + g->h));
+         top    = MIN(top, (float)(g->oy + g->ink_y));
+         bottom = MAX(bottom, (float)(g->oy + g->ink_y + g->ink_h));
       }
    }
    if (width <= 0.0f || bottom <= top)
       return;
-   if (width * s > max_w)
-      s = max_w / width;
 
    pen = (w - width * s) * 0.5f;
    for (c = (const unsigned char*)label; *c; c++)
@@ -415,13 +467,14 @@ bool input_overlay_draw_render(struct texture_image *img,
    }
    else if (!hollow)
    {
-      /* Short labels by their height, long ones by the room across;
-       * as the button was made, grown with its Size, and kept inside it
-       * however narrow its Shape makes it */
+      /* Short labels, and a pair's (sized as one), by their height,
+       * long ones by the room across; as the button was made, grown
+       * with its Size, and kept inside it however narrow its Shape
+       * makes it */
       float cap = MIN(pack_w, pack_h) * grow
-         * (strlen(draw->label) > 2 ? 0.255f : 0.39f);
+         * ((*draw->fit || strlen(draw->label) <= 2) ? 0.39f : 0.255f);
       cap       = MIN(cap, short_px * 0.72f);
-      overlay_draw_label(cover, w, h, draw->label, font, cap,
+      overlay_draw_label(cover, w, h, draw->label, draw->fit, font, cap,
             (draw->shape == OVERLAY_DRAW_RECT ? 0.8f : 0.72f) * w);
    }
 

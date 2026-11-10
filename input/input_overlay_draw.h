@@ -59,6 +59,9 @@ typedef struct
     * with a light outline and label */
    bool filled;
    char label[16];
+   /* Labels sized as this one is, when not empty, so that buttons of a
+    * pair have letters of one size */
+   char fit[8];
 } overlay_draw_t;
 
 /* Printable ASCII, rendered once on the main thread, so that buttons

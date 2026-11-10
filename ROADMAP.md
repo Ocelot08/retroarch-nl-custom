@@ -66,7 +66,7 @@ away from what is being sized, with Reset and Done. Built together.
   text in the menu's font, so a button made wider stays a capsule
   with upright letters.
 - The editor draws a control again when its slider is let go.
-- Labels come from what the button does (A, L1, START), or from a
+- Labels come from what the button does (A, L1, ST and SEL, the two at one size), or from a
   `_label` key in the overlay or layout ("L" and "ZL" on DS and 3DS,
   "C" on the C-stick). Typing one in the editor comes with item 5.
 - Hotkeys (menu, fast-forward, hide, save state, swap screens, ...)
