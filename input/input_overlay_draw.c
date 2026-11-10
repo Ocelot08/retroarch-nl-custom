@@ -301,19 +301,22 @@ static void overlay_draw_arrow_points(unsigned dir, float w, float h,
       0.0f, -0.18f,  0.24f, 0.09f,  -0.24f, 0.09f };
    float across = (dir < 2) ? w : h;
    float along  = (dir < 2) ? h : w;
-   /* Its point right at the end of its box, toward the middle */
+   /* Its point right at the end of its box, toward the middle, square
+    * on so that the arms' inner edges stay parallel; a tenth narrower
+    * than its box */
    float m      = MAX(1.0f, across * 0.02f);
+   float side   = m + across * 0.05f;
    float tip    = along - 1.0f;
-   float half   = across * 0.5f - m;
+   float half   = across * 0.5f - side;
    float neck   = MAX(m, tip - half);
    float local[10];
    unsigned i;
 
-   local[0] = m;               local[1] = m;
-   local[2] = across - m;      local[3] = m;
-   local[4] = across - m;      local[5] = neck;
+   local[0] = side;            local[1] = m;
+   local[2] = across - side;   local[3] = m;
+   local[4] = across - side;   local[5] = neck;
    local[6] = across * 0.5f;   local[7] = tip;
-   local[8] = m;               local[9] = neck;
+   local[8] = side;            local[9] = neck;
    for (i = 0; i < 5; i++)
       overlay_draw_turn(dir, local[2 * i], local[2 * i + 1], w, h,
             &body[2 * i], &body[2 * i + 1]);
