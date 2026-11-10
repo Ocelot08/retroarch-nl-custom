@@ -13863,8 +13863,7 @@ unsigned menu_displaylist_build_list(
             enum msg_hash_enums item = (type == DISPLAYLIST_OVERLAY_LAYOUT_PROFILE_LOAD_LIST)
                ? MENU_ENUM_LABEL_OVERLAY_LAYOUT_PROFILE_LOAD_ITEM
                : MENU_ENUM_LABEL_OVERLAY_LAYOUT_PROFILE_DELETE_ITEM;
-            struct string_list *names = input_overlay_layout_profile_list(
-                  type == DISPLAYLIST_OVERLAY_LAYOUT_PROFILE_LOAD_LIST);
+            struct string_list *names = input_overlay_layout_profile_list(true);
 
             if (names)
             {

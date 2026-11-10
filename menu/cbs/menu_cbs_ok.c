@@ -6926,9 +6926,26 @@ static int action_ok_overlay_custom_remove(const char *path,
    return 0;
 }
 
+/* Pressed once, a gamepad is only asked about: pressed again on it
+ * soon after, it is deleted */
 static int action_ok_overlay_layout_profile_delete_item(const char *path,
       const char *label, unsigned type, size_t idx, size_t entry_idx)
 {
+   static char asked[NAME_MAX_LENGTH];
+   static retro_time_t asked_at;
+   retro_time_t now = cpu_features_get_time_usec();
+
+   if (     !path
+         || !string_is_equal(asked, path)
+         || now - asked_at > 3000000)
+   {
+      strlcpy(asked, path ? path : "", sizeof(asked));
+      asked_at = now;
+      action_ok_overlay_layout_profile_msg(
+            MSG_OVERLAY_LAYOUT_PROFILE_DELETE_CONFIRM, path, NULL);
+      return 0;
+   }
+   *asked = '\0';
    if (!input_overlay_layout_profile_delete(path))
       return -1;
    action_ok_overlay_layout_profile_msg(

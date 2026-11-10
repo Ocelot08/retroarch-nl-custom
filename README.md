@@ -91,9 +91,11 @@ Layout**, or **Quick Menu → On-Screen Overlay → Touch Layout** in a game.
     that has no override of its own. Picking a gamepad
     file as Overlay Preset (Settings > User Interface > On-Screen
     Overlay) does the same; the files are in `overlays/gamepads/custom`.
-  - **Delete Gamepad**: delete one you saved.
-  - **Reset Gamepad**: put a built-in gamepad back as it comes. A
-    built-in one that is missing is made again.
+  - **Delete Gamepad**: delete any gamepad, a built-in one too. If
+    it is the one shown, the controls change at once to the gamepad for
+    all content, or Main, or the plain Neo RetroPad overlay.
+  - **Reset Gamepad**: put the built-in gamepad shown back as it comes,
+    and bring back any built-in one that was deleted.
 
 #### Screenshots
 

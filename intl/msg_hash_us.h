@@ -15743,7 +15743,7 @@ MSG_HASH(
    )
 MSG_HASH(
    MENU_ENUM_SUBLABEL_OVERLAY_LAYOUT_PROFILE_DELETE,
-   "Delete a gamepad you saved."
+   "Delete a gamepad, a built-in one too: Reset Gamepad brings a built-in one back."
    )
 MSG_HASH(
    MENU_ENUM_LABEL_VALUE_OVERLAY_RESET_LAYOUT,
@@ -15751,7 +15751,7 @@ MSG_HASH(
    )
 MSG_HASH(
    MENU_ENUM_SUBLABEL_OVERLAY_RESET_LAYOUT,
-   "Put a built-in gamepad (Main, Nintendo DS, Nintendo 3DS) back as it comes."
+   "Put the built-in gamepad shown (Main, Nintendo DS, Nintendo 3DS) back as it comes, and bring back any built-in one that was deleted."
    )
 MSG_HASH(
    MENU_ENUM_LABEL_VALUE_INPUT_OVERLAY_DPAD_METHOD,
@@ -33216,6 +33216,10 @@ MSG_HASH(
 MSG_HASH(
    MSG_OVERLAY_LAYOUT_PROFILE_DELETED,
    "Deleted gamepad: %s"
+   )
+MSG_HASH(
+   MSG_OVERLAY_LAYOUT_PROFILE_DELETE_CONFIRM,
+   "Press again to delete gamepad %s..."
    )
 MSG_HASH(
    MSG_OVERLAY_LAYOUT_PROFILE_FAILED,

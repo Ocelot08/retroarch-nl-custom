@@ -330,6 +330,11 @@ static void input_overlay_profile_file(char *s, size_t len, const char *name);
 static void input_overlay_profiles_ensure(void);
 static bool input_overlay_builtin_profile_reset(unsigned i);
 
+/* The gamepads every build has, made from the overlays
+ * input_overlay_builtin_pack() names */
+static const char *input_overlay_builtin_profiles[] = {
+   "Main", "Nintendo DS", "Nintendo 3DS" };
+
 static bool input_overlay_layout_save(const input_overlay_t *ol)
 {
    size_t i, j;
@@ -2331,7 +2336,7 @@ const char *input_overlay_gamepad_path(const char *pack)
    if (     *input_overlay_gamepad_chosen
          && path_is_valid(input_overlay_gamepad_chosen))
       return input_overlay_gamepad_chosen;
-   if (input_overlay_is_profile(preset))
+   if (input_overlay_is_profile(preset) && path_is_valid(preset))
       return preset;
    if (pack && strstr(pack, SYSTEM_OVERLAY_DIR))
       pack = preset;
@@ -2445,6 +2450,18 @@ void input_overlay_layout_reset(void)
 
    input_overlay_edit_finish(input_driver_st.overlay_ptr, false);
 
+   /* The built-in gamepads deleted, back */
+   {
+      unsigned i;
+      for (i = 0; i < ARRAY_SIZE(input_overlay_builtin_profiles); i++)
+      {
+         input_overlay_profile_file(path, sizeof(path),
+               input_overlay_builtin_profiles[i]);
+         if (*path && !path_is_valid(path))
+            input_overlay_builtin_profile_reset(i);
+      }
+   }
+
    if (input_overlay_is_profile(overlay))
    {
       /* A built-in profile as it comes; one of the user's stays */
@@ -2480,11 +2497,6 @@ void input_overlay_layout_reset(void)
  * _pack; a hidden control's desc is off the screen, where it was in
  * _layout_x/_layout_y. */
 
-/* The profiles every build has, the overlays they are made from as
- * input_overlay_builtin_pack() names them, and that DS and 3DS content
- * starts on its own */
-static const char *input_overlay_builtin_profiles[] = {
-   "Main", "Nintendo DS", "Nintendo 3DS" };
 
 static void input_overlay_profiles_dir(char *s, size_t len)
 {
@@ -3003,13 +3015,23 @@ bool input_overlay_layout_profile_load(const char *name)
    return true;
 }
 
+/* Any gamepad, a built-in one too (Reset Gamepad brings that back);
+ * the one shown is loaded again without it */
 bool input_overlay_layout_profile_delete(const char *name)
 {
    char path[PATH_MAX_LENGTH];
-   if (input_overlay_builtin_profile_find(name) >= 0)
-      return false;
+   input_overlay_t *ol = input_overlay_layout_target();
+
    input_overlay_profile_file(path, sizeof(path), name);
-   return *path && path_is_valid(path) && filestream_delete(path) == 0;
+   if (     !*path || !path_is_valid(path)
+         || filestream_delete(path) != 0)
+      return false;
+   if (ol && ol->path && string_is_equal(ol->path, path))
+   {
+      input_overlay_edit_finish(input_driver_st.overlay_ptr, false);
+      input_overlay_layout_reload(ol);
+   }
+   return true;
 }
 
 /* Custom buttons: controls of their own label and input, added to each
@@ -3375,9 +3397,7 @@ struct string_list *input_overlay_layout_profile_list(bool builtin)
       {
          input_overlay_profile_file(path, sizeof(path),
                input_overlay_builtin_profiles[i]);
-         /* One gone is made again */
-         if (     path_is_valid(path)
-               || input_overlay_builtin_profile_reset(i))
+         if (path_is_valid(path))
             string_list_append(names, input_overlay_builtin_profiles[i], attr);
       }
 
