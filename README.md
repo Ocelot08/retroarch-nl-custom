@@ -101,8 +101,8 @@ Layout**, or **Quick Menu → On-Screen Overlay → Touch Layout** in a game.
     too, after asking. If it is the one shown, the controls change at
     once to the gamepad for all content, or Default.
   - **Reset Gamepad**, after asking: put Default back as this build
-    ships it (`system_overlays/Default.cfg` when there is one, else made
-    from Neo RetroPad) and make it the gamepad for all content without
+    ships it (`system_overlays/Default.cfg`, a layout of Neo RetroPad's
+    portrait pages; without it, Neo RetroPad as it is) and make it the gamepad for all content without
     an override of its own; a deleted Nintendo DS or 3DS comes back too.
   - **Export Gamepads**: copy every gamepad, and the images by it, to
     the RetroArch folder on shared storage, `RetroArch/overlay`
