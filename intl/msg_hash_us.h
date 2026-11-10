@@ -33219,7 +33219,7 @@ MSG_HASH(
    )
 MSG_HASH(
    MSG_OVERLAY_LAYOUT_PROFILE_DELETE_CONFIRM,
-   "Press again to delete gamepad %s..."
+   "Press again to delete this gamepad..."
    )
 MSG_HASH(
    MSG_OVERLAY_LAYOUT_PROFILE_FAILED,

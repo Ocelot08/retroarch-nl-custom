@@ -2536,6 +2536,10 @@ void input_overlay_gamepad_preset(const char *path);
 void input_overlay_gamepad_override(const char *path);
 void input_overlay_gamepad_session_end(void);
 bool input_overlay_layout_profile_delete(const char *name);
+/* Delete Gamepad's question, and its answer: the gamepad asked about
+ * deleted (CMD_EVENT_OVERLAY_GAMEPAD_DELETE) */
+void input_overlay_layout_profile_delete_ask(const char *name);
+void input_overlay_layout_profile_delete_asked(void);
 struct string_list *input_overlay_layout_profile_list(bool builtin);
 size_t input_overlay_layout_profile_current(char *s, size_t len);
 

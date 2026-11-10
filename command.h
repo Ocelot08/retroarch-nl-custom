@@ -303,6 +303,8 @@ enum event_command
     * is stopped here, so the frame path tests only its frame_work bit */
    CMD_EVENT_CAMERA_ALLOW_APPLY,
    CMD_EVENT_OVERLAY_NEXT,
+   /* Deletes the gamepad Delete Gamepad asked about */
+   CMD_EVENT_OVERLAY_GAMEPAD_DELETE,
    CMD_EVENT_OSK_TOGGLE,
    CMD_EVENT_RELOAD_CONFIG,
 #ifdef HAVE_MICROPHONE

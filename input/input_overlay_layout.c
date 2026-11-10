@@ -3015,6 +3015,33 @@ bool input_overlay_layout_profile_load(const char *name)
    return true;
 }
 
+/* The gamepad Delete Gamepad asks about, until it is answered */
+static char input_overlay_profile_asked[NAME_MAX_LENGTH];
+
+void input_overlay_layout_profile_delete_ask(const char *name)
+{
+   strlcpy(input_overlay_profile_asked, name ? name : "",
+         sizeof(input_overlay_profile_asked));
+}
+
+void input_overlay_layout_profile_delete_asked(void)
+{
+   char _msg[256];
+   size_t _len;
+   if (!*input_overlay_profile_asked)
+      return;
+   _len = snprintf(_msg, sizeof(_msg), msg_hash_to_str(
+         input_overlay_layout_profile_delete(input_overlay_profile_asked)
+         ? MSG_OVERLAY_LAYOUT_PROFILE_DELETED
+         : MSG_OVERLAY_LAYOUT_PROFILE_FAILED), input_overlay_profile_asked);
+   *input_overlay_profile_asked = '\0';
+   runloop_msg_queue_push(_msg, MIN(_len, sizeof(_msg) - 1), 1, 180, true,
+         NULL, MESSAGE_QUEUE_ICON_DEFAULT, MESSAGE_QUEUE_CATEGORY_INFO);
+#ifdef HAVE_MENU
+   menu_state_get_ptr()->flags |= MENU_ST_FLAG_ENTRIES_NEED_REFRESH;
+#endif
+}
+
 /* Any gamepad, a built-in one too (Reset Gamepad brings that back);
  * the one shown is loaded again without it */
 bool input_overlay_layout_profile_delete(const char *name)

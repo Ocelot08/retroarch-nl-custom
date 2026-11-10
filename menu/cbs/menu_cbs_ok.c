@@ -6926,32 +6926,22 @@ static int action_ok_overlay_custom_remove(const char *path,
    return 0;
 }
 
-/* Pressed once, a gamepad is only asked about: pressed again on it
- * soon after, it is deleted */
+/* Asked about first, as Quit is, when confirmations are shown */
 static int action_ok_overlay_layout_profile_delete_item(const char *path,
       const char *label, unsigned type, size_t idx, size_t entry_idx)
 {
-   static char asked[NAME_MAX_LENGTH];
-   static retro_time_t asked_at;
-   retro_time_t now = cpu_features_get_time_usec();
+   settings_t *settings = config_get_ptr();
 
-   if (     !path
-         || !string_is_equal(asked, path)
-         || now - asked_at > 3000000)
+   input_overlay_layout_profile_delete_ask(path);
+   if (settings->bools.menu_show_confirm)
    {
-      strlcpy(asked, path ? path : "", sizeof(asked));
-      asked_at = now;
-      action_ok_overlay_layout_profile_msg(
-            MSG_OVERLAY_LAYOUT_PROFILE_DELETE_CONFIRM, path, NULL);
-      return 0;
+      struct menu_state *menu_st = menu_state_get_ptr();
+      menu_dialog_confirm_set(menu_st,
+            MSG_OVERLAY_LAYOUT_PROFILE_DELETE_CONFIRM,
+            CMD_EVENT_OVERLAY_GAMEPAD_DELETE);
+      return action_ok_dialog_init(menu_st);
    }
-   *asked = '\0';
-   if (!input_overlay_layout_profile_delete(path))
-      return -1;
-   action_ok_overlay_layout_profile_msg(
-         MSG_OVERLAY_LAYOUT_PROFILE_DELETED, path, NULL);
-   menu_state_get_ptr()->flags |= MENU_ST_FLAG_ENTRIES_NEED_REFRESH;
-   return 0;
+   return generic_action_ok_command(CMD_EVENT_OVERLAY_GAMEPAD_DELETE);
 }
 #endif
 
