@@ -7748,6 +7748,17 @@ void retroarch_menu_running(void)
             &runloop_st->key_event,
             &runloop_st->frontend_key_event,
             true);
+
+      /* Simple layout opens on the Game menu while a game runs */
+      if (     settings->uints.menu_layout == MENU_LAYOUT_SIMPLE
+            && (runloop_get_flags() & RUNLOOP_FLAG_CORE_RUNNING)
+            && !retroarch_ctl(RARCH_CTL_IS_DUMMY_CORE, NULL)
+            && menu_st->entries.list
+            && MENU_LIST_GET_STACK_SIZE(menu_st->entries.list, 0) <= 1)
+      {
+         bool flush_stack = false;
+         menu_driver_ctl(RARCH_MENU_CTL_SET_PENDING_QUICK_MENU, &flush_stack);
+      }
    }
 
    /* Prevent stray input */

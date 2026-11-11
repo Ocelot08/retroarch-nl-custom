@@ -1832,6 +1832,26 @@ MSG_HASH(
    "simple_about"
    )
 MSG_HASH(
+   MENU_ENUM_LABEL_SIMPLE_GAME_MENU,
+   "simple_game_menu"
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_SIMPLE_GAME_OPTIONS,
+   "simple_game_options"
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_SIMPLE_MORE,
+   "simple_more"
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_SIMPLE_HOME,
+   "simple_home"
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_DEFERRED_SIMPLE_MORE_LIST,
+   "deferred_simple_more_list"
+   )
+MSG_HASH(
    MENU_ENUM_LABEL_DEFERRED_SIMPLE_GAMES_LIST,
    "deferred_simple_games_list"
    )

@@ -4932,6 +4932,112 @@ static int menu_displaylist_parse_horizontal_list(
    return 0;
 }
 
+/* Simple layout's Game menu, in place of the Quick Menu's rows; More
+ * holds the Quick Menu as it is */
+static unsigned menu_displaylist_parse_simple_game_menu(
+      file_list_t *list, settings_t *settings)
+{
+   unsigned count      = 0;
+   bool kiosk          = settings->bools.kiosk_mode_enable;
+   rarch_system_info_t *sys_info = &runloop_state_get_ptr()->system;
+
+   if (retroarch_ctl(RARCH_CTL_IS_DUMMY_CORE, NULL))
+      return 0;
+
+   if (menu_entries_append(list,
+            msg_hash_to_str(MENU_ENUM_LABEL_VALUE_RESUME_CONTENT),
+            MENU_ENUM_LABEL_RESUME_CONTENT_STR,
+            MENU_ENUM_LABEL_RESUME_CONTENT,
+            MENU_SETTING_ACTION_RUN, 0, 0, NULL))
+      count++;
+
+   if (core_info_current_supports_savestate())
+   {
+      if (menu_entries_append(list,
+               msg_hash_to_str(MENU_ENUM_LABEL_VALUE_SAVE_STATE),
+               MENU_ENUM_LABEL_SAVE_STATE_STR,
+               MENU_ENUM_LABEL_SAVE_STATE,
+               MENU_SETTING_ACTION_SAVESTATE, 0, 0, NULL))
+         count++;
+      if (menu_entries_append(list,
+               msg_hash_to_str(MENU_ENUM_LABEL_VALUE_LOAD_STATE),
+               MENU_ENUM_LABEL_LOAD_STATE_STR,
+               MENU_ENUM_LABEL_LOAD_STATE,
+               MENU_SETTING_ACTION_LOADSTATE, 0, 0, NULL))
+         count++;
+      if (MENU_DISPLAYLIST_PARSE_SETTINGS_ENUM(list,
+               MENU_ENUM_LABEL_STATE_SLOT, PARSE_ONLY_INT, true) == 0)
+         count++;
+   }
+
+   if (disk_control_enabled(&sys_info->disk_control))
+      if (menu_entries_append(list,
+               msg_hash_to_str(MENU_ENUM_LABEL_VALUE_SIMPLE_CHANGE_DISC),
+               MENU_ENUM_LABEL_DISK_OPTIONS_STR,
+               MENU_ENUM_LABEL_DISK_OPTIONS,
+               MENU_SETTING_ACTION_CORE_DISK_OPTIONS, 0, 0, NULL))
+         count++;
+
+   if (!kiosk)
+   {
+      if (menu_entries_append(list,
+               msg_hash_to_str(MENU_ENUM_LABEL_VALUE_SIMPLE_CONTROLS),
+               MENU_ENUM_LABEL_CORE_INPUT_REMAPPING_OPTIONS_STR,
+               MENU_ENUM_LABEL_CORE_INPUT_REMAPPING_OPTIONS,
+               MENU_SETTING_ACTION, 0, 0, NULL))
+         count++;
+
+#if defined(HAVE_CG) || defined(HAVE_GLSL) || defined(HAVE_SLANG) || defined(HAVE_HLSL)
+      {
+         gfx_ctx_flags_t flags;
+         flags.flags     = 0;
+         video_context_driver_get_flags(&flags);
+
+         if (     BIT32_GET(flags.flags, GFX_CTX_FLAGS_SHADERS_SLANG)
+               || BIT32_GET(flags.flags, GFX_CTX_FLAGS_SHADERS_GLSL)
+               || BIT32_GET(flags.flags, GFX_CTX_FLAGS_SHADERS_CG)
+               || BIT32_GET(flags.flags, GFX_CTX_FLAGS_SHADERS_HLSL))
+            if (menu_entries_append(list,
+                     msg_hash_to_str(MENU_ENUM_LABEL_VALUE_SIMPLE_SCREEN),
+                     MENU_ENUM_LABEL_SHADER_OPTIONS_STR,
+                     MENU_ENUM_LABEL_SHADER_OPTIONS,
+                     MENU_SETTING_ACTION, 0, 0, NULL))
+               count++;
+      }
+#endif
+
+      if (menu_entries_append(list,
+               msg_hash_to_str(MENU_ENUM_LABEL_VALUE_SIMPLE_GAME_OPTIONS),
+               MENU_ENUM_LABEL_SIMPLE_GAME_OPTIONS_STR,
+               MENU_ENUM_LABEL_SIMPLE_GAME_OPTIONS,
+               MENU_SETTING_ACTION, 0, 0, NULL))
+         count++;
+   }
+
+   if (menu_entries_append(list,
+            msg_hash_to_str(MENU_ENUM_LABEL_VALUE_SIMPLE_MORE),
+            MENU_ENUM_LABEL_SIMPLE_MORE_STR,
+            MENU_ENUM_LABEL_SIMPLE_MORE,
+            MENU_SETTING_ACTION, 0, 0, NULL))
+      count++;
+
+   if (menu_entries_append(list,
+            msg_hash_to_str(MENU_ENUM_LABEL_VALUE_SIMPLE_HOME),
+            MENU_ENUM_LABEL_SIMPLE_HOME_STR,
+            MENU_ENUM_LABEL_SIMPLE_HOME,
+            MENU_SETTING_ACTION, 0, 0, NULL))
+      count++;
+
+   if (menu_entries_append(list,
+            msg_hash_to_str(MENU_ENUM_LABEL_VALUE_SIMPLE_CLOSE_GAME),
+            MENU_ENUM_LABEL_CLOSE_CONTENT_STR,
+            MENU_ENUM_LABEL_CLOSE_CONTENT,
+            MENU_SETTING_ACTION_CLOSE, 0, 0, NULL))
+      count++;
+
+   return count;
+}
+
 static int menu_displaylist_parse_load_content_settings(
       file_list_t *list, settings_t *settings,
       bool horizontal)
@@ -9565,8 +9671,17 @@ static unsigned menu_displaylist_parse_simple_home(
    if (     (runloop_get_flags() & RUNLOOP_FLAG_CORE_RUNNING)
          && !retroarch_ctl(RARCH_CTL_IS_DUMMY_CORE, NULL))
    {
-      if (MENU_DISPLAYLIST_PARSE_SETTINGS_ENUM(list,
-               MENU_ENUM_LABEL_CONTENT_SETTINGS, PARSE_ACTION, false) == 0)
+      if (menu_entries_append(list,
+               msg_hash_to_str(MENU_ENUM_LABEL_VALUE_SIMPLE_BACK_TO_GAME),
+               MENU_ENUM_LABEL_RESUME_CONTENT_STR,
+               MENU_ENUM_LABEL_RESUME_CONTENT,
+               MENU_SETTING_ACTION_RUN, 0, 0, NULL))
+         count++;
+      if (menu_entries_append(list,
+               msg_hash_to_str(MENU_ENUM_LABEL_VALUE_SIMPLE_GAME_MENU),
+               MENU_ENUM_LABEL_SIMPLE_GAME_MENU_STR,
+               MENU_ENUM_LABEL_SIMPLE_GAME_MENU,
+               MENU_SETTING_ACTION, 0, 0, NULL))
          count++;
    }
    else if (     g_defaults.content_history
@@ -10339,8 +10454,13 @@ unsigned menu_displaylist_build_list(
 #endif
          break;
       case DISPLAYLIST_CONTENT_SETTINGS:
-         count = menu_displaylist_parse_load_content_settings(list,
-               settings, false);
+      case DISPLAYLIST_SIMPLE_MORE_LIST:
+         if (     type == DISPLAYLIST_CONTENT_SETTINGS
+               && settings->uints.menu_layout == MENU_LAYOUT_SIMPLE)
+            count = menu_displaylist_parse_simple_game_menu(list, settings);
+         else
+            count = menu_displaylist_parse_load_content_settings(list,
+                  settings, false);
 
          if (count == 0)
             if (menu_entries_append(list,
@@ -18509,6 +18629,7 @@ static bool menu_displaylist_ctl_internal(
          case DISPLAYLIST_SIMPLE_GAMES_LIST:
          case DISPLAYLIST_SIMPLE_SETTINGS_LIST:
          case DISPLAYLIST_SIMPLE_HELP_LIST:
+         case DISPLAYLIST_SIMPLE_MORE_LIST:
             menu_entries_clear(info->list);
             count = menu_displaylist_build_list(info->list,
                   settings, type, false);

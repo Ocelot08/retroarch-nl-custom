@@ -479,6 +479,8 @@ static enum msg_hash_enums action_ok_dl_to_enum(unsigned lbl)
          return MENU_ENUM_LABEL_DEFERRED_SIMPLE_SETTINGS_LIST;
       case ACTION_OK_DL_SIMPLE_HELP_LIST:
          return MENU_ENUM_LABEL_DEFERRED_SIMPLE_HELP_LIST;
+      case ACTION_OK_DL_SIMPLE_MORE_LIST:
+         return MENU_ENUM_LABEL_DEFERRED_SIMPLE_MORE_LIST;
       case ACTION_OK_DL_USER_INTERFACE_SETTINGS_LIST:
          return MENU_ENUM_LABEL_DEFERRED_USER_INTERFACE_SETTINGS_LIST;
       case ACTION_OK_DL_AI_SERVICE_SETTINGS_LIST:
@@ -1960,6 +1962,7 @@ int generic_action_ok_displaylist_push(
       case ACTION_OK_DL_SIMPLE_GAMES_LIST:
       case ACTION_OK_DL_SIMPLE_SETTINGS_LIST:
       case ACTION_OK_DL_SIMPLE_HELP_LIST:
+      case ACTION_OK_DL_SIMPLE_MORE_LIST:
       case ACTION_OK_DL_USER_INTERFACE_SETTINGS_LIST:
       case ACTION_OK_DL_AI_SERVICE_SETTINGS_LIST:
 #ifdef HAVE_SMBCLIENT
@@ -2191,6 +2194,7 @@ static const ok_dl_map_t ok_dl_map[] = {
    { MENU_ENUM_LABEL_SIMPLE_INTERFACE, ACTION_OK_DL_USER_INTERFACE_SETTINGS_LIST },
    { MENU_ENUM_LABEL_SIMPLE_SETTINGS, ACTION_OK_DL_SIMPLE_SETTINGS_LIST },
    { MENU_ENUM_LABEL_SIMPLE_HELP, ACTION_OK_DL_SIMPLE_HELP_LIST },
+   { MENU_ENUM_LABEL_SIMPLE_MORE, ACTION_OK_DL_SIMPLE_MORE_LIST },
    { MENU_ENUM_LABEL_SETTINGS_VIEWS_SETTINGS, ACTION_OK_DL_SETTINGS_VIEWS_SETTINGS_LIST },
    { MENU_ENUM_LABEL_QUICK_MENU_VIEWS_SETTINGS, ACTION_OK_DL_QUICK_MENU_VIEWS_SETTINGS_LIST },
    { MENU_ENUM_LABEL_USER_INTERFACE_SETTINGS, ACTION_OK_DL_USER_INTERFACE_SETTINGS_LIST },
@@ -9246,7 +9250,17 @@ static int action_ok_simple_alias(const char *path,
          MENU_ENUM_LABEL_SETTINGS },
       { MENU_ENUM_LABEL_SIMPLE_ABOUT,
          MENU_ENUM_LABEL_INFORMATION_LIST },
+      { MENU_ENUM_LABEL_SIMPLE_GAME_MENU,
+         MENU_ENUM_LABEL_CONTENT_SETTINGS },
    };
+
+   /* An empty path is the top level of the core options */
+   if (string_is_equal(label, MENU_ENUM_LABEL_SIMPLE_GAME_OPTIONS_STR))
+      return generic_action_ok_displaylist_push(
+            "", NULL,
+            MENU_ENUM_LABEL_CORE_OPTIONS_STR, type,
+            idx, entry_idx,
+            ACTION_OK_DL_CORE_OPTIONS_LIST);
 
    for (i = 0; i < ARRAY_SIZE(aliases); i++)
       if (string_is_equal(label, msg_hash_to_str(aliases[i][0])))
@@ -9258,6 +9272,13 @@ static int action_ok_simple_alias(const char *path,
                idx, entry_idx,
                ACTION_OK_DL_PUSH_DEFAULT);
       }
+   return 0;
+}
+
+static int action_ok_simple_home(const char *path,
+      const char *label, unsigned type, size_t idx, size_t entry_idx)
+{
+   menu_entries_flush_stack(MENU_ENUM_LABEL_MAIN_MENU_STR, 0);
    return 0;
 }
 
@@ -10780,6 +10801,9 @@ static int menu_cbs_init_bind_ok_compare_label(menu_file_list_cbs_t *cbs,
          {MENU_ENUM_LABEL_SIMPLE_PLAY_ONLINE, action_ok_simple_alias},
          {MENU_ENUM_LABEL_SIMPLE_ALL_SETTINGS, action_ok_simple_alias},
          {MENU_ENUM_LABEL_SIMPLE_ABOUT, action_ok_simple_alias},
+         {MENU_ENUM_LABEL_SIMPLE_GAME_MENU, action_ok_simple_alias},
+         {MENU_ENUM_LABEL_SIMPLE_GAME_OPTIONS, action_ok_simple_alias},
+         {MENU_ENUM_LABEL_SIMPLE_HOME, action_ok_simple_home},
          {MENU_ENUM_LABEL_FRONTEND_COUNTERS,                   action_ok_push_default},
          {MENU_ENUM_LABEL_CORE_COUNTERS,                       action_ok_push_default},
          {MENU_ENUM_LABEL_ONLINE_UPDATER,                      action_ok_push_default},

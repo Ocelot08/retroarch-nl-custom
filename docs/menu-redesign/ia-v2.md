@@ -38,7 +38,7 @@
 | Settings, Downloads, Help (L2 and deeper) | Header and list; plain header outside games | L2-A |
 | Values | Toggle and number on the row; short choice opens below; visual choice gets a page of previews; long choice is RetroArch's list | P1, P2, P4 |
 | Game detail | Full-bleed art | D2 |
-| Save slots | List with screenshots | S1 |
+| Save slots | Save State, Load State and State Slot on the Game menu; a list with screenshots later | S1 (later) |
 | Prompts | Sheet from the bottom | T2 |
 | Quit, delete, reset | Whole-screen question | T3 |
 | Button capture | Press a button, with countdown | T4 |
@@ -52,7 +52,7 @@
 
 ```
 Home
-├─ Continue: <last game>       resumes mid-game; "Back to Game" while one is running
+├─ Continue: <last game>       resumes mid-game
 ├─ Games ›                     8 SYSTEMS (one system: 412 GAMES)
 ├─ Downloads ›                 24 EMULATORS, or 3 UPDATES in yellow
 ├─ Settings ›                  rotates through its categories
@@ -66,23 +66,29 @@ Home
 - **Settings:** names its categories in turn, about 4 s each with a short fade. It stops while being navigated or after a touch, and follows Android's "Remove animations".
 - **Help:** help topics until Quick Setup is done and about 5 games have been started (from the play history), then "+ QUIT".
 
+**While a game is running,** Home is reached from the Game menu's Home row. Continue is replaced by two rows: **Back to Game** and **Game Menu**.
+
 ## Game menu (game running)
 
 ```
-Game menu                      over the paused game
+Game menu                      over the paused game; the menu button opens here
 ├─ Resume
-├─ Save Progress               auto-numbered, with a screenshot
-├─ Load Progress ›             saves with screenshots and times; Undo Load at the top
+├─ Save State                  to the slot below, with a screenshot
+├─ Load State                  from the slot below
+├─ State Slot (0)              changed in place; the slot's screenshot shows beside the menu
 ├─ Change Disc ›               only for multi-disc games
 ├─ Controls ›                  Show Touch Controls, Touch Layout, Edit Touch Layout, Change Buttons, Turbo, More
 ├─ Screen ›                    Screen Style, Screen Shape, Orientation, More (shaders, scaling)
 ├─ Game Options ›              core options
 ├─ More ›                      Fast-Forward & Rewind, Cheats, Achievements, Take Screenshot,
 │                              Add to Favorites, Restart Game, Saved Settings for This Game,
-│                              Latency, Game Info
+│                              Latency, Game Info. Until those pages exist, More is the
+│                              Quick Menu unchanged (Undo Save/Load State is there).
 ├─ Home                        the top of the menu
 └─ Close Game
 ```
+
+Save State and Load State keep RetroArch's names, which players already know. State Slot stays on this level so it can be changed without opening a list. A list of saves with screenshots and times (S1) can come later, opened from the State Slot row.
 
 ## Games
 
@@ -188,7 +194,7 @@ Checked against the Android build. `config_save_on_exit` and Touch Support are a
 | `savestate_auto_save`, `savestate_auto_load` | off | on (Resume Where I Left Off) |
 | `savestate_auto_index` | off | on (Number Saves Automatically) |
 | `savestate_max_keep` | 0 (all) | a limit, e.g. 10 |
-| `savestate_thumbnail_enable` | off on ARM | on (Load Progress needs it) |
+| `savestate_thumbnail_enable` | off on ARM | on (the slot's screenshot beside the Game menu) |
 | `menu_singleclick_playlists` | off | on |
 | `input_overlay_hide_when_gamepad_connected` | off | on (Show Touch Controls: Auto) |
 

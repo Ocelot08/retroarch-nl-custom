@@ -33390,6 +33390,42 @@ MSG_HASH(
    "About"
    )
 MSG_HASH(
+   MENU_ENUM_LABEL_VALUE_SIMPLE_MORE,
+   "More"
+   )
+MSG_HASH(
+   MENU_ENUM_SUBLABEL_SIMPLE_MORE,
+   "Everything else for this game: screenshots, favorites, cheats, rewind, latency and saved settings."
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_VALUE_SIMPLE_HOME,
+   "Home"
+   )
+MSG_HASH(
+   MENU_ENUM_SUBLABEL_SIMPLE_HOME,
+   "The top of the menu, for games, downloads, settings and help. The game stays paused."
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_VALUE_SIMPLE_GAME_MENU,
+   "Game Menu"
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_VALUE_SIMPLE_GAME_OPTIONS,
+   "Game Options"
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_VALUE_SIMPLE_BACK_TO_GAME,
+   "Back to Game"
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_VALUE_SIMPLE_CHANGE_DISC,
+   "Change Disc"
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_VALUE_SIMPLE_CLOSE_GAME,
+   "Close Game"
+   )
+MSG_HASH(
    MENU_ENUM_LABEL_VALUE_OVERLAY_CUSTOM_BUTTONS,
    "Custom Buttons"
    )
