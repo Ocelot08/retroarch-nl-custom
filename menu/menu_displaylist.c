@@ -9554,6 +9554,86 @@ static unsigned menu_displaylist_parse_input_controllers(
    return count;
 }
 
+/* Simple layout's Home: Continue (or the Quick Menu while a game
+ * runs), Games, Downloads, Settings and Help */
+static unsigned menu_displaylist_parse_simple_home(
+      file_list_t *list, settings_t *settings)
+{
+   unsigned count = 0;
+   bool kiosk     = settings->bools.kiosk_mode_enable;
+
+   if (     (runloop_get_flags() & RUNLOOP_FLAG_CORE_RUNNING)
+         && !retroarch_ctl(RARCH_CTL_IS_DUMMY_CORE, NULL))
+   {
+      if (MENU_DISPLAYLIST_PARSE_SETTINGS_ENUM(list,
+               MENU_ENUM_LABEL_CONTENT_SETTINGS, PARSE_ACTION, false) == 0)
+         count++;
+   }
+   else if (     g_defaults.content_history
+              && playlist_size(g_defaults.content_history) > 0)
+   {
+      const struct playlist_entry *entry = NULL;
+
+      playlist_get_index(g_defaults.content_history, 0, &entry);
+
+      if (entry && entry->path && *entry->path)
+      {
+         size_t _len;
+         char title[NAME_MAX_LENGTH];
+
+         _len  = strlcpy(title,
+               msg_hash_to_str(MENU_ENUM_LABEL_VALUE_SIMPLE_CONTINUE),
+               sizeof(title));
+         _len += strlcpy(title + _len, ": ", sizeof(title) - _len);
+         if (entry->label && *entry->label)
+            strlcpy(title + _len, entry->label, sizeof(title) - _len);
+         else
+            fill_pathname(title + _len, path_basename(entry->path), "",
+                  sizeof(title) - _len);
+
+         if (menu_entries_append(list, title,
+                  MENU_ENUM_LABEL_SIMPLE_CONTINUE_STR,
+                  MENU_ENUM_LABEL_SIMPLE_CONTINUE,
+                  MENU_SETTING_ACTION, 0, 0, NULL))
+            count++;
+      }
+   }
+
+   if (menu_entries_append(list,
+            msg_hash_to_str(MENU_ENUM_LABEL_VALUE_SIMPLE_GAMES),
+            MENU_ENUM_LABEL_SIMPLE_GAMES_STR,
+            MENU_ENUM_LABEL_SIMPLE_GAMES,
+            MENU_SETTING_ACTION, 0, 0, NULL))
+      count++;
+
+#if defined(HAVE_NETWORKING) && defined(HAVE_ONLINE_UPDATER)
+   if (settings->bools.menu_show_online_updater && !kiosk)
+      if (menu_entries_append(list,
+               msg_hash_to_str(MENU_ENUM_LABEL_VALUE_SIMPLE_DOWNLOADS),
+               MENU_ENUM_LABEL_SIMPLE_DOWNLOADS_STR,
+               MENU_ENUM_LABEL_SIMPLE_DOWNLOADS,
+               MENU_SETTING_ACTION, 0, 0, NULL))
+         count++;
+#endif
+
+   if (!kiosk)
+      if (menu_entries_append(list,
+               msg_hash_to_str(MENU_ENUM_LABEL_VALUE_SIMPLE_SETTINGS),
+               MENU_ENUM_LABEL_SIMPLE_SETTINGS_STR,
+               MENU_ENUM_LABEL_SIMPLE_SETTINGS,
+               MENU_SETTING_ACTION, 0, 0, NULL))
+         count++;
+
+   if (menu_entries_append(list,
+            msg_hash_to_str(MENU_ENUM_LABEL_VALUE_SIMPLE_HELP),
+            MENU_ENUM_LABEL_SIMPLE_HELP_STR,
+            MENU_ENUM_LABEL_SIMPLE_HELP,
+            MENU_SETTING_ACTION, 0, 0, NULL))
+      count++;
+
+   return count;
+}
+
 unsigned menu_displaylist_build_list(
       file_list_t *list,
       settings_t *settings,
@@ -9567,6 +9647,104 @@ unsigned menu_displaylist_build_list(
 
    switch (type)
    {
+      case DISPLAYLIST_SIMPLE_GAMES_LIST:
+         {
+            /* Plain names for lists the classic menu already has */
+            static const enum msg_hash_enums rows[][2] = {
+               { MENU_ENUM_LABEL_VALUE_SIMPLE_SYSTEMS,
+                  MENU_ENUM_LABEL_PLAYLISTS_TAB },
+               { MENU_ENUM_LABEL_VALUE_SIMPLE_ADD_GAMES_FOLDER,
+                  MENU_ENUM_LABEL_SIMPLE_ADD_GAMES_FOLDER },
+               { MENU_ENUM_LABEL_VALUE_SIMPLE_BROWSE_FILES,
+                  MENU_ENUM_LABEL_SIMPLE_BROWSE_FILES },
+#ifdef HAVE_NETWORKING
+               { MENU_ENUM_LABEL_VALUE_SIMPLE_PLAY_ONLINE,
+                  MENU_ENUM_LABEL_SIMPLE_PLAY_ONLINE },
+#endif
+               { MENU_ENUM_LABEL_VALUE_CORE_LIST,
+                  MENU_ENUM_LABEL_CORE_LIST },
+            };
+
+            if (     settings->bools.menu_content_show_history
+                  && g_defaults.content_history)
+               if (menu_entries_append(list,
+                        playlist_get_conf_path(g_defaults.content_history),
+                        MENU_ENUM_LABEL_LOAD_CONTENT_HISTORY_STR,
+                        MENU_ENUM_LABEL_LOAD_CONTENT_HISTORY,
+                        MENU_SETTING_ACTION, 0, 0, NULL))
+                  count++;
+
+            if (settings->bools.menu_content_show_favorites)
+               if (menu_entries_append(list,
+                        playlist_get_conf_path(g_defaults.content_favorites),
+                        MENU_ENUM_LABEL_GOTO_FAVORITES_STR,
+                        MENU_ENUM_LABEL_GOTO_FAVORITES,
+                        MENU_SETTING_ACTION, 0, 0, NULL))
+                  count++;
+
+            for (i = 0; i < ARRAY_SIZE(rows); i++)
+            {
+               if (     rows[i][1] == MENU_ENUM_LABEL_SIMPLE_ADD_GAMES_FOLDER
+                     && settings->bools.kiosk_mode_enable)
+                  continue;
+               if (menu_entries_append(list,
+                        msg_hash_to_str(rows[i][0]),
+                        msg_hash_to_str(rows[i][1]),
+                        rows[i][1], MENU_SETTING_ACTION, 0, 0, NULL))
+                  count++;
+            }
+         }
+         break;
+      case DISPLAYLIST_SIMPLE_SETTINGS_LIST:
+         {
+            static const enum msg_hash_enums rows[][2] = {
+               { MENU_ENUM_LABEL_VALUE_SIMPLE_CONTROLS,
+                  MENU_ENUM_LABEL_SIMPLE_CONTROLS },
+               { MENU_ENUM_LABEL_VALUE_SIMPLE_SCREEN,
+                  MENU_ENUM_LABEL_SIMPLE_SCREEN },
+               { MENU_ENUM_LABEL_VALUE_SIMPLE_SOUND,
+                  MENU_ENUM_LABEL_SIMPLE_SOUND },
+               { MENU_ENUM_LABEL_VALUE_SIMPLE_SAVING,
+                  MENU_ENUM_LABEL_SIMPLE_SAVING },
+               { MENU_ENUM_LABEL_VALUE_SIMPLE_LIBRARY,
+                  MENU_ENUM_LABEL_SIMPLE_LIBRARY },
+               { MENU_ENUM_LABEL_VALUE_SIMPLE_ACCOUNTS,
+                  MENU_ENUM_LABEL_SIMPLE_ACCOUNTS },
+               { MENU_ENUM_LABEL_VALUE_ACCESSIBILITY_SETTINGS,
+                  MENU_ENUM_LABEL_ACCESSIBILITY_SETTINGS },
+               { MENU_ENUM_LABEL_VALUE_SIMPLE_INTERFACE,
+                  MENU_ENUM_LABEL_SIMPLE_INTERFACE },
+               { MENU_ENUM_LABEL_VALUE_SIMPLE_ALL_SETTINGS,
+                  MENU_ENUM_LABEL_SIMPLE_ALL_SETTINGS },
+            };
+
+            for (i = 0; i < ARRAY_SIZE(rows); i++)
+               if (menu_entries_append(list,
+                        msg_hash_to_str(rows[i][0]),
+                        msg_hash_to_str(rows[i][1]),
+                        rows[i][1], MENU_SETTING_ACTION, 0, 0, NULL))
+                  count++;
+         }
+         break;
+      case DISPLAYLIST_SIMPLE_HELP_LIST:
+         if (MENU_DISPLAYLIST_PARSE_SETTINGS_ENUM(list,
+                  MENU_ENUM_LABEL_MENU_LAYOUT, PARSE_ONLY_UINT, false) == 0)
+            count++;
+         if (menu_entries_append(list,
+                  msg_hash_to_str(MENU_ENUM_LABEL_VALUE_SIMPLE_ABOUT),
+                  MENU_ENUM_LABEL_SIMPLE_ABOUT_STR,
+                  MENU_ENUM_LABEL_SIMPLE_ABOUT,
+                  MENU_SETTING_ACTION, 0, 0, NULL))
+            count++;
+#if !TARGET_OS_IPHONE
+         if (MENU_DISPLAYLIST_PARSE_SETTINGS_ENUM(list,
+                  MENU_ENUM_LABEL_RESTART_RETROARCH, PARSE_ACTION, false) == 0)
+            count++;
+         if (MENU_DISPLAYLIST_PARSE_SETTINGS_ENUM(list,
+                  MENU_ENUM_LABEL_QUIT_RETROARCH, PARSE_ACTION, false) == 0)
+            count++;
+#endif
+         break;
       case DISPLAYLIST_OPTIONS_OVERRIDES:
          {
             char config_directory[DIR_MAX_LENGTH];
@@ -12542,6 +12720,7 @@ unsigned menu_displaylist_build_list(
                {MENU_ENUM_LABEL_QUIT_ON_CLOSE_CONTENT,                                 PARSE_ONLY_UINT,   true},
                {MENU_ENUM_LABEL_MENU_REMEMBER_SELECTION,                               PARSE_ONLY_UINT,   true},
                {MENU_ENUM_LABEL_MENU_STARTUP_PAGE,                                     PARSE_ONLY_UINT,   true},
+               {MENU_ENUM_LABEL_MENU_LAYOUT,                                           PARSE_ONLY_UINT,   true},
                {MENU_ENUM_LABEL_CONFIRM_QUIT,                                          PARSE_ONLY_BOOL,   true},
                {MENU_ENUM_LABEL_CONFIRM_CLOSE,                                         PARSE_ONLY_BOOL,   true},
                {MENU_ENUM_LABEL_CONFIRM_RESET,                                         PARSE_ONLY_BOOL,   true},
@@ -18327,6 +18506,9 @@ static bool menu_displaylist_ctl_internal(
          case DISPLAYLIST_OPTIONS_NFS_CLIENT:
 #endif
          case DISPLAYLIST_OPTIONS_OVERRIDES:
+         case DISPLAYLIST_SIMPLE_GAMES_LIST:
+         case DISPLAYLIST_SIMPLE_SETTINGS_LIST:
+         case DISPLAYLIST_SIMPLE_HELP_LIST:
             menu_entries_clear(info->list);
             count = menu_displaylist_build_list(info->list,
                   settings, type, false);
@@ -18692,6 +18874,13 @@ static bool menu_displaylist_ctl_internal(
             break;
          case DISPLAYLIST_MAIN_MENU:
             menu_entries_clear(info->list);
+            if (settings->uints.menu_layout == MENU_LAYOUT_SIMPLE)
+            {
+               count        = menu_displaylist_parse_simple_home(
+                     info->list, settings);
+               info->flags |= MD_FLAG_NEED_PUSH;
+               break;
+            }
             {
                rarch_system_info_t *sys_info = &runloop_state_get_ptr()->system;
                const char *menu_ident        = menu_driver_ident();

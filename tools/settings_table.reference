@@ -403,11 +403,11 @@ bool	menu_show_overlays	1	1
 bool	filter_by_current_core	1	0
 bool	rgui_background_filler_thickness_enable	1	1
 bool	rgui_border_filler_thickness_enable	1	1
-bool	rgui_border_filler_enable	1	1
+bool	rgui_border_filler_enable	1	0
 bool	input_overlay_enable	1	config_overlay_enable_default()
 bool	input_overlay_enable_autopreferred	1	1
 bool	input_overlay_behind_menu	1	0
-bool	input_overlay_hide_in_menu	1	1
+bool	input_overlay_hide_in_menu	1	0
 bool	input_overlay_hide_when_gamepad_connected	1	0
 bool	input_overlay_show_mouse_cursor	1	0
 bool	keyboard_gamepad_enable	1	1
@@ -571,6 +571,7 @@ uint	quit_on_close_content	1	QUIT_ON_CLOSE_CONTENT_DISABLED
 uint	menu_screensaver_timeout	1	0
 uint	menu_remember_selection	1	MENU_REMEMBER_SELECTION_ALWAYS
 uint	menu_startup_page	1	MENU_STARTUP_PAGE_MAIN_MENU
+uint	menu_layout	1	MENU_LAYOUT_CLASSIC
 uint	netplay_share_digital	1	RARCH_NETPLAY_SHARE_DIGITAL_NO_SHARING
 uint	netplay_share_analog	1	RARCH_NETPLAY_SHARE_ANALOG_NO_SHARING
 uint	keyboard_gamepad_mapping_type	1	1
@@ -607,7 +608,7 @@ uint	rgui_thumbnail_downscaler	1	RGUI_THUMB_SCALE_POINT
 uint	rgui_thumbnail_delay	1	0
 uint	menu_thumbnail_upscale_threshold	1	0
 uint	xmb_menu_color_theme	1	XMB_THEME_ELECTRIC_BLUE
-uint	rgui_menu_color_theme	1	RGUI_THEME_CLASSIC_GREEN
+uint	rgui_menu_color_theme	1	RGUI_THEME_CUSTOM
 uint	rgui_aspect_ratio	1	RGUI_ASPECT_RATIO_4_3
 uint	rgui_aspect_ratio_lock	1	RGUI_ASPECT_RATIO_LOCK_NONE
 uint	video_record_threads	1	2
@@ -1301,6 +1302,7 @@ uint	quit_on_close_content	1	QUIT_ON_CLOSE_CONTENT_DISABLED
 uint	menu_screensaver_timeout	1	0
 uint	menu_remember_selection	1	MENU_REMEMBER_SELECTION_ALWAYS
 uint	menu_startup_page	1	MENU_STARTUP_PAGE_MAIN_MENU
+uint	menu_layout	1	MENU_LAYOUT_CLASSIC
 uint	netplay_share_digital	1	RARCH_NETPLAY_SHARE_DIGITAL_NO_SHARING
 uint	netplay_share_analog	1	RARCH_NETPLAY_SHARE_ANALOG_NO_SHARING
 uint	keyboard_gamepad_mapping_type	1	1
@@ -2050,6 +2052,7 @@ uint	quit_on_close_content	1	QUIT_ON_CLOSE_CONTENT_DISABLED
 uint	menu_screensaver_timeout	1	0
 uint	menu_remember_selection	1	MENU_REMEMBER_SELECTION_ALWAYS
 uint	menu_startup_page	1	MENU_STARTUP_PAGE_MAIN_MENU
+uint	menu_layout	1	MENU_LAYOUT_CLASSIC
 uint	netplay_share_digital	1	RARCH_NETPLAY_SHARE_DIGITAL_NO_SHARING
 uint	netplay_share_analog	1	RARCH_NETPLAY_SHARE_ANALOG_NO_SHARING
 uint	keyboard_gamepad_mapping_type	1	1

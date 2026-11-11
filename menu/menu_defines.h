@@ -98,6 +98,13 @@ enum menu_startup_page_type
    MENU_STARTUP_PAGE_LAST
 };
 
+enum menu_layout_type
+{
+   MENU_LAYOUT_CLASSIC = 0,
+   MENU_LAYOUT_SIMPLE,
+   MENU_LAYOUT_LAST
+};
+
 enum menu_image_type
 {
    MENU_IMAGE_NONE = 0,

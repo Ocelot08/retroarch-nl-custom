@@ -1764,6 +1764,86 @@ MSG_HASH(
    "deferred_overlay_custom_input_list"
    )
 MSG_HASH(
+   MENU_ENUM_LABEL_SIMPLE_CONTINUE,
+   "simple_continue"
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_SIMPLE_GAMES,
+   "simple_games"
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_SIMPLE_SETTINGS,
+   "simple_settings"
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_SIMPLE_HELP,
+   "simple_help"
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_SIMPLE_CONTROLS,
+   "simple_controls"
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_SIMPLE_SCREEN,
+   "simple_screen"
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_SIMPLE_SOUND,
+   "simple_sound"
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_SIMPLE_SAVING,
+   "simple_saving"
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_SIMPLE_LIBRARY,
+   "simple_library"
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_SIMPLE_ACCOUNTS,
+   "simple_accounts"
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_SIMPLE_INTERFACE,
+   "simple_interface"
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_SIMPLE_DOWNLOADS,
+   "simple_downloads"
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_SIMPLE_ADD_GAMES_FOLDER,
+   "simple_add_games_folder"
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_SIMPLE_BROWSE_FILES,
+   "simple_browse_files"
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_SIMPLE_PLAY_ONLINE,
+   "simple_play_online"
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_SIMPLE_ALL_SETTINGS,
+   "simple_all_settings"
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_SIMPLE_ABOUT,
+   "simple_about"
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_DEFERRED_SIMPLE_GAMES_LIST,
+   "deferred_simple_games_list"
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_DEFERRED_SIMPLE_SETTINGS_LIST,
+   "deferred_simple_settings_list"
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_DEFERRED_SIMPLE_HELP_LIST,
+   "deferred_simple_help_list"
+   )
+MSG_HASH(
    MENU_ENUM_LABEL_OVERLAY_LAYOUT_PROFILE_LOAD_ITEM,
    "overlay_layout_profile_load_item"
    )

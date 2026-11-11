@@ -11,3 +11,11 @@ Working files for the phone-first menu redesign.
 
 Each proposed structure is a separate `ia-vN.md`, so versions can be
 compared and tried one at a time.
+
+## Test builds
+
+APKs built from the menu redesign work are labelled as RGUI tests until
+the new menu driver exists: the app name and the APK file name both say
+"RetroArch Custom (RGUI test)", set at build time, not in
+`pkg/android/phoenix/build.gradle`. The Simple layout is turned on in
+Settings › User Interface › Menu Layout.

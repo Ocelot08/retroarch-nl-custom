@@ -473,6 +473,12 @@ static enum msg_hash_enums action_ok_dl_to_enum(unsigned lbl)
          return MENU_ENUM_LABEL_DEFERRED_QUICK_MENU_VIEWS_SETTINGS_LIST;
       case ACTION_OK_DL_QUICK_MENU_OVERRIDE_OPTIONS_LIST:
          return MENU_ENUM_LABEL_DEFERRED_QUICK_MENU_OVERRIDE_OPTIONS;
+      case ACTION_OK_DL_SIMPLE_GAMES_LIST:
+         return MENU_ENUM_LABEL_DEFERRED_SIMPLE_GAMES_LIST;
+      case ACTION_OK_DL_SIMPLE_SETTINGS_LIST:
+         return MENU_ENUM_LABEL_DEFERRED_SIMPLE_SETTINGS_LIST;
+      case ACTION_OK_DL_SIMPLE_HELP_LIST:
+         return MENU_ENUM_LABEL_DEFERRED_SIMPLE_HELP_LIST;
       case ACTION_OK_DL_USER_INTERFACE_SETTINGS_LIST:
          return MENU_ENUM_LABEL_DEFERRED_USER_INTERFACE_SETTINGS_LIST;
       case ACTION_OK_DL_AI_SERVICE_SETTINGS_LIST:
@@ -1951,6 +1957,9 @@ int generic_action_ok_displaylist_push(
       case ACTION_OK_DL_SETTINGS_VIEWS_SETTINGS_LIST:
       case ACTION_OK_DL_QUICK_MENU_VIEWS_SETTINGS_LIST:
       case ACTION_OK_DL_QUICK_MENU_OVERRIDE_OPTIONS_LIST:
+      case ACTION_OK_DL_SIMPLE_GAMES_LIST:
+      case ACTION_OK_DL_SIMPLE_SETTINGS_LIST:
+      case ACTION_OK_DL_SIMPLE_HELP_LIST:
       case ACTION_OK_DL_USER_INTERFACE_SETTINGS_LIST:
       case ACTION_OK_DL_AI_SERVICE_SETTINGS_LIST:
 #ifdef HAVE_SMBCLIENT
@@ -2172,6 +2181,16 @@ static const ok_dl_map_t ok_dl_map[] = {
    { MENU_ENUM_LABEL_MENU_SETTINGS, ACTION_OK_DL_MENU_SETTINGS_LIST },
    { MENU_ENUM_LABEL_MENU_VIEWS_SETTINGS, ACTION_OK_DL_MENU_VIEWS_SETTINGS_LIST },
    { MENU_ENUM_LABEL_QUICK_MENU_OVERRIDE_OPTIONS, ACTION_OK_DL_QUICK_MENU_OVERRIDE_OPTIONS_LIST },
+   { MENU_ENUM_LABEL_SIMPLE_GAMES, ACTION_OK_DL_SIMPLE_GAMES_LIST },
+   { MENU_ENUM_LABEL_SIMPLE_CONTROLS, ACTION_OK_DL_INPUT_SETTINGS_LIST },
+   { MENU_ENUM_LABEL_SIMPLE_SCREEN, ACTION_OK_DL_VIDEO_SETTINGS_LIST },
+   { MENU_ENUM_LABEL_SIMPLE_SOUND, ACTION_OK_DL_AUDIO_SETTINGS_LIST },
+   { MENU_ENUM_LABEL_SIMPLE_SAVING, ACTION_OK_DL_SAVING_SETTINGS_LIST },
+   { MENU_ENUM_LABEL_SIMPLE_LIBRARY, ACTION_OK_DL_PLAYLIST_SETTINGS_LIST },
+   { MENU_ENUM_LABEL_SIMPLE_ACCOUNTS, ACTION_OK_DL_USER_SETTINGS_LIST },
+   { MENU_ENUM_LABEL_SIMPLE_INTERFACE, ACTION_OK_DL_USER_INTERFACE_SETTINGS_LIST },
+   { MENU_ENUM_LABEL_SIMPLE_SETTINGS, ACTION_OK_DL_SIMPLE_SETTINGS_LIST },
+   { MENU_ENUM_LABEL_SIMPLE_HELP, ACTION_OK_DL_SIMPLE_HELP_LIST },
    { MENU_ENUM_LABEL_SETTINGS_VIEWS_SETTINGS, ACTION_OK_DL_SETTINGS_VIEWS_SETTINGS_LIST },
    { MENU_ENUM_LABEL_QUICK_MENU_VIEWS_SETTINGS, ACTION_OK_DL_QUICK_MENU_VIEWS_SETTINGS_LIST },
    { MENU_ENUM_LABEL_USER_INTERFACE_SETTINGS, ACTION_OK_DL_USER_INTERFACE_SETTINGS_LIST },
@@ -3129,6 +3148,60 @@ static bool playlist_entry_path_is_valid(const char *entry_path)
    }
 
    return path_is_valid(entry_path);
+}
+
+/* Simple layout's Continue: the newest History entry, with its core */
+static int action_ok_simple_continue(const char *path,
+      const char *label, unsigned type, size_t idx, size_t entry_idx)
+{
+   char content_path[PATH_MAX_LENGTH];
+   char content_label[NAME_MAX_LENGTH];
+   char core_path[PATH_MAX_LENGTH];
+   const struct playlist_entry *entry = NULL;
+   core_info_t *core_info             = NULL;
+   playlist_t *history                = g_defaults.content_history;
+   const char *_msg                   = NULL;
+
+   if (history && playlist_size(history) > 0)
+      playlist_get_index(history, 0, &entry);
+
+   if (     entry
+         && entry->path && *entry->path
+         && playlist_entry_has_core(entry))
+   {
+      bool builtin = string_ends_with_size(entry->core_path, "builtin",
+            strlen(entry->core_path), STRLEN_CONST("builtin"));
+
+      strlcpy(content_path, entry->path, sizeof(content_path));
+      playlist_resolve_path(PLAYLIST_LOAD, false,
+            content_path, sizeof(content_path));
+      content_label[0] = '\0';
+      if (entry->label && *entry->label)
+         strlcpy(content_label, entry->label, sizeof(content_label));
+
+      if (builtin)
+         strlcpy(core_path, entry->core_path, sizeof(core_path));
+      else if (     (core_info = playlist_entry_get_core_info(entry))
+                 && core_info->path && *core_info->path)
+         strlcpy(core_path, core_info->path, sizeof(core_path));
+      else
+      {
+         strlcpy(core_path, entry->core_path, sizeof(core_path));
+         playlist_resolve_path(PLAYLIST_LOAD, true,
+               core_path, sizeof(core_path));
+      }
+
+      if (     (builtin || path_is_valid(core_path))
+            && playlist_entry_path_is_valid(content_path))
+         return default_action_ok_load_content_from_playlist_from_menu(
+               core_path, content_path,
+               *content_label ? content_label : NULL);
+   }
+
+   _msg = msg_hash_to_str(MSG_FAILED_TO_LOAD_FROM_PLAYLIST);
+   runloop_msg_queue_push(_msg, strlen(_msg), 1, 100, true, NULL,
+         MESSAGE_QUEUE_ICON_DEFAULT, MESSAGE_QUEUE_CATEGORY_ERROR);
+   return 0;
 }
 
 static int action_ok_playlist_entry_collection(const char *path,
@@ -9154,6 +9227,40 @@ static int action_ok_push_default(const char *path,
          ACTION_OK_DL_PUSH_DEFAULT);
 }
 
+/* Simple rows under plain names for lists the classic menu opens
+ * by label: their own label keeps the setting's name off the row */
+static int action_ok_simple_alias(const char *path,
+      const char *label, unsigned type, size_t idx, size_t entry_idx)
+{
+   size_t i;
+   static const enum msg_hash_enums aliases[][2] = {
+      { MENU_ENUM_LABEL_SIMPLE_DOWNLOADS,
+         MENU_ENUM_LABEL_ONLINE_UPDATER },
+      { MENU_ENUM_LABEL_SIMPLE_ADD_GAMES_FOLDER,
+         MENU_ENUM_LABEL_ADD_CONTENT_LIST },
+      { MENU_ENUM_LABEL_SIMPLE_BROWSE_FILES,
+         MENU_ENUM_LABEL_LOAD_CONTENT_LIST },
+      { MENU_ENUM_LABEL_SIMPLE_PLAY_ONLINE,
+         MENU_ENUM_LABEL_NETPLAY },
+      { MENU_ENUM_LABEL_SIMPLE_ALL_SETTINGS,
+         MENU_ENUM_LABEL_SETTINGS },
+      { MENU_ENUM_LABEL_SIMPLE_ABOUT,
+         MENU_ENUM_LABEL_INFORMATION_LIST },
+   };
+
+   for (i = 0; i < ARRAY_SIZE(aliases); i++)
+      if (string_is_equal(label, msg_hash_to_str(aliases[i][0])))
+      {
+         filebrowser_clear_type();
+         return generic_action_ok_displaylist_push(
+               path, NULL,
+               msg_hash_to_str(aliases[i][1]), type,
+               idx, entry_idx,
+               ACTION_OK_DL_PUSH_DEFAULT);
+      }
+   return 0;
+}
+
 static int action_ok_start_core(const char *path,
       const char *label, unsigned type, size_t idx, size_t entry_idx)
 {
@@ -10666,6 +10773,13 @@ static int menu_cbs_init_bind_ok_compare_label(menu_file_list_cbs_t *cbs,
          {MENU_ENUM_LABEL_ACHIEVEMENT_LIST,                    action_ok_push_default},
          {MENU_ENUM_LABEL_DISK_OPTIONS,                        action_ok_push_default},
          {MENU_ENUM_LABEL_SETTINGS,                            action_ok_push_default},
+         {MENU_ENUM_LABEL_SIMPLE_CONTINUE,                     action_ok_simple_continue},
+         {MENU_ENUM_LABEL_SIMPLE_DOWNLOADS, action_ok_simple_alias},
+         {MENU_ENUM_LABEL_SIMPLE_ADD_GAMES_FOLDER, action_ok_simple_alias},
+         {MENU_ENUM_LABEL_SIMPLE_BROWSE_FILES, action_ok_simple_alias},
+         {MENU_ENUM_LABEL_SIMPLE_PLAY_ONLINE, action_ok_simple_alias},
+         {MENU_ENUM_LABEL_SIMPLE_ALL_SETTINGS, action_ok_simple_alias},
+         {MENU_ENUM_LABEL_SIMPLE_ABOUT, action_ok_simple_alias},
          {MENU_ENUM_LABEL_FRONTEND_COUNTERS,                   action_ok_push_default},
          {MENU_ENUM_LABEL_CORE_COUNTERS,                       action_ok_push_default},
          {MENU_ENUM_LABEL_ONLINE_UPDATER,                      action_ok_push_default},

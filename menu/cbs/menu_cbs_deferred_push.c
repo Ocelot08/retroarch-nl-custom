@@ -98,6 +98,9 @@ GENERIC_DEFERRED_PUSH(deferred_push_video_shader_preset_manager,    DISPLAYLIST_
 GENERIC_DEFERRED_PUSH(deferred_push_settings,                       DISPLAYLIST_SETTINGS_ALL)
 GENERIC_DEFERRED_PUSH(deferred_push_shader_options,                 DISPLAYLIST_OPTIONS_SHADERS)
 GENERIC_DEFERRED_PUSH(deferred_push_quick_menu_override_options,    DISPLAYLIST_OPTIONS_OVERRIDES)
+GENERIC_DEFERRED_PUSH(deferred_push_simple_games_list,              DISPLAYLIST_SIMPLE_GAMES_LIST)
+GENERIC_DEFERRED_PUSH(deferred_push_simple_settings_list,           DISPLAYLIST_SIMPLE_SETTINGS_LIST)
+GENERIC_DEFERRED_PUSH(deferred_push_simple_help_list,               DISPLAYLIST_SIMPLE_HELP_LIST)
 GENERIC_DEFERRED_PUSH(deferred_push_options,                        DISPLAYLIST_OPTIONS)
 GENERIC_DEFERRED_PUSH(deferred_push_netplay,                        DISPLAYLIST_NETPLAY_ROOM_LIST)
 GENERIC_DEFERRED_PUSH(deferred_push_netplay_sublist,                DISPLAYLIST_NETPLAY)
@@ -837,6 +840,9 @@ static int menu_cbs_init_bind_deferred_push_compare_label(
       {MENU_ENUM_LABEL_DEFERRED_INPUT_CONTROLLERS_LIST, deferred_push_input_controllers_list},
       {MENU_ENUM_LABEL_DEFERRED_INPUT_HOTKEY_BINDS_LIST, deferred_push_input_hotkey_binds_list},
       {MENU_ENUM_LABEL_DEFERRED_QUICK_MENU_OVERRIDE_OPTIONS, deferred_push_quick_menu_override_options},
+      {MENU_ENUM_LABEL_DEFERRED_SIMPLE_GAMES_LIST, deferred_push_simple_games_list},
+      {MENU_ENUM_LABEL_DEFERRED_SIMPLE_SETTINGS_LIST, deferred_push_simple_settings_list},
+      {MENU_ENUM_LABEL_DEFERRED_SIMPLE_HELP_LIST, deferred_push_simple_help_list},
       {MENU_ENUM_LABEL_DEFERRED_ACCOUNTS_YOUTUBE_LIST, deferred_push_accounts_youtube_list},
       {MENU_ENUM_LABEL_DEFERRED_ACCOUNTS_TWITCH_LIST, deferred_push_accounts_twitch_list},
       {MENU_ENUM_LABEL_DEFERRED_ACCOUNTS_FACEBOOK_LIST, deferred_push_accounts_facebook_list},

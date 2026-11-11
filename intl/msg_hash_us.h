@@ -33290,6 +33290,106 @@ MSG_HASH(
    "Pick a gamepad file (.cfg) to copy in among the gamepads. One of the same name is replaced."
    )
 MSG_HASH(
+   MENU_ENUM_LABEL_VALUE_SIMPLE_CONTINUE,
+   "Continue"
+   )
+MSG_HASH(
+   MENU_ENUM_SUBLABEL_SIMPLE_CONTINUE,
+   "Start the last game played again, with its emulator."
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_VALUE_SIMPLE_GAMES,
+   "Games"
+   )
+MSG_HASH(
+   MENU_ENUM_SUBLABEL_SIMPLE_GAMES,
+   "Recent games, favorites, systems, and adding games."
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_VALUE_SIMPLE_SETTINGS,
+   "Settings"
+   )
+MSG_HASH(
+   MENU_ENUM_SUBLABEL_SIMPLE_SETTINGS,
+   "Controls, screen, sound, saving and more. All Settings has everything."
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_VALUE_SIMPLE_HELP,
+   "Help"
+   )
+MSG_HASH(
+   MENU_ENUM_SUBLABEL_SIMPLE_HELP,
+   "Menu layout, information about this device, restart and quit."
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_VALUE_MENU_LAYOUT_CLASSIC,
+   "Classic"
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_VALUE_MENU_LAYOUT_SIMPLE,
+   "Simple"
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_VALUE_SIMPLE_DOWNLOADS,
+   "Downloads"
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_VALUE_SIMPLE_RECENT,
+   "Recent"
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_VALUE_SIMPLE_SYSTEMS,
+   "Systems"
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_VALUE_SIMPLE_ADD_GAMES_FOLDER,
+   "Add Games Folder"
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_VALUE_SIMPLE_BROWSE_FILES,
+   "Browse Files"
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_VALUE_SIMPLE_PLAY_ONLINE,
+   "Play Online"
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_VALUE_SIMPLE_CONTROLS,
+   "Controls"
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_VALUE_SIMPLE_SCREEN,
+   "Screen"
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_VALUE_SIMPLE_SOUND,
+   "Sound"
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_VALUE_SIMPLE_SAVING,
+   "Saving"
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_VALUE_SIMPLE_LIBRARY,
+   "Library"
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_VALUE_SIMPLE_ACCOUNTS,
+   "Accounts"
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_VALUE_SIMPLE_INTERFACE,
+   "Interface"
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_VALUE_SIMPLE_ALL_SETTINGS,
+   "All Settings"
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_VALUE_SIMPLE_ABOUT,
+   "About"
+   )
+MSG_HASH(
    MENU_ENUM_LABEL_VALUE_OVERLAY_CUSTOM_BUTTONS,
    "Custom Buttons"
    )

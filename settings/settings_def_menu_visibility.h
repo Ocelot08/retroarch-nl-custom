@@ -25,6 +25,15 @@ S_UINT_EX(menu_startup_page, MENU_STARTUP_PAGE,
 /* The configuration row lives under defined(HAVE_MENU); other passes are
  * unaffected. */
 #if !defined(SETTINGS_DEF_CONFIG_PASS) || (defined(HAVE_MENU))
+S_UINT_EX(menu_layout, MENU_LAYOUT,
+      "menu_layout",
+      DEFAULT_MENU_LAYOUT, SD_FLAG_NONE, SDESC_RANGE_MINMAX, 0, 0, MENU_LAYOUT_LAST-1, 1, 0, setting_action_ok_uint, setting_get_string_representation_uint_menu_layout, NULL, NULL, setting_uint_action_left_with_refresh, setting_uint_action_right_with_refresh, ST_UI_TYPE_UINT_COMBOBOX,
+      "Menu Layout",
+      "Classic shows every menu as RetroArch has them. Simple shows a short Home with Games, Downloads, Settings and Help.")
+#endif
+/* The configuration row lives under defined(HAVE_MENU); other passes are
+ * unaffected. */
+#if !defined(SETTINGS_DEF_CONFIG_PASS) || (defined(HAVE_MENU))
 S_BOOL(menu_mouse_enable, MOUSE_ENABLE,
       "menu_mouse_enable",
       DEFAULT_MOUSE_ENABLE, SD_FLAG_ADVANCED, 0, 0,

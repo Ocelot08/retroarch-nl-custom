@@ -9580,6 +9580,26 @@ static size_t setting_get_string_representation_uint_menu_startup_page(
    return 0;
 }
 
+static size_t setting_get_string_representation_uint_menu_layout(
+      rarch_setting_t *setting, char *s, size_t len)
+{
+   if (setting)
+   {
+      switch (*setting->value.target.unsigned_integer)
+      {
+         case MENU_LAYOUT_CLASSIC:
+            return strlcpy(s,
+                  msg_hash_to_str(MENU_ENUM_LABEL_VALUE_MENU_LAYOUT_CLASSIC),
+                  len);
+         case MENU_LAYOUT_SIMPLE:
+            return strlcpy(s,
+                  msg_hash_to_str(MENU_ENUM_LABEL_VALUE_MENU_LAYOUT_SIMPLE),
+                  len);
+      }
+   }
+   return 0;
+}
+
 #ifdef HAVE_MIST
 static size_t setting_get_string_representation_steam_rich_presence_format(
       rarch_setting_t *setting, char *s, size_t len)
