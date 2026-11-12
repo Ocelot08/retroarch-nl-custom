@@ -193,6 +193,7 @@ bool	menu_texture_mipmapping	1	1
 bool	menu_pause_libretro	1	1
 bool	menu_savestate_resume	1	1
 bool	menu_insert_disk_resume	1	1
+bool	menu_simple_gamepad_mode	1	0
 bool	menu_mouse_enable	1	0
 bool	menu_pointer_enable	1	1
 bool	netplay_nat_traversal	1	1
@@ -930,6 +931,7 @@ bool	menu_texture_mipmapping	1	1
 bool	menu_pause_libretro	1	1
 bool	menu_savestate_resume	1	1
 bool	menu_insert_disk_resume	1	1
+bool	menu_simple_gamepad_mode	1	0
 bool	menu_mouse_enable	1	1
 bool	menu_pointer_enable	1	0
 bool	netplay_nat_traversal	1	1
@@ -1664,6 +1666,7 @@ bool	menu_texture_mipmapping	1	1
 bool	menu_pause_libretro	1	1
 bool	menu_savestate_resume	1	1
 bool	menu_insert_disk_resume	1	1
+bool	menu_simple_gamepad_mode	1	0
 bool	menu_mouse_enable	1	1
 bool	menu_pointer_enable	1	0
 bool	netplay_nat_traversal	1	1

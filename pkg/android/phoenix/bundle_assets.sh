@@ -34,6 +34,9 @@ cp -R "$src/retroarch-joypad-autoconfig/android" "$dst/autoconfig/"
 cp "$src/libretro-core-info/"*.info "$dst/info/"
 # RGUI theme presets of this build; Highlighter is the default
 cp "$here/rgui_themes/"*.cfg "$dst/assets/rgui/"
+# Fonts of the simple menu driver
+mkdir -p "$dst/assets/simple"
+cp "$here/simple_fonts/"* "$dst/assets/simple/"
 # The DS and 3DS overlays the built-in gamepads of those names are made
 # from (Named_Overlays_Custom; picked by overrides, not by system), with
 # their buttons (made by system_overlays/make_overlays.py)

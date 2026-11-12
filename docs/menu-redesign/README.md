@@ -19,11 +19,24 @@ compared and tried one at a time.
 
 ## Test builds
 
-APKs built from the menu redesign work are labelled as RGUI tests until
-the new menu driver exists: the app name and the APK file name both say
-"RetroArch Custom (RGUI test)", set at build time, not in
-`pkg/android/phoenix/build.gradle`. The Simple layout is turned on in
-Settings › User Interface › Menu Layout.
+Test APKs are labelled with what they test, so they can be told apart.
+
+- RGUI test: "RetroArch Custom (RGUI test)", for the Simple layout in
+  RGUI. The Simple layout is turned on in Settings › User Interface ›
+  Menu Layout.
+- Simple test: "RetroArch Custom (Simple test)", for the simple menu
+  driver. Built with
+
+  ```
+  cd pkg/android/phoenix
+  sh bundle_assets.sh
+  ./gradlew -PsimpleMenuTest assembleCustomDebug
+  ```
+
+  `-PsimpleMenuTest` gives the app its own id (`com.retroarch.custom.simpletest`),
+  so it installs beside RetroArch Custom, and makes it start in the
+  simple driver with the Simple layout. The APK is signed with the
+  build machine's debug key; no signing key is in the repository.
 
 ## Simple menu driver (style test)
 
@@ -31,13 +44,17 @@ Settings › User Interface › Menu Layout.
 others in Settings › Drivers › Menu. It draws whatever list is open with
 the Simple type and spacing: Work Sans Light for words, IBM Plex Mono for
 notes and values, sizes in dp on a 360 dp wide design. Use it with Menu
-Layout set to Simple. It takes taps and the menu buttons; it has no drag
-scrolling, dialogs, keyboard, images or art yet.
+Layout set to Simple. It takes taps and the menu buttons; the breadcrumb
+line goes back. It has no drag scrolling, keyboard, images or art yet,
+and dialogs are a plain card.
 
-The fonts are read from `<assets>/simple/`:
+Gamepad Mode (Help, or Settings › User Interface) draws the menu in a 4:3
+box at the top, smaller, with button hints, and shows the touch controls
+below it to work the menu with. Without it the menu fills the screen and
+the touch controls are hidden while the menu is open. Other drivers keep
+"Hide Overlay in Menu" as it is.
 
-- `WorkSans-Light.ttf` (Work Sans, SIL Open Font Licence 1.1)
-- `IBMPlexMono-Medium.ttf` (IBM Plex Mono, SIL Open Font Licence 1.1)
-
-They are not in the repository yet. If either is missing the driver uses
-the default font. An APK with this driver needs them added to its assets.
+The fonts are in `pkg/android/phoenix/simple_fonts/` with their licences
+(SIL Open Font Licence 1.1); `bundle_assets.sh` copies them to
+`<assets>/simple/`, where the driver reads them. Work Sans is the Latin
+subset. If a font is missing the driver uses the default font.

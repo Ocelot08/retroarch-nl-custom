@@ -13889,7 +13889,7 @@ static bool input_overlay_want_hidden(void)
    bool hide            = false;
 
 #ifdef HAVE_MENU
-   if (settings->bools.input_overlay_hide_in_menu)
+   if (menu_driver_overlay_hidden(settings))
       hide = (menu_state_get_ptr()->flags & MENU_ST_FLAG_ALIVE) != 0;
 #endif
    if (settings->bools.input_overlay_hide_when_gamepad_connected

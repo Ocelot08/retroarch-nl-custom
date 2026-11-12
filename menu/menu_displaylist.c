@@ -9911,6 +9911,9 @@ unsigned menu_displaylist_build_list(
          if (MENU_DISPLAYLIST_PARSE_SETTINGS_ENUM(list,
                   MENU_ENUM_LABEL_MENU_LAYOUT, PARSE_ONLY_UINT, false) == 0)
             count++;
+         if (MENU_DISPLAYLIST_PARSE_SETTINGS_ENUM(list,
+                  MENU_ENUM_LABEL_MENU_SIMPLE_GAMEPAD_MODE, PARSE_ONLY_BOOL, false) == 0)
+            count++;
          if (menu_entries_append(list,
                   msg_hash_to_str(MENU_ENUM_LABEL_VALUE_SIMPLE_ABOUT),
                   MENU_ENUM_LABEL_SIMPLE_ABOUT_STR,
@@ -12907,6 +12910,7 @@ unsigned menu_displaylist_build_list(
                {MENU_ENUM_LABEL_MENU_REMEMBER_SELECTION,                               PARSE_ONLY_UINT,   true},
                {MENU_ENUM_LABEL_MENU_STARTUP_PAGE,                                     PARSE_ONLY_UINT,   true},
                {MENU_ENUM_LABEL_MENU_LAYOUT,                                           PARSE_ONLY_UINT,   true},
+               {MENU_ENUM_LABEL_MENU_SIMPLE_GAMEPAD_MODE,                              PARSE_ONLY_BOOL,   true},
                {MENU_ENUM_LABEL_CONFIRM_QUIT,                                          PARSE_ONLY_BOOL,   true},
                {MENU_ENUM_LABEL_CONFIRM_CLOSE,                                         PARSE_ONLY_BOOL,   true},
                {MENU_ENUM_LABEL_CONFIRM_RESET,                                         PARSE_ONLY_BOOL,   true},

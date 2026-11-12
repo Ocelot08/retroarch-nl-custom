@@ -781,6 +781,10 @@ bool menu_driver_drop_uri_list(char *list);
 
 int generic_menu_entry_action(void *userdata, menu_entry_t *entry, size_t i, enum menu_action action);
 
+#ifdef HAVE_OVERLAY
+bool menu_driver_overlay_hidden(const settings_t *settings);
+#endif
+
 void menu_entries_build_scroll_indices(
       struct menu_state *menu_st,
       file_list_t *list);

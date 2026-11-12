@@ -30,6 +30,11 @@ S_UINT_EX(menu_layout, MENU_LAYOUT,
       DEFAULT_MENU_LAYOUT, SD_FLAG_NONE, SDESC_RANGE_MINMAX, 0, 0, MENU_LAYOUT_LAST-1, 1, 0, setting_action_ok_uint, setting_get_string_representation_uint_menu_layout, NULL, NULL, setting_uint_action_left_with_refresh, setting_uint_action_right_with_refresh, ST_UI_TYPE_UINT_COMBOBOX,
       "Menu Layout",
       "Classic shows every menu as RetroArch has them. Simple shows a short Home with Games, Downloads, Settings and Help.")
+S_BOOL(menu_simple_gamepad_mode, MENU_SIMPLE_GAMEPAD_MODE,
+      "menu_simple_gamepad_mode",
+      DEFAULT_MENU_SIMPLE_GAMEPAD_MODE, SD_FLAG_NONE, 0, 0,
+      "Gamepad Mode",
+      "In the Simple menu driver, show the menu above the touch controls and work it with them.")
 #endif
 /* The configuration row lives under defined(HAVE_MENU); other passes are
  * unaffected. */

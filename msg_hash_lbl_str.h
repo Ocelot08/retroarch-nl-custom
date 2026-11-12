@@ -1434,6 +1434,7 @@ extern const struct msg_hash_us_lbl_blob_s msg_hash_us_lbl_blob;
 #define MENU_ENUM_LABEL_MENU_REMEMBER_SELECTION_STR (msg_hash_us_lbl_blob.m_MENU_ENUM_LABEL_MENU_REMEMBER_SELECTION)
 #define MENU_ENUM_LABEL_MENU_STARTUP_PAGE_STR (msg_hash_us_lbl_blob.m_MENU_ENUM_LABEL_MENU_STARTUP_PAGE)
 #define MENU_ENUM_LABEL_MENU_LAYOUT_STR (msg_hash_us_lbl_blob.m_MENU_ENUM_LABEL_MENU_LAYOUT)
+#define MENU_ENUM_LABEL_MENU_SIMPLE_GAMEPAD_MODE_STR (msg_hash_us_lbl_blob.m_MENU_ENUM_LABEL_MENU_SIMPLE_GAMEPAD_MODE)
 #define MENU_ENUM_LABEL_MOUSE_ENABLE_STR (msg_hash_us_lbl_blob.m_MENU_ENUM_LABEL_MOUSE_ENABLE)
 #define MENU_ENUM_LABEL_POINTER_ENABLE_STR (msg_hash_us_lbl_blob.m_MENU_ENUM_LABEL_POINTER_ENABLE)
 #define MENU_ENUM_LABEL_NETPLAY_NAT_TRAVERSAL_STR (msg_hash_us_lbl_blob.m_MENU_ENUM_LABEL_NETPLAY_NAT_TRAVERSAL)
@@ -3283,6 +3284,7 @@ extern const struct msg_hash_us_lbl_blob_s msg_hash_us_lbl_blob;
 #define MENU_ENUM_LABEL_MENU_REMEMBER_SELECTION_STR "menu_remember_selection"
 #define MENU_ENUM_LABEL_MENU_STARTUP_PAGE_STR "menu_startup_page"
 #define MENU_ENUM_LABEL_MENU_LAYOUT_STR "menu_layout"
+#define MENU_ENUM_LABEL_MENU_SIMPLE_GAMEPAD_MODE_STR "menu_simple_gamepad_mode"
 #define MENU_ENUM_LABEL_MOUSE_ENABLE_STR "menu_mouse_enable"
 #define MENU_ENUM_LABEL_POINTER_ENABLE_STR "menu_pointer_enable"
 #define MENU_ENUM_LABEL_NETPLAY_NAT_TRAVERSAL_STR "netplay_nat_traversal"

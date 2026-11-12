@@ -378,6 +378,17 @@ const menu_ctx_driver_t *menu_ctx_drivers[] = {
 };
 
 static struct menu_state menu_driver_state = { 0 };
+
+#ifdef HAVE_OVERLAY
+/* The simple driver shows the touch controls only in gamepad mode */
+bool menu_driver_overlay_hidden(const settings_t *settings)
+{
+   const menu_ctx_driver_t *ctx = menu_driver_state.driver_ctx;
+   if (ctx && ctx->ident && string_is_equal(ctx->ident, "simple"))
+      return !settings->bools.menu_simple_gamepad_mode;
+   return settings->bools.input_overlay_hide_in_menu;
+}
+#endif
 static bool menu_pointer_outside_press;
 static char *menu_media_launch_path;
 static bool menu_media_launch_browsing;
@@ -7555,7 +7566,7 @@ void menu_driver_toggle(
 #endif
 #endif
 #ifdef HAVE_OVERLAY
-      input_overlay_hide_in_menu      = settings->bools.input_overlay_hide_in_menu;
+      input_overlay_hide_in_menu      = menu_driver_overlay_hidden(settings);
       input_overlay_enable            = settings->bools.input_overlay_enable;
 #endif
       video_adaptive_vsync            = settings->bools.video_adaptive_vsync;
@@ -7697,7 +7708,7 @@ void retroarch_menu_running(void)
    video_driver_state_t *video_st  = video_state_get_ptr();
    settings_t *settings            = config_get_ptr();
 #ifdef HAVE_OVERLAY
-   bool input_overlay_hide_in_menu = settings->bools.input_overlay_hide_in_menu;
+   bool input_overlay_hide_in_menu = menu_driver_overlay_hidden(settings);
 #endif
 #ifdef HAVE_AUDIOMIXER
    bool audio_enable_menu          = settings->bools.audio_enable_menu;
@@ -7906,7 +7917,7 @@ void retroarch_menu_running_finished(bool quit)
             false, false);
 #ifdef HAVE_OVERLAY
    if (!quit)
-      if (settings && settings->bools.input_overlay_hide_in_menu)
+      if (settings && menu_driver_overlay_hidden(settings))
          input_overlay_init();
 #endif
 }
