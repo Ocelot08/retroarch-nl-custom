@@ -38,6 +38,30 @@ Test APKs are labelled with what they test, so they can be told apart.
   simple driver with the Simple layout. The APK is signed with the
   build machine's debug key; no signing key is in the repository.
 
+## Rollback
+
+Test apps install beside the working app, never over it: the Simple test
+is `com.retroarch.custom.simpletest`, the working app is
+`com.retroarch.custom`.
+
+Known-good points from before the menu redesign:
+
+- `d265c2c505`, the tip of `custom` (the default branch) when this work
+  started.
+- `0596aea4bc`, the last commit on this branch before the redesign
+  (10 Nov 2026); everything after it is menu redesign work.
+
+To keep the installed working app, copy its APK off the phone before
+testing, and note its version:
+
+```
+adb shell dumpsys package com.retroarch.custom | grep -E "versionName|versionCode|lastUpdateTime"
+adb shell pm path com.retroarch.custom
+adb pull <path printed above> retroarch-custom-known-good.apk
+```
+
+To put it back: `adb install -r -d retroarch-custom-known-good.apk`.
+
 ## Simple menu driver (style test)
 
 `menu/drivers/simple.c` is a new menu driver, `simple`, chosen like the
