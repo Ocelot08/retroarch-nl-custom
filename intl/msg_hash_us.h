@@ -33342,8 +33342,8 @@ MSG_HASH(
    "Systems"
    )
 MSG_HASH(
-   MENU_ENUM_LABEL_VALUE_SIMPLE_ADD_GAMES_FOLDER,
-   "Add Games Folder"
+   MENU_ENUM_LABEL_VALUE_SIMPLE_ADD_GAMES,
+   "Add Games"
    )
 MSG_HASH(
    MENU_ENUM_LABEL_VALUE_SIMPLE_BROWSE_FILES,
@@ -33404,6 +33404,14 @@ MSG_HASH(
 MSG_HASH(
    MENU_ENUM_SUBLABEL_SIMPLE_HOME,
    "The top of the menu, for games, downloads, settings and help. The game stays paused."
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_VALUE_SIMPLE_GAMES_MORE,
+   "More"
+   )
+MSG_HASH(
+   MENU_ENUM_SUBLABEL_SIMPLE_GAMES_MORE,
+   "Browse Files, Load Core, Explore, contentless cores, images, music, video and discs."
    )
 MSG_HASH(
    MENU_ENUM_LABEL_VALUE_SIMPLE_GAME_MENU,

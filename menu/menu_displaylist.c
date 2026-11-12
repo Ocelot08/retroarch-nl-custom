@@ -9768,16 +9768,14 @@ unsigned menu_displaylist_build_list(
             static const enum msg_hash_enums rows[][2] = {
                { MENU_ENUM_LABEL_VALUE_SIMPLE_SYSTEMS,
                   MENU_ENUM_LABEL_PLAYLISTS_TAB },
-               { MENU_ENUM_LABEL_VALUE_SIMPLE_ADD_GAMES_FOLDER,
-                  MENU_ENUM_LABEL_SIMPLE_ADD_GAMES_FOLDER },
-               { MENU_ENUM_LABEL_VALUE_SIMPLE_BROWSE_FILES,
-                  MENU_ENUM_LABEL_SIMPLE_BROWSE_FILES },
+               { MENU_ENUM_LABEL_VALUE_SIMPLE_ADD_GAMES,
+                  MENU_ENUM_LABEL_SIMPLE_ADD_GAMES },
 #ifdef HAVE_NETWORKING
                { MENU_ENUM_LABEL_VALUE_SIMPLE_PLAY_ONLINE,
                   MENU_ENUM_LABEL_SIMPLE_PLAY_ONLINE },
 #endif
-               { MENU_ENUM_LABEL_VALUE_CORE_LIST,
-                  MENU_ENUM_LABEL_CORE_LIST },
+               { MENU_ENUM_LABEL_VALUE_SIMPLE_GAMES_MORE,
+                  MENU_ENUM_LABEL_SIMPLE_GAMES_MORE },
             };
 
             if (     settings->bools.menu_content_show_history
@@ -9799,7 +9797,7 @@ unsigned menu_displaylist_build_list(
 
             for (i = 0; i < ARRAY_SIZE(rows); i++)
             {
-               if (     rows[i][1] == MENU_ENUM_LABEL_SIMPLE_ADD_GAMES_FOLDER
+               if (     rows[i][1] == MENU_ENUM_LABEL_SIMPLE_ADD_GAMES
                      && settings->bools.kiosk_mode_enable)
                   continue;
                if (menu_entries_append(list,
@@ -9809,6 +9807,80 @@ unsigned menu_displaylist_build_list(
                   count++;
             }
          }
+         break;
+      case DISPLAYLIST_SIMPLE_GAMES_MORE_LIST:
+         if (menu_entries_append(list,
+                  msg_hash_to_str(MENU_ENUM_LABEL_VALUE_SIMPLE_BROWSE_FILES),
+                  MENU_ENUM_LABEL_SIMPLE_BROWSE_FILES_STR,
+                  MENU_ENUM_LABEL_SIMPLE_BROWSE_FILES,
+                  MENU_SETTING_ACTION, 0, 0, NULL))
+            count++;
+#ifndef HAVE_DYNAMIC
+         if (frontend_driver_has_fork())
+#endif
+         {
+            if (settings->bools.menu_show_load_core)
+               if (menu_entries_append(list,
+                        msg_hash_to_str(MENU_ENUM_LABEL_VALUE_CORE_LIST),
+                        MENU_ENUM_LABEL_CORE_LIST_STR,
+                        MENU_ENUM_LABEL_CORE_LIST,
+                        MENU_SETTING_ACTION, 0, 0, NULL))
+                  count++;
+         }
+#if defined(HAVE_LIBRETRODB)
+         if (settings->bools.menu_content_show_explore)
+            if (menu_entries_append(list,
+                     msg_hash_to_str(MENU_ENUM_LABEL_VALUE_GOTO_EXPLORE),
+                     MENU_ENUM_LABEL_GOTO_EXPLORE_STR,
+                     MENU_ENUM_LABEL_GOTO_EXPLORE,
+                     MENU_EXPLORE_TAB, 0, 0, NULL))
+               count++;
+#endif
+#if defined(HAVE_DYNAMIC)
+         if (settings->uints.menu_content_show_contentless_cores
+               != MENU_CONTENTLESS_CORES_DISPLAY_NONE)
+            if (menu_entries_append(list,
+                     msg_hash_to_str(MENU_ENUM_LABEL_VALUE_GOTO_CONTENTLESS_CORES),
+                     MENU_ENUM_LABEL_GOTO_CONTENTLESS_CORES_STR,
+                     MENU_ENUM_LABEL_GOTO_CONTENTLESS_CORES,
+                     MENU_CONTENTLESS_CORES_TAB, 0, 0, NULL))
+               count++;
+#endif
+#if defined(HAVE_IMAGEVIEWER) || defined(HAVE_MENU)
+         if (settings->bools.menu_content_show_images && g_defaults.image_history)
+            if (menu_entries_append(list,
+                     playlist_get_conf_path(g_defaults.image_history),
+                     MENU_ENUM_LABEL_GOTO_IMAGES_STR,
+                     MENU_ENUM_LABEL_GOTO_IMAGES,
+                     MENU_SETTING_ACTION, 0, 0, NULL))
+               count++;
+#endif
+         if (settings->bools.menu_content_show_music && g_defaults.music_history)
+            if (menu_entries_append(list,
+                     playlist_get_conf_path(g_defaults.music_history),
+                     MENU_ENUM_LABEL_GOTO_MUSIC_STR,
+                     MENU_ENUM_LABEL_GOTO_MUSIC,
+                     MENU_SETTING_ACTION, 0, 0, NULL))
+               count++;
+#if defined(HAVE_FFMPEG) || defined(HAVE_MPV) || defined(HAVE_WEBMPLAYER)
+         if (settings->bools.menu_content_show_video && g_defaults.video_history)
+            if (menu_entries_append(list,
+                     playlist_get_conf_path(g_defaults.video_history),
+                     MENU_ENUM_LABEL_GOTO_VIDEO_STR,
+                     MENU_ENUM_LABEL_GOTO_VIDEO,
+                     MENU_SETTING_ACTION, 0, 0, NULL))
+               count++;
+#endif
+#ifdef HAVE_CDROM
+         if (settings->bools.menu_show_load_disc)
+            if (MENU_DISPLAYLIST_PARSE_SETTINGS_ENUM(list,
+                     MENU_ENUM_LABEL_LOAD_DISC, PARSE_ACTION, false) == 0)
+               count++;
+         if (settings->bools.menu_show_dump_disc)
+            if (MENU_DISPLAYLIST_PARSE_SETTINGS_ENUM(list,
+                     MENU_ENUM_LABEL_DUMP_DISC, PARSE_ACTION, false) == 0)
+               count++;
+#endif
          break;
       case DISPLAYLIST_SIMPLE_SETTINGS_LIST:
          {
@@ -18630,6 +18702,7 @@ static bool menu_displaylist_ctl_internal(
          case DISPLAYLIST_SIMPLE_SETTINGS_LIST:
          case DISPLAYLIST_SIMPLE_HELP_LIST:
          case DISPLAYLIST_SIMPLE_MORE_LIST:
+         case DISPLAYLIST_SIMPLE_GAMES_MORE_LIST:
             menu_entries_clear(info->list);
             count = menu_displaylist_build_list(info->list,
                   settings, type, false);

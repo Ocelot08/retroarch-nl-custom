@@ -481,6 +481,8 @@ static enum msg_hash_enums action_ok_dl_to_enum(unsigned lbl)
          return MENU_ENUM_LABEL_DEFERRED_SIMPLE_HELP_LIST;
       case ACTION_OK_DL_SIMPLE_MORE_LIST:
          return MENU_ENUM_LABEL_DEFERRED_SIMPLE_MORE_LIST;
+      case ACTION_OK_DL_SIMPLE_GAMES_MORE_LIST:
+         return MENU_ENUM_LABEL_DEFERRED_SIMPLE_GAMES_MORE_LIST;
       case ACTION_OK_DL_USER_INTERFACE_SETTINGS_LIST:
          return MENU_ENUM_LABEL_DEFERRED_USER_INTERFACE_SETTINGS_LIST;
       case ACTION_OK_DL_AI_SERVICE_SETTINGS_LIST:
@@ -1963,6 +1965,7 @@ int generic_action_ok_displaylist_push(
       case ACTION_OK_DL_SIMPLE_SETTINGS_LIST:
       case ACTION_OK_DL_SIMPLE_HELP_LIST:
       case ACTION_OK_DL_SIMPLE_MORE_LIST:
+      case ACTION_OK_DL_SIMPLE_GAMES_MORE_LIST:
       case ACTION_OK_DL_USER_INTERFACE_SETTINGS_LIST:
       case ACTION_OK_DL_AI_SERVICE_SETTINGS_LIST:
 #ifdef HAVE_SMBCLIENT
@@ -2195,6 +2198,7 @@ static const ok_dl_map_t ok_dl_map[] = {
    { MENU_ENUM_LABEL_SIMPLE_SETTINGS, ACTION_OK_DL_SIMPLE_SETTINGS_LIST },
    { MENU_ENUM_LABEL_SIMPLE_HELP, ACTION_OK_DL_SIMPLE_HELP_LIST },
    { MENU_ENUM_LABEL_SIMPLE_MORE, ACTION_OK_DL_SIMPLE_MORE_LIST },
+   { MENU_ENUM_LABEL_SIMPLE_GAMES_MORE, ACTION_OK_DL_SIMPLE_GAMES_MORE_LIST },
    { MENU_ENUM_LABEL_SETTINGS_VIEWS_SETTINGS, ACTION_OK_DL_SETTINGS_VIEWS_SETTINGS_LIST },
    { MENU_ENUM_LABEL_QUICK_MENU_VIEWS_SETTINGS, ACTION_OK_DL_QUICK_MENU_VIEWS_SETTINGS_LIST },
    { MENU_ENUM_LABEL_USER_INTERFACE_SETTINGS, ACTION_OK_DL_USER_INTERFACE_SETTINGS_LIST },
@@ -9240,7 +9244,7 @@ static int action_ok_simple_alias(const char *path,
    static const enum msg_hash_enums aliases[][2] = {
       { MENU_ENUM_LABEL_SIMPLE_DOWNLOADS,
          MENU_ENUM_LABEL_ONLINE_UPDATER },
-      { MENU_ENUM_LABEL_SIMPLE_ADD_GAMES_FOLDER,
+      { MENU_ENUM_LABEL_SIMPLE_ADD_GAMES,
          MENU_ENUM_LABEL_ADD_CONTENT_LIST },
       { MENU_ENUM_LABEL_SIMPLE_BROWSE_FILES,
          MENU_ENUM_LABEL_LOAD_CONTENT_LIST },
@@ -10796,7 +10800,7 @@ static int menu_cbs_init_bind_ok_compare_label(menu_file_list_cbs_t *cbs,
          {MENU_ENUM_LABEL_SETTINGS,                            action_ok_push_default},
          {MENU_ENUM_LABEL_SIMPLE_CONTINUE,                     action_ok_simple_continue},
          {MENU_ENUM_LABEL_SIMPLE_DOWNLOADS, action_ok_simple_alias},
-         {MENU_ENUM_LABEL_SIMPLE_ADD_GAMES_FOLDER, action_ok_simple_alias},
+         {MENU_ENUM_LABEL_SIMPLE_ADD_GAMES, action_ok_simple_alias},
          {MENU_ENUM_LABEL_SIMPLE_BROWSE_FILES, action_ok_simple_alias},
          {MENU_ENUM_LABEL_SIMPLE_PLAY_ONLINE, action_ok_simple_alias},
          {MENU_ENUM_LABEL_SIMPLE_ALL_SETTINGS, action_ok_simple_alias},

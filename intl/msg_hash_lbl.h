@@ -1812,8 +1812,8 @@ MSG_HASH(
    "simple_downloads"
    )
 MSG_HASH(
-   MENU_ENUM_LABEL_SIMPLE_ADD_GAMES_FOLDER,
-   "simple_add_games_folder"
+   MENU_ENUM_LABEL_SIMPLE_ADD_GAMES,
+   "simple_add_games"
    )
 MSG_HASH(
    MENU_ENUM_LABEL_SIMPLE_BROWSE_FILES,
@@ -1850,6 +1850,14 @@ MSG_HASH(
 MSG_HASH(
    MENU_ENUM_LABEL_DEFERRED_SIMPLE_MORE_LIST,
    "deferred_simple_more_list"
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_SIMPLE_GAMES_MORE,
+   "simple_games_more"
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_DEFERRED_SIMPLE_GAMES_MORE_LIST,
+   "deferred_simple_games_more_list"
    )
 MSG_HASH(
    MENU_ENUM_LABEL_DEFERRED_SIMPLE_GAMES_LIST,

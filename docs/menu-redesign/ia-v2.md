@@ -98,7 +98,7 @@ Games
 ├─ Favorites ›                 covers under the word
 ├─ Systems ›                   each system with a fan of covers and its count
 │  └─ <System> ›               its games A–Z; sort and search in the header
-├─ Add Games Folder ›          Import Content: scan a folder, a single file, or a manual
+├─ Add Games ›                 Import Content: scan a folder, a single file, or a manual
 │                              scan; note "2 D AGO"
 ├─ Play Online ›               netplay lobby: rich rows
 └─ More ›                      Browse Files, Load Core, Explore, Contentless Cores,
@@ -201,7 +201,7 @@ Checked against the Android build. `config_save_on_exit` and Touch Support are a
 
 ## Missing and error states
 
-- **No games:** Add Games Folder button, or Browse Files.
+- **No games:** Add Games button, or Browse Files (under More).
 - **No box art:** a cover set in type until art is fetched; Get Missing Box Art on the list.
 - **No emulator for a file:** a prompt offering the recommended one.
 - **Missing BIOS:** names the file and the folder it goes in.
