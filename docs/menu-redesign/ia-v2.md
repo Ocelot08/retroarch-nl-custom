@@ -66,7 +66,7 @@ Home
 - **Settings:** names its categories in turn, about 4 s each with a short fade. It stops while being navigated or after a touch, and follows Android's "Remove animations".
 - **Help:** help topics until Quick Setup is done and about 5 games have been started (from the play history), then "+ QUIT".
 
-**While a game is running,** Home is reached from the Game menu's Home row. Continue is replaced by two rows: **Back to Game** and **Game Menu**.
+**While a game is running,** Home is reached from the Game menu's Home row, and Continue is replaced by **Game Menu**. Going back to the game is Resume on the Game menu, so there is one way back.
 
 ## Game menu (game running)
 

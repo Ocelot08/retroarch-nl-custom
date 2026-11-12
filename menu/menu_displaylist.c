@@ -9672,12 +9672,6 @@ static unsigned menu_displaylist_parse_simple_home(
          && !retroarch_ctl(RARCH_CTL_IS_DUMMY_CORE, NULL))
    {
       if (menu_entries_append(list,
-               msg_hash_to_str(MENU_ENUM_LABEL_VALUE_SIMPLE_BACK_TO_GAME),
-               MENU_ENUM_LABEL_RESUME_CONTENT_STR,
-               MENU_ENUM_LABEL_RESUME_CONTENT,
-               MENU_SETTING_ACTION_RUN, 0, 0, NULL))
-         count++;
-      if (menu_entries_append(list,
                msg_hash_to_str(MENU_ENUM_LABEL_VALUE_SIMPLE_GAME_MENU),
                MENU_ENUM_LABEL_SIMPLE_GAME_MENU_STR,
                MENU_ENUM_LABEL_SIMPLE_GAME_MENU,

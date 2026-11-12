@@ -33422,10 +33422,6 @@ MSG_HASH(
    "Game Options"
    )
 MSG_HASH(
-   MENU_ENUM_LABEL_VALUE_SIMPLE_BACK_TO_GAME,
-   "Back to Game"
-   )
-MSG_HASH(
    MENU_ENUM_LABEL_VALUE_SIMPLE_CHANGE_DISC,
    "Change Disc"
    )
