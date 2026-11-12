@@ -27,6 +27,10 @@
 - **Yellow** means "needs you" (updates, missing files) and, in gamepad mode, the selection line. Nothing else is yellow.
 - **Rows:** a word on the left, and on the right its live note, its value, or nothing. Lists end in a More or All row set slightly apart.
 - **Gamepad mode:** the page condensed into the game screen's box, full width and up to the top edge; the selection is a yellow line; button hints along the bottom of the box.
+- **L2 headers (decided, not yet applied to the Pages frame):** no large page title. The model is the user's two edited frames in the Chosen set (Figma nodes 146:11829 and 146:11870).
+  - **Standard** (Settings): one line, "← HOME / SETTINGS" in muted small capitals at the top left, which is also the back button, with RETROARCH dim on the right. The rows start right under it.
+  - **With a summary** (Downloads): the same line, then the page name in smaller light type and a summary in small capitals ("3 UPDATES · 2 FILES MISSING"). Only for pages where one line about the whole page helps.
+  - **To do:** apply this to every L2 and deeper page in the Pages frame. Keep the summary on Downloads and its pages, Games and its lists, and Game Options; drop it elsewhere. Game pages keep their art, as a shorter band behind the header.
 
 ## Templates (the chosen set)
 
