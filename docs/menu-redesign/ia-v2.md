@@ -98,9 +98,10 @@ Games
 ├─ Favorites ›                 covers under the word
 ├─ Systems ›                   each system with a fan of covers and its count
 │  └─ <System> ›               its games A–Z; sort and search in the header
-├─ Add Games Folder            scan; note "2 D AGO"
+├─ Add Games Folder ›          Import Content: scan a folder, a single file, or a manual
+│                              scan; note "2 D AGO"
 ├─ Play Online ›               netplay lobby: rich rows
-└─ More ›                      Browse Files, Load Core, Import, Explore, Contentless Cores,
+└─ More ›                      Browse Files, Load Core, Explore, Contentless Cores,
                                Images/Music/Video, Load Disc, Dump Disc
 ```
 
