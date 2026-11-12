@@ -370,6 +370,9 @@ const menu_ctx_driver_t *menu_ctx_drivers[] = {
 #if defined(HAVE_XMB)
    &menu_ctx_xmb,
 #endif
+#if defined(HAVE_SIMPLE_MENU)
+   &menu_ctx_simple,
+#endif
    &menu_ctx_null,
    NULL
 };

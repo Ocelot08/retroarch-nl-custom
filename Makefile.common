@@ -976,11 +976,16 @@ ifeq ($(HW_CONTEXT_MENU_DRIVERS), 1)
    ifeq ($(HAVE_OZONE),)
       HAVE_OZONE = 1
    endif
+
+   ifeq ($(HAVE_SIMPLE_MENU),)
+      HAVE_SIMPLE_MENU = 1
+   endif
 else
    HAVE_RGUI        ?= 0
    HAVE_MATERIALUI  ?= 0
    HAVE_XMB         ?= 0
    HAVE_OZONE       ?= 0
+   HAVE_SIMPLE_MENU ?= 0
 endif
 
 ifeq ($(HAVE_MENU), 1)
@@ -1016,6 +1021,11 @@ ifeq ($(HAVE_MENU), 1)
       DEFINES += -DHAVE_OZONE
       HAVE_ASSETS = 1
       HAVE_MENU_SCREENSAVER = 1
+   endif
+
+   ifeq ($(HAVE_SIMPLE_MENU), 1)
+      OBJ += menu/drivers/simple.o
+      DEFINES += -DHAVE_SIMPLE_MENU
    endif
 
    ifeq ($(HAVE_MENU_SCREENSAVER), 1)

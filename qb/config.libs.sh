@@ -955,6 +955,7 @@ if [ "$HAVE_MENU" != 'no' ]; then
          fi
          add_opt MATERIALUI no
          add_opt OZONE no
+         add_opt SIMPLE_MENU no
          add_opt XMB no
          add_opt STRIPES no
       fi
