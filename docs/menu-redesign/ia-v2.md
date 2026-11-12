@@ -31,6 +31,7 @@
   - **Standard** (Settings): one line, "← HOME / SETTINGS" in muted small capitals at the top left, which is also the back button, with RETROARCH dim on the right. The rows start right under it.
   - **With a summary** (Downloads): the same line, then the page name in smaller light type and a summary in small capitals ("3 UPDATES · 2 FILES MISSING"). Only for pages where one line about the whole page helps.
   - **To do:** apply this to every L2 and deeper page in the Pages frame. Keep the summary on Downloads and its pages, Games and its lists, and Game Options; drop it elsewhere. Game pages keep their art, as a shorter band behind the header.
+- **Touch targets:** 48×48dp minimum, measured as the touch area, not the drawn control (Figma frames are 360 wide, so 1 Figma px = 1dp). Controls stay drawn at their original small size; a row is 48dp tall and ‹ › get 48×48 targets with a gap between them. An open number row is two 48dp rows: the headline (closes it) and the slider. In code, scale by the screen density (about 3× on the S24).
 
 ## Templates (the chosen set)
 
