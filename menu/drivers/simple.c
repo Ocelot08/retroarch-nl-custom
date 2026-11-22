@@ -46,6 +46,12 @@
 #define SIMPLE_DESIGN_WIDTH   360.0f
 #define SIMPLE_GUTTER         22.0f
 #define SIMPLE_MORE_GAP       16.0f
+/* Edge bounce, as Material UI's: drag resistance past an end, the
+ * furthest it may go as a share of the view, and the spring back */
+#define SIMPLE_OVER_RESIST    0.35f
+#define SIMPLE_OVER_MAX       0.25f
+#define SIMPLE_SPRING_K       70.0f
+#define SIMPLE_SPRING_DAMP    14.0f
 /* Small caps letter-spacing, as a share of the size */
 #define SIMPLE_TRACKING       0.08f
 
@@ -114,6 +120,7 @@ typedef struct simple_handle
    float scroll_y;
    float drag_start_y;
    float drag_start_scroll;
+   float spring_v;
    unsigned dims;
    unsigned n_systems;
    unsigned n_cores;
@@ -122,6 +129,7 @@ typedef struct simple_handle
    bool has_continue;
    bool gamepad;
    bool dragging;
+   bool bouncing;
    char core_note[64];
    char msgbox[1024];
 } simple_handle_t;
@@ -384,6 +392,7 @@ static void simple_scroll(simple_handle_t *sm, const file_list_t *list,
       sm->scroll_y       = 0.0f;
       sm->last_selection = (size_t)-1;
       sm->dragging       = false;
+      sm->bouncing       = false;
    }
 
    if (     (sm->pointer.flags & MENU_INP_PTR_FLG_PRESSED)
@@ -393,18 +402,55 @@ static void simple_scroll(simple_handle_t *sm, const file_list_t *list,
       if (!sm->dragging)
       {
          sm->dragging          = true;
+         sm->bouncing          = false;
          sm->drag_start_y      = y;
          sm->drag_start_scroll = sm->scroll_y;
       }
       sm->scroll_y = sm->drag_start_scroll - (y - sm->drag_start_y);
+      if (sm->scroll_y < 0.0f)
+         sm->scroll_y *= SIMPLE_OVER_RESIST;
+      else if (sm->scroll_y > max)
+         sm->scroll_y = max + (sm->scroll_y - max) * SIMPLE_OVER_RESIST;
    }
    else
    {
-      sm->dragging  = false;
-      sm->scroll_y -= sm->pointer.y_accel;
+      struct menu_state *menu_st = menu_state_get_ptr();
+      float frame_ms             = anim_get_ptr()->delta_time;
+      if (frame_ms < 1.0f || frame_ms > 33.3f)
+         frame_ms = 16.667f;
+      sm->dragging = false;
+
+      if (!sm->bouncing)
+      {
+         sm->scroll_y -= sm->pointer.y_accel;
+         /* Past an end: hand what is left of a flick to the spring */
+         if (sm->scroll_y < 0.0f || sm->scroll_y > max)
+         {
+            sm->bouncing  = true;
+            sm->spring_v  = -sm->pointer.y_accel * (1000.0f / frame_ms);
+            menu_st->input_state.pointer.y_accel = 0.0f;
+         }
+      }
+      if (sm->bouncing)
+      {
+         float target = sm->scroll_y < 0.0f ? 0.0f
+            : (sm->scroll_y > max ? max : sm->scroll_y);
+         float dt     = frame_ms / 1000.0f;
+         float disp   = sm->scroll_y - target;
+         sm->spring_v += (-SIMPLE_SPRING_K * disp
+               - SIMPLE_SPRING_DAMP * sm->spring_v) * dt;
+         sm->scroll_y += sm->spring_v * dt;
+         if (     disp < 0.5f && disp > -0.5f
+               && sm->spring_v < 5.0f && sm->spring_v > -5.0f)
+         {
+            sm->scroll_y = target;
+            sm->bouncing = false;
+         }
+      }
    }
 
-   if (selection != sm->last_selection && !sm->dragging && size)
+   if (     selection != sm->last_selection
+         && !sm->dragging && !sm->bouncing && size)
    {
       simple_entry_rect(sm, selection, &top, &h);
       if (top < view_t)
@@ -414,11 +460,25 @@ static void simple_scroll(simple_handle_t *sm, const file_list_t *list,
       sm->last_selection = selection;
    }
 
-   if (sm->scroll_y > max)
-      sm->scroll_y = max;
-   if (sm->scroll_y < 0.0f)
-      sm->scroll_y = 0.0f;
-   sm->first = (size_t)(sm->scroll_y / (sm->m->list_row * s));
+   {
+      float over = (bottom - view_t) * SIMPLE_OVER_MAX;
+      if (sm->dragging || sm->bouncing)
+      {
+         if (sm->scroll_y < -over)
+            sm->scroll_y = -over;
+         if (sm->scroll_y > max + over)
+            sm->scroll_y = max + over;
+      }
+      else
+      {
+         if (sm->scroll_y > max)
+            sm->scroll_y = max;
+         if (sm->scroll_y < 0.0f)
+            sm->scroll_y = 0.0f;
+      }
+   }
+   sm->first = sm->scroll_y > 0.0f
+      ? (size_t)(sm->scroll_y / (sm->m->list_row * s)) : 0;
 }
 
 /* Top of the scrolling rows; above it is the header */
