@@ -46,6 +46,15 @@
 #include "../../setting_list.h"
 #include "../../msg_hash_lbl_str.h"
 
+/* Test builds log pages, taps and actions to logcat for scripted runs */
+#if defined(SIMPLE_MENU_TEST) && defined(ANDROID)
+#include <stdarg.h>
+#include <android/log.h>
+#define SIMPLE_DEBUG 1
+#else
+#define SIMPLE_DEBUG 0
+#endif
+
 #define SIMPLE_DESIGN_WIDTH   360.0f
 #define SIMPLE_GUTTER         22.0f
 #define SIMPLE_MORE_GAP       16.0f
@@ -117,6 +126,7 @@ typedef struct simple_handle
    menu_entry_t entry;
    /* Main thread's own, for taps; entry above is the drawing thread's */
    menu_entry_t hit_entry;
+   menu_entry_t log_entry;          /* test builds' action log */
    const simple_metrics_t *m;
    const file_list_t *last_list;
    size_t first;
@@ -150,6 +160,15 @@ typedef struct simple_handle
    bool card_on;
    bool card_confirm;
    bool msg_seen;
+   /* Test builds: what was last logged */
+   size_t log_sel;
+   size_t log_size;
+   size_t log_depth;
+   unsigned log_dims;
+   float log_scroll;
+   bool log_gamepad;
+   bool log_rows;
+   char log_title[NAME_MAX_LENGTH];
 } simple_handle_t;
 
 static void simple_color(float *c, int vert, uint32_t rgba)
@@ -410,6 +429,55 @@ static rarch_setting_t *simple_row_setting(const file_list_t *list,
    menu_file_list_cbs_t *cbs = (list && i < list->size)
       ? (menu_file_list_cbs_t*)list->list[i].actiondata : NULL;
    return cbs ? cbs->setting : NULL;
+}
+
+static void simple_log(const char *fmt, ...)
+{
+#if SIMPLE_DEBUG
+   va_list ap;
+   va_start(ap, fmt);
+   __android_log_vprint(ANDROID_LOG_INFO, "RASimple", fmt, ap);
+   va_end(ap);
+#else
+   (void)fmt;
+#endif
+}
+
+static const char *simple_action_name(enum menu_action action)
+{
+   switch (action)
+   {
+      case MENU_ACTION_UP:     return "up";
+      case MENU_ACTION_DOWN:   return "down";
+      case MENU_ACTION_LEFT:   return "left";
+      case MENU_ACTION_RIGHT:  return "right";
+      case MENU_ACTION_OK:     return "ok";
+      case MENU_ACTION_CANCEL: return "cancel";
+      case MENU_ACTION_INFO:   return "info";
+      case MENU_ACTION_SELECT: return "select";
+      case MENU_ACTION_START:  return "start";
+      default:                 break;
+   }
+   return "other";
+}
+
+static int simple_entry_action(void *userdata, menu_entry_t *entry,
+      size_t i, enum menu_action action)
+{
+   simple_handle_t *sm = (simple_handle_t*)userdata;
+
+   /* NOOP comes every frame */
+   if (SIMPLE_DEBUG && sm && action != MENU_ACTION_NOOP)
+   {
+      menu_entry_t *e = &sm->log_entry;
+      MENU_ENTRY_INITIALIZE((*e));
+      e->flags |= MENU_ENTRY_FLAG_RICH_LABEL_ENABLED;
+      menu_entry_get(e, 0, i, NULL, true);
+      simple_log("action %s(%d) %u \"%s\"", simple_action_name(action),
+            (int)action, (unsigned)i,
+            e->rich_label[0] ? e->rich_label : e->path);
+   }
+   return generic_menu_entry_action(userdata, entry, i, action);
 }
 
 /* A number with a range opens to a slider; other values step. Named
@@ -860,6 +928,59 @@ static void simple_card_layout(simple_handle_t *sm, unsigned dims)
    }
 }
 
+/* Test builds: a page line when the page changes, a sel line when the
+ * selection moves, the rows again once the list is at rest somewhere new.
+ * Rows are in window pixels, as the touch reader sees them. */
+static void simple_log_state(simple_handle_t *sm, menu_list_t *menu_list,
+      size_t selection, size_t size, unsigned dims)
+{
+   char title[NAME_MAX_LENGTH];
+   size_t depth = menu_list ? MENU_LIST_GET_STACK_SIZE(menu_list, 0) : 0;
+
+   title[0]     = '\0';
+   if (sm->is_home)
+      strlcpy(title, "Home", sizeof(title));
+   else
+      menu_entries_get_title(title, sizeof(title));
+
+   if (     !string_is_equal(title, sm->log_title)
+         || depth       != sm->log_depth
+         || size        != sm->log_size
+         || dims        != sm->log_dims
+         || sm->gamepad != sm->log_gamepad)
+   {
+      strlcpy(sm->log_title, title, sizeof(sm->log_title));
+      sm->log_depth   = depth;
+      sm->log_size    = size;
+      sm->log_dims    = dims;
+      sm->log_gamepad = sm->gamepad;
+      sm->log_sel     = selection;
+      sm->log_scroll  = sm->scroll_y;
+      sm->log_rows    = true;
+      simple_log("page \"%s\" depth=%u mode=%s style=%s dims=%ux%u size=%u "
+            "sel=%u", title, (unsigned)depth,
+            sm->gamepad ? "gamepad" : "touch",
+            sm->is_home ? "home" : "list",
+            (unsigned)VIDEO_SCALE_W(dims), (unsigned)VIDEO_SCALE_H(dims),
+            (unsigned)size, (unsigned)selection);
+   }
+   else if (selection != sm->log_sel)
+   {
+      sm->log_sel = selection;
+      simple_log("sel %u", (unsigned)selection);
+   }
+
+   if (     !sm->dragging && !sm->bouncing
+         && sm->pointer.y_accel > -0.5f && sm->pointer.y_accel < 0.5f
+         && (     sm->scroll_y - sm->log_scroll >= 1.0f
+               || sm->log_scroll - sm->scroll_y >= 1.0f))
+   {
+      sm->log_scroll = sm->scroll_y;
+      sm->log_rows   = true;
+      simple_log("scroll %d", (int)sm->scroll_y);
+   }
+}
+
 static void simple_render(void *data, unsigned dims, bool is_idle)
 {
    size_t i;
@@ -952,7 +1073,11 @@ static void simple_render(void *data, unsigned dims, bool is_idle)
       simple_scroll(sm, list, selection, bottom);
    menu_st->entries.begin = sm->first;
    p_disp->header_height  = (unsigned)simple_view_top(sm);
+   /* The touch reader scales touches by this; unset, every tap is 0,0 */
+   p_disp->framebuf_dims  = dims;
    simple_card_layout(sm, dims);
+   if (SIMPLE_DEBUG)
+      simple_log_state(sm, menu_list, selection, size, dims);
 
    if (     (sm->pointer.type != MENU_POINTER_DISABLED)
          && (sm->pointer.flags & MENU_INP_PTR_FLG_ACTIVE))
@@ -1122,6 +1247,10 @@ static void simple_draw_rows(simple_handle_t *sm, gfx_display_t *p_disp,
                     | MENU_ENTRY_FLAG_VALUE_ENABLED;
       menu_entry_get(entry, 0, i, NULL, true);
       word = entry->rich_label[0] ? entry->rich_label : entry->path;
+      /* Whole rows only: a part row's centre can be under the header */
+      if (sm->log_rows && top >= view_t - 0.5f && top + h <= bottom + 0.5f)
+         simple_log("row %u y=%d-%d \"%s\"", (unsigned)i, (int)top,
+               (int)(top + h), word);
 
       /* Yellow is the gamepad selection; touch gets a quiet mark */
       if (selected)
@@ -1209,6 +1338,7 @@ static void simple_draw_rows(simple_handle_t *sm, gfx_display_t *p_disp,
       simple_note(sm, note, w - x, centre, dims, SIMPLE_COL_DIM,
             TEXT_ALIGN_RIGHT);
    }
+   sm->log_rows = false;
 }
 
 static void simple_draw_hints(simple_handle_t *sm, gfx_display_t *p_disp,
@@ -1221,7 +1351,10 @@ static void simple_draw_hints(simple_handle_t *sm, gfx_display_t *p_disp,
 
    simple_quad(p_disp, userdata, dims, 0.0f, box_b, w,
          s < 1.0f ? 1.0f : s, SIMPLE_COL_LINE);
-   simple_note(sm, "A OPEN   B BACK   \xE2\x86\x95 MOVE",
+   /* OK and Cancel can be swapped (the default here): name them so */
+   simple_note(sm, config_get_ptr()->bools.input_menu_swap_ok_cancel_buttons
+         ? "B OPEN   A BACK   \xE2\x86\x95 MOVE"
+         : "A OPEN   B BACK   \xE2\x86\x95 MOVE",
          SIMPLE_GUTTER * s, y, dims, SIMPLE_COL_MUTED, TEXT_ALIGN_LEFT);
 }
 
@@ -1380,6 +1513,7 @@ static int simple_pointer_up(void *data,
    if (!sm)
       return -1;
    s = sm->scale;
+   simple_log("tap %u,%u gesture=%d ptr=%u", x, y, (int)gesture, ptr);
    if (     gesture != MENU_INPUT_GESTURE_TAP
          && gesture != MENU_INPUT_GESTURE_SHORT_PRESS)
       return 0;
@@ -1388,7 +1522,7 @@ static int simple_pointer_up(void *data,
 
    /* The breadcrumb line is the back button */
    if (!sm->is_home && fy < simple_view_top(sm))
-      return generic_menu_entry_action(sm, entry, menu_st->selection_ptr,
+      return simple_entry_action(sm, entry, menu_st->selection_ptr,
             MENU_ACTION_CANCEL);
 
    /* The open number's slider row: - and + step, the track sets */
@@ -1435,13 +1569,13 @@ static int simple_pointer_up(void *data,
       simple_arrows(sm, sm->dims, simple_note_width(sm, note),
             &lc, &rc, &vr);
       if (fx >= rc - 24.0f * s)
-         return generic_menu_entry_action(sm, &sm->hit_entry, ptr,
+         return simple_entry_action(sm, &sm->hit_entry, ptr,
                MENU_ACTION_RIGHT);
       if (fx >= lc - 24.0f * s && fx <= lc + 24.0f * s)
-         return generic_menu_entry_action(sm, &sm->hit_entry, ptr,
+         return simple_entry_action(sm, &sm->hit_entry, ptr,
                MENU_ACTION_LEFT);
    }
-   return generic_menu_entry_action(sm, &sm->hit_entry, ptr,
+   return simple_entry_action(sm, &sm->hit_entry, ptr,
          MENU_ACTION_SELECT);
 }
 
@@ -1505,6 +1639,6 @@ menu_ctx_driver_t menu_ctx_simple = {
    NULL,                         /* update_savestate_thumbnail_image */
    NULL,                         /* pointer_down */
    simple_pointer_up,
-   generic_menu_entry_action,
+   simple_entry_action,
    NULL                          /* wheel_scroll */
 };
