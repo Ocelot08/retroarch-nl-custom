@@ -68,9 +68,14 @@ To put it back: `adb install -r -d retroarch-custom-known-good.apk`.
 others in Settings › Drivers › Menu. It draws whatever list is open with
 the Simple type and spacing: Work Sans Light for words, IBM Plex Mono for
 notes and values, sizes in dp on a 360 dp wide design. Use it with Menu
-Layout set to Simple. It takes taps and the menu buttons; the breadcrumb
-line goes back. It has no drag scrolling, keyboard, images or art yet,
-and dialogs are a plain card.
+Layout set to Simple. It takes taps, swipes (with an edge bounce) and the
+menu buttons; the breadcrumb line goes back. Choices step from small
+arrows with 48dp targets, numbers open a slider row, and prompts show as
+a card with answer rows. It has no keyboard, images or art yet.
+
+In the Simple layout, Settings › Controls, Screen, Sound and Saving are
+short lists of the common settings under plain names, each ending in a
+More row that opens the classic list.
 
 Gamepad Mode (Help, or Settings › User Interface) draws the menu in a 4:3
 box at the top, smaller, with button hints, and shows the touch controls

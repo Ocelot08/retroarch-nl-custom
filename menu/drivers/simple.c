@@ -141,6 +141,15 @@ typedef struct simple_handle
    bool was_pressed;
    char core_note[64];
    char msgbox[1024];
+   /* The prompt card, laid out on the main thread for the drawing one */
+   char card_text[1024];
+   float card_y;
+   float card_h;
+   float card_rows_y;
+   unsigned card_lines;
+   bool card_on;
+   bool card_confirm;
+   bool msg_seen;
 } simple_handle_t;
 
 static void simple_color(float *c, int vert, uint32_t rgba)
@@ -755,7 +764,100 @@ static void simple_render_messagebox(void *data, const char *msg)
 {
    simple_handle_t *sm = (simple_handle_t*)data;
    if (sm && msg)
+   {
       strlcpy(sm->msgbox, msg, sizeof(sm->msgbox));
+      sm->msg_seen = true;
+   }
+}
+
+#define SIMPLE_CARD_PAD    22.0f
+#define SIMPLE_CARD_LINE   30.0f
+#define SIMPLE_CARD_GAP    14.0f
+#define SIMPLE_CARD_MAX    10
+
+/* Wraps @src to @max_w in the word font, a line per '\n' in @dst */
+static unsigned simple_wrap(simple_handle_t *sm, const char *src,
+      float max_w, char *dst, size_t len)
+{
+   size_t n          = 0;
+   size_t line_start = 0;
+   unsigned lines    = 1;
+   font_data_t *font = sm->fonts[SIMPLE_FONT_WORD].font;
+
+   dst[0] = '\0';
+   while (*src && n + 2 < len && lines <= SIMPLE_CARD_MAX)
+   {
+      size_t w = strcspn(src, " \n");
+      bool nl  = src[w] == '\n';
+      size_t at = n;
+      if (n > line_start)
+         dst[n++] = ' ';
+      if (n + w + 1 >= len)
+         break;
+      memcpy(dst + n, src, w);
+      dst[n + w] = '\0';
+      if (     n > line_start && font
+            && font_driver_get_message_width(font, dst + line_start,
+               n + w - line_start, 1.0f) > max_w)
+      {
+         dst[at]    = '\n';
+         n          = at + 1;
+         line_start = n;
+         lines++;
+         memcpy(dst + n, src, w);
+         dst[n + w] = '\0';
+      }
+      n   += w;
+      src += w;
+      if (*src)
+         src++;
+      if (nl && *src)
+      {
+         dst[n++]   = '\n';
+         line_start = n;
+         lines++;
+      }
+   }
+   dst[n] = '\0';
+   return lines > SIMPLE_CARD_MAX ? SIMPLE_CARD_MAX : lines;
+}
+
+static void simple_card_layout(simple_handle_t *sm, unsigned dims)
+{
+   struct menu_state *menu_st = menu_state_get_ptr();
+   float s     = sm->scale;
+   float w     = (float)VIDEO_SCALE_W(dims);
+   float box_b = simple_box_bottom(sm, dims);
+   unsigned rows;
+
+   sm->card_on      = sm->msg_seen;
+   sm->msg_seen     = false;
+   if (!sm->card_on)
+      return;
+   sm->card_confirm = menu_st->dialog_st.confirm_cmd != 0;
+   rows             = sm->card_confirm ? 2 : 1;
+   sm->card_lines   = simple_wrap(sm, sm->msgbox,
+         w - 4.0f * SIMPLE_GUTTER * s, sm->card_text,
+         sizeof(sm->card_text));
+   sm->card_h       = (SIMPLE_CARD_PAD + SIMPLE_CARD_GAP + 6.0f
+         + (float)sm->card_lines * SIMPLE_CARD_LINE
+         + (float)rows * sm->m->list_row) * s;
+   sm->card_y       = (box_b - sm->card_h) * 0.5f;
+   if (sm->card_y < 0.0f)
+      sm->card_y = 0.0f;
+   sm->card_rows_y  = sm->card_y + (SIMPLE_CARD_PAD + SIMPLE_CARD_GAP
+         + (float)sm->card_lines * SIMPLE_CARD_LINE) * s;
+
+   /* A tap confirms only on the first answer; anywhere else cancels */
+   if (sm->card_confirm)
+   {
+      float px = (float)VIDEO_POS_X(sm->pointer.pos);
+      float py = (float)VIDEO_POS_Y(sm->pointer.pos);
+      menu_st->dialog_st.confirm_hover_ok =
+            px >= SIMPLE_GUTTER * s && px < w - SIMPLE_GUTTER * s
+         && py >= sm->card_rows_y
+         && py <  sm->card_rows_y + sm->m->list_row * s;
+   }
 }
 
 static void simple_render(void *data, unsigned dims, bool is_idle)
@@ -850,6 +952,7 @@ static void simple_render(void *data, unsigned dims, bool is_idle)
       simple_scroll(sm, list, selection, bottom);
    menu_st->entries.begin = sm->first;
    p_disp->header_height  = (unsigned)simple_view_top(sm);
+   simple_card_layout(sm, dims);
 
    if (     (sm->pointer.type != MENU_POINTER_DISABLED)
          && (sm->pointer.flags & MENU_INP_PTR_FLG_ACTIVE))
@@ -1122,41 +1225,50 @@ static void simple_draw_hints(simple_handle_t *sm, gfx_display_t *p_disp,
          SIMPLE_GUTTER * s, y, dims, SIMPLE_COL_MUTED, TEXT_ALIGN_LEFT);
 }
 
-static void simple_draw_msgbox(simple_handle_t *sm, gfx_display_t *p_disp,
+static void simple_draw_card(simple_handle_t *sm, gfx_display_t *p_disp,
       void *userdata, unsigned dims)
 {
    char line[256];
-   const char *p   = sm->msgbox;
-   float s         = sm->scale;
-   float w         = (float)VIDEO_SCALE_W(dims);
-   float h         = simple_box_bottom(sm, dims);
-   float line_h    = 18.0f * s;
-   float card_h;
-   float y;
-   unsigned lines  = 1;
-   const char *q;
+   unsigned r;
+   const char *p = sm->card_text;
+   float s       = sm->scale;
+   float w       = (float)VIDEO_SCALE_W(dims);
+   float x       = SIMPLE_GUTTER * s;
+   float tx      = 2.0f * SIMPLE_GUTTER * s;
+   float row_h   = sm->m->list_row * s;
+   float y       = sm->card_y + (SIMPLE_CARD_PAD + SIMPLE_CARD_LINE * 0.5f) * s;
+   unsigned rows = sm->card_confirm ? 2 : 1;
+   static const enum msg_hash_enums answers[2][2] = {
+      { MENU_ENUM_LABEL_VALUE_BASIC_MENU_CONTROLS_OK, MSG_UNKNOWN },
+      { MENU_ENUM_LABEL_VALUE_YES, MENU_ENUM_LABEL_VALUE_NO }
+   };
 
-   for (q = p; *q; q++)
-      if (*q == '\n')
-         lines++;
-   card_h = (float)lines * line_h + 40.0f * s;
-   y      = (h - card_h) * 0.5f;
+   simple_quad(p_disp, userdata, dims, 0.0f, 0.0f, w,
+         simple_box_bottom(sm, dims), 0x000000A6);
+   simple_quad(p_disp, userdata, dims, x, sm->card_y, w - 2.0f * x,
+         sm->card_h, SIMPLE_COL_SHEET);
 
-   simple_quad(p_disp, userdata, dims, 0.0f, 0.0f, w, h, 0x000000A6);
-   simple_quad(p_disp, userdata, dims, SIMPLE_GUTTER * s, y,
-         w - 2.0f * SIMPLE_GUTTER * s, card_h, SIMPLE_COL_SHEET);
-
-   y += 20.0f * s + line_h * 0.5f;
-   while (*p)
+   for (r = 0; r < sm->card_lines && *p; r++)
    {
       size_t n = strcspn(p, "\n");
       strlcpy(line, p, n + 1 < sizeof(line) ? n + 1 : sizeof(line));
-      simple_text(sm, SIMPLE_FONT_NOTE, line, 2.0f * SIMPLE_GUTTER * s,
-            y, dims, SIMPLE_COL_FG, TEXT_ALIGN_LEFT);
-      y += line_h;
+      simple_text(sm, SIMPLE_FONT_WORD, line, tx, y, dims,
+            SIMPLE_COL_FG, TEXT_ALIGN_LEFT);
+      y += SIMPLE_CARD_LINE * s;
       p += n;
       if (*p == '\n')
          p++;
+   }
+
+   for (r = 0; r < rows; r++)
+   {
+      float ry = sm->card_rows_y + (float)r * row_h;
+      simple_quad(p_disp, userdata, dims, tx, ry, w - 2.0f * tx,
+            s < 1.0f ? 1.0f : s, SIMPLE_COL_LINE);
+      simple_text(sm, SIMPLE_FONT_WORD,
+            msg_hash_to_str(answers[sm->card_confirm ? 1 : 0][r]),
+            tx, ry + row_h * 0.5f, dims,
+            r == 0 ? SIMPLE_COL_FG : SIMPLE_COL_MUTED, TEXT_ALIGN_LEFT);
    }
 }
 
@@ -1233,11 +1345,12 @@ static void simple_frame(void *data, video_frame_info_t *video_info)
    for (i = 0; i < SIMPLE_FONT_LAST; i++)
       font_flush(dims, &sm->fonts[i]);
 
-   if (sm->msgbox[0])
+   if (sm->card_on)
    {
-      simple_draw_msgbox(sm, p_disp, userdata, dims);
-      font_flush(dims, &sm->fonts[SIMPLE_FONT_NOTE]);
-      sm->msgbox[0] = '\0';
+      int f;
+      simple_draw_card(sm, p_disp, userdata, dims);
+      for (f = 0; f < SIMPLE_FONT_LAST; f++)
+         font_flush(dims, &sm->fonts[f]);
    }
 
    for (i = 0; i < SIMPLE_FONT_LAST; i++)
