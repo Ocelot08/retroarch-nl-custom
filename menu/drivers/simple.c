@@ -559,14 +559,14 @@ static void simple_draw_header(simple_handle_t *sm, unsigned dims)
    float w   = (float)VIDEO_SCALE_W(dims);
    float x   = SIMPLE_GUTTER * s;
    float y   = sm->m->header_y * s;
-   bool runs = (runloop_get_flags() & RUNLOOP_FLAG_CORE_RUNNING) ? true : false;
 
    if (sm->is_home)
    {
-      uint32_t c = sm->has_continue ? SIMPLE_COL_FG : SIMPLE_COL_DIM;
-      simple_note(sm, "RETROARCH", x, y, dims, c, TEXT_ALIGN_LEFT);
-      simple_note(sm, runs ? "PAUSED" : "HOME", w - x, y, dims, c,
-            TEXT_ALIGN_RIGHT);
+      bool art = sm->has_continue;
+      simple_note(sm, "HOME", x, y, dims,
+            art ? SIMPLE_COL_FG : SIMPLE_COL_MUTED, TEXT_ALIGN_LEFT);
+      simple_note(sm, "RETROARCH", w - x, y, dims,
+            art ? SIMPLE_COL_FG : SIMPLE_COL_DIM, TEXT_ALIGN_RIGHT);
       return;
    }
 
