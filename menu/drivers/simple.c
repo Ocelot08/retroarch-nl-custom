@@ -42,6 +42,8 @@
 #include "../../runloop.h"
 #include "../../command.h"
 #include "../../audio/audio_driver.h"
+#include "../menu_setting.h"
+#include "../../setting_list.h"
 #include "../../msg_hash_lbl_str.h"
 
 #define SIMPLE_DESIGN_WIDTH   360.0f
@@ -113,11 +115,15 @@ typedef struct simple_handle
    menu_input_pointer_t pointer;    /* int64_t alignment */
    font_data_impl_t fonts[SIMPLE_FONT_LAST];
    menu_entry_t entry;
+   /* Main thread's own, for taps; entry above is the drawing thread's */
+   menu_entry_t hit_entry;
    const simple_metrics_t *m;
    const file_list_t *last_list;
    size_t first;
    size_t more_idx;
    size_t last_selection;
+   /* A number row opened to its slider, or (size_t)-1 */
+   size_t open_idx;
    float scroll_y;
    float drag_start_y;
    float drag_start_scroll;
@@ -131,6 +137,8 @@ typedef struct simple_handle
    bool gamepad;
    bool dragging;
    bool bouncing;
+   bool sliding;
+   bool was_pressed;
    char core_note[64];
    char msgbox[1024];
 } simple_handle_t;
@@ -304,6 +312,8 @@ static void simple_note(simple_handle_t *sm, const char *s,
    width -= track;
    if (align == TEXT_ALIGN_RIGHT)
       x -= width;
+   else if (align == TEXT_ALIGN_CENTER)
+      x -= width * 0.5f;
 
    for (p = s; *p; )
    {
@@ -385,6 +395,86 @@ static bool simple_is_more(const char *label)
       || string_is_equal(label, MENU_ENUM_LABEL_SIMPLE_SAVING_MORE_STR));
 }
 
+static rarch_setting_t *simple_row_setting(const file_list_t *list,
+      size_t i)
+{
+   menu_file_list_cbs_t *cbs = (list && i < list->size)
+      ? (menu_file_list_cbs_t*)list->list[i].actiondata : NULL;
+   return cbs ? cbs->setting : NULL;
+}
+
+/* A number with a range opens to a slider; other values step. Named
+ * options are ranged integers too, so the value has to read as one. */
+static bool simple_is_number(const rarch_setting_t *setting,
+      const char *value)
+{
+   const char *v = value;
+   if (v && (*v == '-' || *v == '+'))
+      v++;
+   if (!v || *v < '0' || *v > '9')
+      return false;
+   if (!setting || !(setting->flags & SD_FLAG_HAS_RANGE)
+         || setting->step <= 0.0f || setting->max <= setting->min)
+      return false;
+   if (setting->type == ST_FLOAT)
+      return true;
+   if (setting->type != ST_UINT && setting->type != ST_INT)
+      return false;
+   return     setting->ui_type != ST_UI_TYPE_UINT_COMBOBOX
+           && setting->ui_type != ST_UI_TYPE_UINT_RADIO_BUTTONS
+           && (setting->max - setting->min) / setting->step <= 400.0f;
+}
+
+static bool simple_is_choice(const rarch_setting_t *setting,
+      const char *value)
+{
+   if (!setting || simple_is_number(setting, value))
+      return false;
+   return    setting->type == ST_UINT || setting->type == ST_INT
+          || setting->type == ST_FLOAT
+          || setting->type == ST_STRING_OPTIONS;
+}
+
+static float simple_number_get(const rarch_setting_t *setting)
+{
+   switch (setting->type)
+   {
+      case ST_FLOAT:
+         return *setting->value.target.fraction;
+      case ST_INT:
+         return (float)*setting->value.target.integer;
+      default:
+         break;
+   }
+   return (float)setting_uint_get(setting);
+}
+
+/* Moves a number to @frac of its range a step at a time, so every
+ * handler the setting has runs as it would for left and right */
+static void simple_number_set(rarch_setting_t *setting, unsigned type,
+      float frac)
+{
+   int n;
+   float target;
+   if (frac < 0.0f)
+      frac = 0.0f;
+   if (frac > 1.0f)
+      frac = 1.0f;
+   target = setting->min + frac * (setting->max - setting->min);
+   n      = (int)((target - simple_number_get(setting)) / setting->step
+         + (target >= simple_number_get(setting) ? 0.5f : -0.5f));
+   while (n > 0)
+   {
+      menu_action_handle_setting(setting, type, MENU_ACTION_RIGHT, false);
+      n--;
+   }
+   while (n < 0)
+   {
+      menu_action_handle_setting(setting, type, MENU_ACTION_LEFT, false);
+      n++;
+   }
+}
+
 /* Top and height of entry @i, in pixels */
 static void simple_entry_rect(const simple_handle_t *sm, size_t i,
       float *top, float *h)
@@ -416,6 +506,8 @@ static void simple_entry_rect(const simple_handle_t *sm, size_t i,
    *h   = m->list_row * s;
    if (i >= sm->more_idx)
       *top += SIMPLE_MORE_GAP * s;
+   if (i > sm->open_idx)
+      *top += m->list_row * s;
 }
 
 /* Pages scroll under the header: a drag follows the finger, a flick
@@ -429,7 +521,8 @@ static void simple_scroll(simple_handle_t *sm, const file_list_t *list,
    float view_t = sm->m->list_top * s;
    size_t size  = list ? list->size : 0;
    float extent = (float)size * sm->m->list_row * s
-      + (sm->more_idx < size ? SIMPLE_MORE_GAP * s : 0.0f);
+      + (sm->more_idx < size ? SIMPLE_MORE_GAP * s : 0.0f)
+      + (sm->open_idx < size ? sm->m->list_row * s : 0.0f);
 
    max = extent - (bottom - view_t);
    if (max < 0.0f)
@@ -440,12 +533,14 @@ static void simple_scroll(simple_handle_t *sm, const file_list_t *list,
       sm->last_list      = list;
       sm->scroll_y       = 0.0f;
       sm->last_selection = (size_t)-1;
+      sm->open_idx       = (size_t)-1;
       sm->dragging       = false;
       sm->bouncing       = false;
    }
 
    if (     (sm->pointer.flags & MENU_INP_PTR_FLG_PRESSED)
-         && (sm->pointer.flags & MENU_INP_PTR_FLG_DRAGGED))
+         && (sm->pointer.flags & MENU_INP_PTR_FLG_DRAGGED)
+         && !sm->sliding)
    {
       float y = (float)VIDEO_POS_Y(sm->pointer.pos);
       if (!sm->dragging)
@@ -549,6 +644,36 @@ static float simple_rows_bottom(const simple_handle_t *sm, unsigned dims)
       - (sm->gamepad ? 28.0f * sm->scale : 0.0f);
 }
 
+#define SIMPLE_ARROW_GAP 10.0f
+
+/* The open number's slider row: its top and the ends of its track */
+static bool simple_slider_rect(const simple_handle_t *sm, unsigned dims,
+      float *top, float *x0, float *x1)
+{
+   float h;
+   float s = sm->scale;
+   float x = SIMPLE_GUTTER * s;
+   if (sm->is_home || sm->open_idx == (size_t)-1)
+      return false;
+   simple_entry_rect(sm, sm->open_idx, top, &h);
+   *top += h;
+   *x0   = x + 36.0f * s;
+   *x1   = (float)VIDEO_SCALE_W(dims) - x - 36.0f * s;
+   return true;
+}
+
+/* Centres of a choice's arrows, for a value @value_w wide */
+static void simple_arrows(simple_handle_t *sm, unsigned dims,
+      float value_w, float *left_c, float *right_c, float *value_r)
+{
+   float s  = sm->scale;
+   float aw = simple_note_width(sm, "\xE2\x80\xBA");
+   float r  = (float)VIDEO_SCALE_W(dims) - SIMPLE_GUTTER * s;
+   *right_c = r - aw * 0.5f;
+   *value_r = r - aw - SIMPLE_ARROW_GAP * s;
+   *left_c  = *value_r - value_w - SIMPLE_ARROW_GAP * s - aw * 0.5f;
+}
+
 static void simple_home_counts(simple_handle_t *sm)
 {
    settings_t *settings     = config_get_ptr();
@@ -589,9 +714,10 @@ static void *simple_init(void **userdata, bool video_is_threaded)
       free(menu);
       return NULL;
    }
-   sm->gamepad = settings->bools.menu_simple_gamepad_mode;
-   sm->m       = sm->gamepad ? &simple_gamepad : &simple_touch;
-   sm->dims    = video_driver_get_output_dims();
+   sm->gamepad  = settings->bools.menu_simple_gamepad_mode;
+   sm->m        = sm->gamepad ? &simple_gamepad : &simple_touch;
+   sm->open_idx = (size_t)-1;
+   sm->dims     = video_driver_get_output_dims();
    sm->scale   = simple_scale_for(sm->dims);
    *userdata   = sm;
    return menu;
@@ -694,6 +820,26 @@ static void simple_render(void *data, unsigned dims, bool is_idle)
       menu_input_get_pointer_state(&sm->pointer);
    else
       memset(&sm->pointer, 0, sizeof(sm->pointer));
+   {
+      bool pressed = (sm->pointer.flags & MENU_INP_PTR_FLG_PRESSED) ? true : false;
+      float st, x0, x1;
+      if (!pressed)
+         sm->sliding = false;
+      else if (!sm->was_pressed
+            && simple_slider_rect(sm, dims, &st, &x0, &x1))
+      {
+         float px = (float)VIDEO_POS_X(sm->pointer.pos);
+         float py = (float)VIDEO_POS_Y(sm->pointer.pos);
+         sm->sliding = py >= st && py < st + sm->m->list_row * sm->scale
+            && px >= x0 - 12.0f * sm->scale && px <= x1 + 12.0f * sm->scale;
+      }
+      if (     sm->sliding && list && sm->open_idx < size
+            && simple_slider_rect(sm, dims, &st, &x0, &x1))
+         simple_number_set(simple_row_setting(list, sm->open_idx),
+               list->list[sm->open_idx].type,
+               ((float)VIDEO_POS_X(sm->pointer.pos) - x0) / (x1 - x0));
+      sm->was_pressed = pressed;
+   }
    if (sm->is_home)
    {
       sm->first     = 0;
@@ -907,12 +1053,55 @@ static void simple_draw_rows(simple_handle_t *sm, gfx_display_t *p_disp,
 
       {
          char fitted[NAME_MAX_LENGTH];
+         rarch_setting_t *setting = sm->is_home ? NULL
+            : simple_row_setting(list, i);
          float note_w = simple_note_width(sm, note);
+         bool choice  = note[0] && simple_is_choice(setting, entry->value);
+
+         if (choice)
+         {
+            float lc, rc, vr;
+            simple_arrows(sm, dims, note_w, &lc, &rc, &vr);
+            simple_note(sm, "\xE2\x80\xB9", lc, centre, dims,
+                  SIMPLE_COL_MUTED, TEXT_ALIGN_CENTER);
+            simple_note(sm, "\xE2\x80\xBA", rc, centre, dims,
+                  SIMPLE_COL_MUTED, TEXT_ALIGN_CENTER);
+            simple_note(sm, note, vr, centre, dims, SIMPLE_COL_FG,
+                  TEXT_ALIGN_RIGHT);
+            note_w = (w - x) - (lc - 24.0f * s);
+            note[0] = '\0';
+         }
          simple_fit(sm, word_font, word,
                w - 2.0f * x - (note_w > 0.0f ? note_w + 16.0f * s : 0.0f),
                fitted, sizeof(fitted));
          simple_text(sm, word_font, fitted, x, centre, dims,
                more ? SIMPLE_COL_MUTED : SIMPLE_COL_FG, TEXT_ALIGN_LEFT);
+
+         if (i == sm->open_idx && simple_is_number(setting, entry->value))
+         {
+            float st, x0, x1, frac;
+            if (simple_slider_rect(sm, dims, &st, &x0, &x1))
+            {
+               float sc = st + h * 0.5f;
+               frac = (simple_number_get(setting) - setting->min)
+                  / (setting->max - setting->min);
+               if (frac < 0.0f)
+                  frac = 0.0f;
+               if (frac > 1.0f)
+                  frac = 1.0f;
+               simple_note(sm, "\xE2\x88\x92", x + 8.0f * s, sc, dims,
+                     SIMPLE_COL_MUTED, TEXT_ALIGN_CENTER);
+               simple_note(sm, "+", w - x - 8.0f * s, sc, dims,
+                     SIMPLE_COL_MUTED, TEXT_ALIGN_CENTER);
+               simple_quad(p_disp, userdata, dims, x0, sc - s, x1 - x0,
+                     2.0f * s, SIMPLE_COL_LINE);
+               simple_quad(p_disp, userdata, dims, x0, sc - s,
+                     (x1 - x0) * frac, 2.0f * s, SIMPLE_COL_FG);
+               simple_quad(p_disp, userdata, dims,
+                     x0 + (x1 - x0) * frac - 1.5f * s, sc - 9.0f * s,
+                     3.0f * s, 18.0f * s, SIMPLE_COL_FG);
+            }
+         }
       }
       simple_note(sm, note, w - x, centre, dims, SIMPLE_COL_DIM,
             TEXT_ALIGN_RIGHT);
@@ -1064,31 +1253,83 @@ static int simple_pointer_up(void *data,
       menu_file_list_cbs_t *cbs,
       menu_entry_t *entry, unsigned action)
 {
-   float top, h;
+   float st, x0, x1;
+   rarch_setting_t *setting;
    simple_handle_t *sm        = (simple_handle_t*)data;
    struct menu_state *menu_st = menu_state_get_ptr();
    menu_list_t *menu_list     = menu_st->entries.list;
-   size_t size                = menu_list ? MENU_LIST_GET_SELECTION(menu_list, 0)->size : 0;
+   file_list_t *list          = menu_list ? MENU_LIST_GET_SELECTION(menu_list, 0) : NULL;
+   size_t size                = list ? list->size : 0;
+   float s;
+   float fx                   = (float)x;
+   float fy                   = (float)y;
 
    if (!sm)
       return -1;
+   s = sm->scale;
    if (     gesture != MENU_INPUT_GESTURE_TAP
          && gesture != MENU_INPUT_GESTURE_SHORT_PRESS)
       return 0;
-   if (y >= (unsigned)simple_box_bottom(sm, sm->dims))
+   if (fy >= simple_box_bottom(sm, sm->dims))
       return 0;
 
    /* The breadcrumb line is the back button */
-   simple_entry_rect(sm, sm->first, &top, &h);
-   if (!sm->is_home && y < (unsigned)top)
+   if (!sm->is_home && fy < simple_view_top(sm))
       return generic_menu_entry_action(sm, entry, menu_st->selection_ptr,
             MENU_ACTION_CANCEL);
-   if (ptr < size)
+
+   /* The open number's slider row: - and + step, the track sets */
+   if (     simple_slider_rect(sm, sm->dims, &st, &x0, &x1)
+         && sm->open_idx < size
+         && fy >= st && fy < st + sm->m->list_row * s)
    {
-      menu_st->selection_ptr = ptr;
-      return generic_menu_entry_action(sm, entry, ptr, MENU_ACTION_SELECT);
+      setting = simple_row_setting(list, sm->open_idx);
+      if (fx < x0 - 12.0f * s)
+         menu_action_handle_setting(setting, list->list[sm->open_idx].type,
+               MENU_ACTION_LEFT, false);
+      else if (fx > x1 + 12.0f * s)
+         menu_action_handle_setting(setting, list->list[sm->open_idx].type,
+               MENU_ACTION_RIGHT, false);
+      else
+         simple_number_set(setting, list->list[sm->open_idx].type,
+               (fx - x0) / (x1 - x0));
+      return 0;
    }
-   return 0;
+
+   if (ptr >= size)
+      return 0;
+
+   menu_st->selection_ptr = ptr;
+   MENU_ENTRY_INITIALIZE(sm->hit_entry);
+   sm->hit_entry.flags |= MENU_ENTRY_FLAG_RICH_LABEL_ENABLED
+                       | MENU_ENTRY_FLAG_VALUE_ENABLED;
+   menu_entry_get(&sm->hit_entry, 0, ptr, NULL, true);
+   setting = sm->is_home ? NULL : simple_row_setting(list, ptr);
+
+   /* A number's row opens and closes its slider */
+   if (simple_is_number(setting, sm->hit_entry.value))
+   {
+      sm->open_idx = (sm->open_idx == ptr) ? (size_t)-1 : ptr;
+      return 0;
+   }
+
+   /* A choice steps from its arrows, 48dp targets around each */
+   if (simple_is_choice(setting, sm->hit_entry.value) && sm->hit_entry.value[0])
+   {
+      char note[NAME_MAX_LENGTH];
+      float lc, rc, vr;
+      simple_upper(note, sm->hit_entry.value, sizeof(note));
+      simple_arrows(sm, sm->dims, simple_note_width(sm, note),
+            &lc, &rc, &vr);
+      if (fx >= rc - 24.0f * s)
+         return generic_menu_entry_action(sm, &sm->hit_entry, ptr,
+               MENU_ACTION_RIGHT);
+      if (fx >= lc - 24.0f * s && fx <= lc + 24.0f * s)
+         return generic_menu_entry_action(sm, &sm->hit_entry, ptr,
+               MENU_ACTION_LEFT);
+   }
+   return generic_menu_entry_action(sm, &sm->hit_entry, ptr,
+         MENU_ACTION_SELECT);
 }
 
 static void simple_navigation_clear(void *data, bool pending_push)
@@ -1098,6 +1339,7 @@ static void simple_navigation_clear(void *data, bool pending_push)
    {
       sm->first     = 0;
       sm->last_list = NULL;
+      sm->open_idx  = (size_t)-1;
    }
 }
 
