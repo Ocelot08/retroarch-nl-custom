@@ -24,8 +24,8 @@ Test APKs are labelled with what they test, so they can be told apart.
 - RGUI test: "RetroArch Custom (RGUI test)", for the Simple layout in
   RGUI. The Simple layout is turned on in Settings › User Interface ›
   Menu Layout.
-- Simple test: "RetroArch Custom (Simple test)", for the simple menu
-  driver. Built with
+- Simple test: "RA TESTER", with the logo in orange (#F59F00), for
+  the simple menu driver. Built with
 
   ```
   cd pkg/android/phoenix
@@ -35,8 +35,28 @@ Test APKs are labelled with what they test, so they can be told apart.
 
   `-PsimpleMenuTest` gives the app its own id (`com.retroarch.custom.simpletest`),
   so it installs beside RetroArch Custom, and makes it start in the
-  simple driver with the Simple layout. The APK is signed with the
-  build machine's debug key; no signing key is in the repository.
+  simple driver with the Simple layout. Its name and orange icon come
+  from `resValue` and `res-tester/`, used only with this switch. The
+  orange icon shows on Android 8 and later; older versions show the
+  normal one.
+
+  Test builds are signed with `~/.android/ra-tester.keystore`, a debug
+  key kept outside the repository (another path can be given with
+  `-PRA_TESTER_STORE_FILE=...`). Copy that file to every machine that
+  builds test APKs, so each build installs over the last one. Without
+  it, a build falls back to the machine's own debug key and says so.
+  No signing key is in the repository.
+
+  To check a build on a phone over USB, with the screen unlocked:
+
+  ```
+  sh pkg/android/phoenix/test_simple_menu.sh [screenshot folder]
+  ```
+
+  It taps through Home, Settings, Help and Gamepad Mode, prints PASS or
+  FAIL per step, and saves screenshots and the run's log. It finds rows
+  by name from the driver's `RASimple` logcat lines, which only test
+  builds write, and never starts a game or quits.
 
 ## Rollback
 

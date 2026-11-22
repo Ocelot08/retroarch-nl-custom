@@ -102,7 +102,7 @@ android {
        * in the simple menu driver */
       if (project.hasProperty("simpleMenuTest")) {
         applicationIdSuffix '.custom.simpletest'
-        resValue "string", "app_name", "RetroArch Custom (Simple test)"
+        resValue "string", "app_name", "RA TESTER"
         externalNativeBuild {
           ndkBuild {
             arguments "SIMPLE_MENU_TEST=1"
@@ -201,6 +201,9 @@ android {
     }
     custom {
       java.srcDirs += ['../play-core-stub']
+      /* Test builds get an orange icon */
+      if (project.hasProperty("simpleMenuTest"))
+        res.srcDirs += ['res-tester']
     }
     playStoreNormal {
       java.srcDirs += ['../play-core-impl']
@@ -228,9 +231,31 @@ android {
         keyPassword RELEASE_KEY_PASSWORD
       }
     }
+    /* -PsimpleMenuTest: one debug key kept outside the repository, copied
+     * to each build machine, so test builds from any of them update each
+     * other. The passwords are the standard public debug ones. */
+    def testerStore = file(project.findProperty("RA_TESTER_STORE_FILE")
+        ?: "${System.getProperty('user.home')}/.android/ra-tester.keystore")
+    if (project.hasProperty("simpleMenuTest")) {
+      if (testerStore.exists()) {
+        raTester {
+          storeFile testerStore
+          storePassword 'android'
+          keyAlias 'androiddebugkey'
+          keyPassword 'android'
+        }
+      } else {
+        logger.warn("No ${testerStore}: test build signed with this machine's debug key")
+      }
+    }
   }
 
   buildTypes {
+    if (signingConfigs.findByName("raTester")) {
+      debug {
+        signingConfig signingConfigs.raTester
+      }
+    }
     if (project.hasProperty("RELEASE_STORE_FILE")) {
       release {
         signingConfig signingConfigs.release
