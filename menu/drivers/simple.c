@@ -14,16 +14,18 @@
 
 /* Phone-first menu driver for the Simple layout. A style test: it draws
  * the current list with the Simple type and spacing, and takes taps and
- * the normal menu buttons. Sizes are in dp, on a 360 dp wide design.
+ * the normal menu buttons. Sizes are in dp, on a 360 x 780 dp design.
  * Gamepad mode draws the menu in a 4:3 box at the top, over the touch
  * controls. */
 
 #include <stdint.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
 #include <compat/strl.h>
 #include <file/file_path.h>
+#include <lists/dir_list.h>
 #include <string/stdstring.h>
 
 #ifdef HAVE_CONFIG_H
@@ -34,11 +36,18 @@
 #include "../../gfx/gfx_display.h"
 #include "../../gfx/font_driver.h"
 #include "../../configuration.h"
+#include "../../core_info.h"
+#include "../../defaults.h"
+#include "../../playlist.h"
 #include "../../runloop.h"
 #include "../../command.h"
+#include "../../msg_hash_lbl_str.h"
 
 #define SIMPLE_DESIGN_WIDTH   360.0f
 #define SIMPLE_GUTTER         22.0f
+#define SIMPLE_MORE_GAP       16.0f
+/* Small caps letter-spacing, as a share of the size */
+#define SIMPLE_TRACKING       0.08f
 
 #define SIMPLE_COL_BG         0x15171CFF
 #define SIMPLE_COL_BELOW      0x0E1014FF
@@ -54,6 +63,7 @@ enum simple_font
    SIMPLE_FONT_WORD = 0,
    SIMPLE_FONT_HOME,
    SIMPLE_FONT_NOTE,
+   SIMPLE_FONT_TITLE,
    SIMPLE_FONT_LAST
 };
 
@@ -62,17 +72,34 @@ typedef struct simple_metrics
 {
    float font[SIMPLE_FONT_LAST];
    float header_y;
-   float home_top;
    float list_top;
-   float home_row;
    float list_row;
-   float note_gap;
+   float home_top;
+   float home_row;
+   float band_h;
+   float cont_label_y;
+   float cont_title_y;
+   float cont_bottom;
 } simple_metrics_t;
 
 static const simple_metrics_t simple_touch = {
-   { 24.0f, 40.0f, 11.0f }, 46.0f, 150.0f, 72.0f, 72.0f, 48.0f, 22.0f };
+   { 24.0f, 30.0f, 11.0f, 48.0f },
+   50.0f, 80.0f, 50.0f, 110.0f, 60.0f,
+   360.0f, 262.0f, 304.0f, 352.0f };
 static const simple_metrics_t simple_gamepad = {
-   { 18.0f, 24.0f, 10.0f }, 20.0f, 44.0f, 40.0f, 36.0f, 32.0f, 14.0f };
+   { 17.0f, 20.0f, 9.5f, 22.0f },
+   20.0f, 40.0f, 30.0f, 40.0f, 34.0f,
+   96.0f, 46.0f, 66.0f, 88.0f };
+
+/* Art band colours, picked by the game's name until box art is drawn */
+static const uint32_t simple_band[][2] = {
+   { 0x3B5BDBFF, 0x7048E8FF },
+   { 0x0CA678FF, 0x1971C2FF },
+   { 0xE8590CFF, 0xC2255CFF },
+   { 0x5F3DC4FF, 0x2B8A3EFF },
+   { 0x1098ADFF, 0x364FC7FF },
+   { 0x862E9CFF, 0xD6336CFF }
+};
 
 typedef struct simple_handle
 {
@@ -81,23 +108,24 @@ typedef struct simple_handle
    menu_entry_t entry;
    const simple_metrics_t *m;
    size_t first;
+   size_t more_idx;
    unsigned dims;
+   unsigned n_systems;
+   unsigned n_cores;
    float scale;
    bool is_home;
+   bool has_continue;
    bool gamepad;
+   char core_note[64];
    char msgbox[1024];
 } simple_handle_t;
 
-static void simple_color(float *c, uint32_t rgba)
+static void simple_color(float *c, int vert, uint32_t rgba)
 {
-   int i;
-   for (i = 0; i < 4; i++)
-   {
-      c[i * 4 + 0] = ((rgba >> 24) & 0xFF) / 255.0f;
-      c[i * 4 + 1] = ((rgba >> 16) & 0xFF) / 255.0f;
-      c[i * 4 + 2] = ((rgba >>  8) & 0xFF) / 255.0f;
-      c[i * 4 + 3] = ( rgba        & 0xFF) / 255.0f;
-   }
+   c[vert * 4 + 0] = ((rgba >> 24) & 0xFF) / 255.0f;
+   c[vert * 4 + 1] = ((rgba >> 16) & 0xFF) / 255.0f;
+   c[vert * 4 + 2] = ((rgba >>  8) & 0xFF) / 255.0f;
+   c[vert * 4 + 3] = ( rgba        & 0xFF) / 255.0f;
 }
 
 static void simple_upper(char *dst, const char *src, size_t len)
@@ -140,7 +168,8 @@ static void simple_fonts_free(simple_handle_t *sm)
 static void simple_fonts_load(simple_handle_t *sm, bool is_threaded)
 {
    static const char *files[SIMPLE_FONT_LAST] = {
-      "WorkSans-Light.ttf", "WorkSans-Light.ttf", "IBMPlexMono-Medium.ttf" };
+      "WorkSans-Light.ttf", "WorkSans-Light.ttf",
+      "IBMPlexMono-Medium.ttf", "WorkSans-Light.ttf" };
    char dir[DIR_MAX_LENGTH];
    char path[PATH_MAX_LENGTH];
    settings_t *settings  = config_get_ptr();
@@ -181,25 +210,149 @@ static void simple_text(simple_handle_t *sm, enum simple_font fi,
          color, align, 1.0f, false, 0.0f, false);
 }
 
+static size_t simple_utf8_len(unsigned char c)
+{
+   if (c < 0x80)
+      return 1;
+   if ((c & 0xE0) == 0xC0)
+      return 2;
+   if ((c & 0xF0) == 0xE0)
+      return 3;
+   return 4;
+}
+
+/* Small caps notes, drawn a glyph at a time for the letter-spacing */
+static void simple_note(simple_handle_t *sm, const char *s,
+      float x, float y_centre, unsigned dims, uint32_t color,
+      enum text_alignment align)
+{
+   char glyph[8];
+   const char *p;
+   float width          = 0.0f;
+   font_data_impl_t *f  = &sm->fonts[SIMPLE_FONT_NOTE];
+   float track          = sm->m->font[SIMPLE_FONT_NOTE] * sm->scale
+      * SIMPLE_TRACKING;
+
+   if (!f->font || !s || !*s)
+      return;
+
+   for (p = s; *p; )
+   {
+      size_t n = simple_utf8_len((unsigned char)*p);
+      width   += font_driver_get_message_width(f->font, p, n, 1.0f) + track;
+      p       += n;
+   }
+   width -= track;
+   if (align == TEXT_ALIGN_RIGHT)
+      x -= width;
+
+   for (p = s; *p; )
+   {
+      size_t n = simple_utf8_len((unsigned char)*p);
+      if (n >= sizeof(glyph))
+         break;
+      memcpy(glyph, p, n);
+      glyph[n] = '\0';
+      if (*p != ' ')
+         simple_text(sm, SIMPLE_FONT_NOTE, glyph, x, y_centre, dims,
+               color, TEXT_ALIGN_LEFT);
+      x += font_driver_get_message_width(f->font, p, n, 1.0f) + track;
+      p += n;
+   }
+}
+
 static void simple_quad(gfx_display_t *p_disp, void *userdata,
       unsigned dims, float x, float y, float w, float h, uint32_t rgba)
 {
    float c[16];
-   simple_color(c, rgba);
+   int i;
+   for (i = 0; i < 4; i++)
+      simple_color(c, i, rgba);
    gfx_display_draw_quad(p_disp, userdata, dims,
          (int)(x + 0.5f), (int)(y + 0.5f),
          VIDEO_SCALE_PACK((unsigned)(w + 0.5f), (unsigned)(h + 0.5f)),
          dims, c, NULL);
 }
 
-static float simple_list_top(const simple_handle_t *sm)
+static uint32_t simple_mix(uint32_t a, uint32_t b, float t)
 {
-   return (sm->is_home ? sm->m->home_top : sm->m->list_top) * sm->scale;
+   uint32_t out = 0xFF;
+   int shift;
+   for (shift = 8; shift <= 24; shift += 8)
+   {
+      float ca = (float)((a >> shift) & 0xFF);
+      float cb = (float)((b >> shift) & 0xFF);
+      out     |= (uint32_t)(ca + (cb - ca) * t + 0.5f) << shift;
+   }
+   return out;
 }
 
-static float simple_row_height(const simple_handle_t *sm)
+/* Vertices run bottom-left, bottom-right, top-left, top-right */
+static void simple_grad_quad(gfx_display_t *p_disp, void *userdata,
+      unsigned dims, float y, float h, uint32_t top_l, uint32_t top_r,
+      uint32_t bot_l, uint32_t bot_r)
 {
-   return (sm->is_home ? sm->m->home_row : sm->m->list_row) * sm->scale;
+   float c[16];
+   simple_color(c, 0, bot_l);
+   simple_color(c, 1, bot_r);
+   simple_color(c, 2, top_l);
+   simple_color(c, 3, top_r);
+   gfx_display_draw_quad(p_disp, userdata, dims, 0, (int)(y + 0.5f),
+         VIDEO_SCALE_PACK(VIDEO_SCALE_W(dims), (unsigned)(h + 0.5f)),
+         dims, c, NULL);
+}
+
+/* Colour at the top, eased into the background so it has no edge */
+static void simple_band_quad(gfx_display_t *p_disp, void *userdata,
+      unsigned dims, float h, uint32_t left, uint32_t right)
+{
+   float h1      = h * 0.45f;
+   uint32_t ml   = simple_mix(left,  SIMPLE_COL_BG, 0.75f);
+   uint32_t mr   = simple_mix(right, SIMPLE_COL_BG, 0.75f);
+   simple_grad_quad(p_disp, userdata, dims, 0.0f, h1, left, right, ml, mr);
+   simple_grad_quad(p_disp, userdata, dims, h1, h - h1, ml, mr,
+         SIMPLE_COL_BG, SIMPLE_COL_BG);
+}
+
+static bool simple_is_more(const char *label)
+{
+   return label && (
+         string_is_equal(label, MENU_ENUM_LABEL_SIMPLE_ALL_SETTINGS_STR)
+      || string_is_equal(label, MENU_ENUM_LABEL_SIMPLE_MORE_STR)
+      || string_is_equal(label, MENU_ENUM_LABEL_SIMPLE_GAMES_MORE_STR));
+}
+
+/* Top and height of entry @i, in pixels */
+static void simple_entry_rect(const simple_handle_t *sm, size_t i,
+      float *top, float *h)
+{
+   const simple_metrics_t *m = sm->m;
+   float s                   = sm->scale;
+
+   if (sm->is_home && sm->has_continue)
+   {
+      if (i == 0)
+      {
+         *top = (m->cont_label_y - 14.0f) * s;
+         *h   = (m->cont_bottom - m->cont_label_y + 14.0f) * s;
+      }
+      else
+      {
+         *top = (m->cont_bottom + (float)(i - 1) * m->home_row) * s;
+         *h   = m->home_row * s;
+      }
+      return;
+   }
+   if (sm->is_home)
+   {
+      *top = (m->home_top + (float)i * m->home_row) * s;
+      *h   = m->home_row * s;
+      return;
+   }
+   *top = (m->list_top + (float)(i - sm->first) * m->list_row) * s;
+   *h   = m->list_row * s;
+   if (i >= sm->more_idx)
+      *top += SIMPLE_MORE_GAP * s;
 }
 
 /* Bottom of the rows: gamepad mode keeps a line for button hints */
@@ -207,6 +360,33 @@ static float simple_rows_bottom(const simple_handle_t *sm, unsigned dims)
 {
    return simple_box_bottom(sm, dims)
       - (sm->gamepad ? 28.0f * sm->scale : 0.0f);
+}
+
+static void simple_home_counts(simple_handle_t *sm)
+{
+   settings_t *settings     = config_get_ptr();
+   core_info_list_t *cores  = NULL;
+   struct string_list *lpls = dir_list_new(
+         settings->paths.directory_playlist, "lpl",
+         false, false, false, false);
+   const struct playlist_entry *entry = NULL;
+
+   sm->n_systems = lpls ? (unsigned)lpls->size : 0;
+   if (lpls)
+      dir_list_free(lpls);
+   sm->n_cores   = core_info_get_list(&cores) && cores
+      ? (unsigned)cores->count : 0;
+
+   sm->core_note[0] = '\0';
+   if (     g_defaults.content_history
+         && playlist_size(g_defaults.content_history) > 0)
+   {
+      playlist_get_index(g_defaults.content_history, 0, &entry);
+      if (     entry && entry->core_name && *entry->core_name
+            && !string_is_equal(entry->core_name, "DETECT"))
+         simple_upper(sm->core_note, entry->core_name,
+               sizeof(sm->core_note));
+   }
 }
 
 static void *simple_init(void **userdata, bool video_is_threaded)
@@ -267,8 +447,8 @@ static void simple_render_messagebox(void *data, const char *msg)
 
 static void simple_render(void *data, unsigned dims, bool is_idle)
 {
-   size_t visible;
-   float top, row_h, bottom;
+   size_t i;
+   float bottom;
    simple_handle_t *sm        = (simple_handle_t*)data;
    struct menu_state *menu_st = menu_state_get_ptr();
    menu_list_t *menu_list     = menu_st->entries.list;
@@ -278,6 +458,7 @@ static void simple_render(void *data, unsigned dims, bool is_idle)
    gfx_display_t *p_disp      = disp_get_ptr();
    settings_t *settings       = config_get_ptr();
    bool gamepad               = settings->bools.menu_simple_gamepad_mode;
+   bool was_home;
 
    if (!sm)
       return;
@@ -299,27 +480,51 @@ static void simple_render(void *data, unsigned dims, bool is_idle)
       simple_fonts_load(sm, video_driver_is_threaded());
    }
 
+   was_home = sm->is_home;
    {
       const char *label = NULL;
       menu_entries_get_last_stack(NULL, &label, NULL, NULL, NULL);
       sm->is_home = string_is_equal(label,
             msg_hash_to_str(MENU_ENUM_LABEL_MAIN_MENU));
    }
-   top                   = simple_list_top(sm);
-   row_h                 = simple_row_height(sm);
-   bottom                = simple_rows_bottom(sm, dims);
-   p_disp->header_height = (unsigned)top;
-   visible               = (size_t)((bottom - top) / row_h);
-   if (visible < 1)
-      visible = 1;
+   if (sm->is_home && !was_home)
+      simple_home_counts(sm);
 
-   if (selection < sm->first)
-      sm->first = selection;
-   else if (selection >= sm->first + visible)
-      sm->first = selection - visible + 1;
-   if (sm->first >= size)
+   sm->has_continue = sm->is_home && size > 0
+      && string_is_equal(list->list[0].label,
+            MENU_ENUM_LABEL_SIMPLE_CONTINUE_STR);
+   sm->more_idx = size;
+   for (i = 0; i < size; i++)
+      if (simple_is_more(list->list[i].label))
+      {
+         sm->more_idx = i;
+         break;
+      }
+
+   bottom = simple_rows_bottom(sm, dims);
+   if (sm->is_home)
       sm->first = 0;
+   else
+   {
+      float top, h;
+      if (selection < sm->first)
+         sm->first = selection;
+      for (;;)
+      {
+         simple_entry_rect(sm, selection, &top, &h);
+         if (top + h <= bottom || sm->first >= selection)
+            break;
+         sm->first++;
+      }
+      if (sm->first >= size)
+         sm->first = 0;
+   }
    menu_st->entries.begin = sm->first;
+   {
+      float top, h;
+      simple_entry_rect(sm, sm->first, &top, &h);
+      p_disp->header_height = (unsigned)top;
+   }
 
    if (     settings->bools.menu_mouse_enable
          || settings->bools.menu_pointer_enable)
@@ -328,10 +533,20 @@ static void simple_render(void *data, unsigned dims, bool is_idle)
       if (     (sm->pointer.type != MENU_POINTER_DISABLED)
             && (sm->pointer.flags & MENU_INP_PTR_FLG_ACTIVE))
       {
-         int y = VIDEO_POS_Y(sm->pointer.pos);
-         menu_st->input_state.ptr = (y >= (int)top && y < (int)bottom)
-            ? (unsigned)(((float)y - top) / row_h) + (unsigned)sm->first
-            : (unsigned)size;
+         float y = (float)VIDEO_POS_Y(sm->pointer.pos);
+         menu_st->input_state.ptr = (unsigned)size;
+         for (i = sm->first; i < size; i++)
+         {
+            float top, h;
+            simple_entry_rect(sm, i, &top, &h);
+            if (top + h > bottom)
+               break;
+            if (y >= top && y < top + h)
+            {
+               menu_st->input_state.ptr = (unsigned)i;
+               break;
+            }
+         }
       }
    }
 }
@@ -340,30 +555,78 @@ static void simple_draw_header(simple_handle_t *sm, unsigned dims)
 {
    char title[NAME_MAX_LENGTH];
    char crumb[NAME_MAX_LENGTH + 16];
-   float s     = sm->scale;
-   float w     = (float)VIDEO_SCALE_W(dims);
-   float y     = sm->m->header_y * s;
-   bool runs   = (runloop_get_flags() & RUNLOOP_FLAG_CORE_RUNNING) ? true : false;
+   float s   = sm->scale;
+   float w   = (float)VIDEO_SCALE_W(dims);
+   float x   = SIMPLE_GUTTER * s;
+   float y   = sm->m->header_y * s;
+   bool runs = (runloop_get_flags() & RUNLOOP_FLAG_CORE_RUNNING) ? true : false;
 
    if (sm->is_home)
    {
-      simple_text(sm, SIMPLE_FONT_NOTE, "RETROARCH",
-            SIMPLE_GUTTER * s, y, dims, SIMPLE_COL_DIM, TEXT_ALIGN_LEFT);
-      if (runs)
-         simple_text(sm, SIMPLE_FONT_NOTE, "PAUSED",
-               w - SIMPLE_GUTTER * s, y, dims, SIMPLE_COL_MUTED,
-               TEXT_ALIGN_RIGHT);
+      uint32_t c = sm->has_continue ? SIMPLE_COL_FG : SIMPLE_COL_DIM;
+      simple_note(sm, "RETROARCH", x, y, dims, c, TEXT_ALIGN_LEFT);
+      simple_note(sm, runs ? "PAUSED" : "HOME", w - x, y, dims, c,
+            TEXT_ALIGN_RIGHT);
       return;
    }
 
    title[0] = '\0';
    menu_entries_get_title(title, sizeof(title));
-   strlcpy(crumb, "< HOME / ", sizeof(crumb));
-   simple_upper(crumb + 9, title, sizeof(crumb) - 9);
-   simple_text(sm, SIMPLE_FONT_NOTE, crumb,
-         SIMPLE_GUTTER * s, y, dims, SIMPLE_COL_MUTED, TEXT_ALIGN_LEFT);
-   simple_text(sm, SIMPLE_FONT_NOTE, "RETROARCH",
-         w - SIMPLE_GUTTER * s, y, dims, SIMPLE_COL_DIM, TEXT_ALIGN_RIGHT);
+   strlcpy(crumb, "\xE2\x86\x90 HOME / ", sizeof(crumb));
+   simple_upper(crumb + strlen(crumb), title, sizeof(crumb) - strlen(crumb));
+   simple_note(sm, crumb, x, y, dims, SIMPLE_COL_MUTED, TEXT_ALIGN_LEFT);
+   simple_note(sm, "RETROARCH", w - x, y, dims, SIMPLE_COL_DIM,
+         TEXT_ALIGN_RIGHT);
+}
+
+/* A Home row's note on the right, and whether it needs the player */
+static void simple_home_note(const simple_handle_t *sm, const char *label,
+      char *s, size_t len)
+{
+   s[0] = '\0';
+   if (string_is_equal(label, MENU_ENUM_LABEL_SIMPLE_GAMES_STR))
+   {
+      if (sm->n_systems)
+         snprintf(s, len, "%u SYSTEM%s", sm->n_systems,
+               sm->n_systems == 1 ? "" : "S");
+      else
+         strlcpy(s, "ADD GAMES", len);
+   }
+   else if (string_is_equal(label, MENU_ENUM_LABEL_SIMPLE_DOWNLOADS_STR))
+   {
+      if (sm->n_cores)
+         snprintf(s, len, "%u EMULATOR%s", sm->n_cores,
+               sm->n_cores == 1 ? "" : "S");
+      else
+         strlcpy(s, "GET EMULATORS", len);
+   }
+   else if (string_is_equal(label, MENU_ENUM_LABEL_SIMPLE_SETTINGS_STR))
+      strlcpy(s, "CONTROLS \xC2\xB7 SCREEN", len);
+   else if (string_is_equal(label, MENU_ENUM_LABEL_SIMPLE_HELP_STR))
+      strlcpy(s, "ABOUT \xC2\xB7 QUIT", len);
+   else if (string_is_equal(label, MENU_ENUM_LABEL_SIMPLE_GAME_MENU_STR))
+      strlcpy(s, "PAUSED", len);
+}
+
+static void simple_draw_continue(simple_handle_t *sm, unsigned dims,
+      const char *word, bool selected)
+{
+   char title[NAME_MAX_LENGTH];
+   const char *split = strstr(word, ": ");
+   float s           = sm->scale;
+   float w           = (float)VIDEO_SCALE_W(dims);
+   float x           = SIMPLE_GUTTER * s;
+   uint32_t label_c  = (!sm->gamepad || selected)
+      ? SIMPLE_COL_ACCENT : SIMPLE_COL_MUTED;
+
+   strlcpy(title, split ? split + 2 : word, sizeof(title));
+   simple_note(sm, "CONTINUE", x, sm->m->cont_label_y * s, dims,
+         label_c, TEXT_ALIGN_LEFT);
+   if (sm->core_note[0])
+      simple_note(sm, sm->core_note, w - x, sm->m->cont_label_y * s,
+            dims, SIMPLE_COL_MUTED, TEXT_ALIGN_RIGHT);
+   simple_text(sm, SIMPLE_FONT_TITLE, title, x, sm->m->cont_title_y * s,
+         dims, SIMPLE_COL_FG, TEXT_ALIGN_LEFT);
 }
 
 static void simple_draw_rows(simple_handle_t *sm, gfx_display_t *p_disp,
@@ -374,23 +637,23 @@ static void simple_draw_rows(simple_handle_t *sm, gfx_display_t *p_disp,
    float s      = sm->scale;
    float w      = (float)VIDEO_SCALE_W(dims);
    float x      = SIMPLE_GUTTER * s;
-   float top    = simple_list_top(sm);
-   float row_h  = simple_row_height(sm);
+   float line   = s < 1.0f ? 1.0f : s;
    float bottom = simple_rows_bottom(sm, dims);
-   float mark_h = row_h * 0.5f;
    enum simple_font word_font = sm->is_home
       ? SIMPLE_FONT_HOME : SIMPLE_FONT_WORD;
 
    for (i = sm->first; i < list->size; i++)
    {
-      const char *word, *split;
+      const char *word;
+      float top, h, centre;
       menu_entry_t *entry = &sm->entry;
-      float y             = top + (float)(i - sm->first) * row_h;
-      float centre        = y + row_h * 0.5f;
       bool selected       = (i == selection);
+      bool more           = !sm->is_home && i == sm->more_idx;
 
-      if (y + row_h > bottom)
+      simple_entry_rect(sm, i, &top, &h);
+      if (top + h > bottom)
          break;
+      centre = top + h * 0.5f;
 
       MENU_ENTRY_INITIALIZE((*entry));
       entry->flags |= MENU_ENTRY_FLAG_RICH_LABEL_ENABLED
@@ -398,48 +661,41 @@ static void simple_draw_rows(simple_handle_t *sm, gfx_display_t *p_disp,
       menu_entry_get(entry, 0, i, NULL, true);
       word = entry->rich_label[0] ? entry->rich_label : entry->path;
 
-      if (!sm->is_home && i > sm->first)
-         simple_quad(p_disp, userdata, dims, x, y, w - 2.0f * x,
-               s < 1.0f ? 1.0f : s, SIMPLE_COL_LINE);
-
+      /* Yellow is the gamepad selection; touch gets a quiet mark */
       if (selected)
-         simple_quad(p_disp, userdata, dims, x - 12.0f * s,
-               centre - mark_h * 0.5f, 3.0f * s, mark_h, SIMPLE_COL_ACCENT);
-
-      /* "Continue: <game>" shows the game as a note under the word */
-      if (sm->is_home && (split = strstr(word, ": ")))
       {
-         char head[NAME_MAX_LENGTH];
-         size_t n = (size_t)(split - word) + 1;
-         strlcpy(head, word, n < sizeof(head) ? n : sizeof(head));
-         simple_upper(note, split + 2, sizeof(note));
-         if (sm->gamepad)
-         {
-            simple_text(sm, word_font, head, x, centre, dims,
-                  SIMPLE_COL_FG, TEXT_ALIGN_LEFT);
-            simple_text(sm, SIMPLE_FONT_NOTE, note, w - x, centre,
-                  dims, SIMPLE_COL_MUTED, TEXT_ALIGN_RIGHT);
-         }
-         else
-         {
-            simple_text(sm, word_font, head, x, centre - 8.0f * s, dims,
-                  SIMPLE_COL_FG, TEXT_ALIGN_LEFT);
-            simple_text(sm, SIMPLE_FONT_NOTE, note, x,
-                  centre + sm->m->note_gap * s,
-                  dims, SIMPLE_COL_MUTED, TEXT_ALIGN_LEFT);
-         }
+         float mark_h = sm->has_continue && i == 0
+            ? (sm->m->cont_title_y - sm->m->cont_label_y + 24.0f) * s
+            : h * 0.5f;
+         float mark_y = sm->has_continue && i == 0
+            ? (sm->m->cont_label_y - 8.0f) * s
+            : centre - mark_h * 0.5f;
+         simple_quad(p_disp, userdata, dims, x - 12.0f * s, mark_y,
+               3.0f * s, mark_h,
+               sm->gamepad ? SIMPLE_COL_ACCENT : SIMPLE_COL_DIM);
+      }
+
+      if (sm->has_continue && i == 0)
+      {
+         simple_draw_continue(sm, dims, word, selected);
          continue;
       }
 
-      simple_text(sm, word_font, word, x, centre, dims,
-            SIMPLE_COL_FG, TEXT_ALIGN_LEFT);
+      if (!more && (i > sm->first || !sm->is_home || sm->has_continue))
+         simple_quad(p_disp, userdata, dims, x, top, w - 2.0f * x, line,
+               SIMPLE_COL_LINE);
 
-      if (entry->value[0] && !string_is_equal(entry->value, "..."))
-      {
+      simple_text(sm, word_font, word, x, centre, dims,
+            more ? SIMPLE_COL_MUTED : SIMPLE_COL_FG, TEXT_ALIGN_LEFT);
+
+      if (sm->is_home)
+         simple_home_note(sm, list->list[i].label, note, sizeof(note));
+      else if (entry->value[0] && !string_is_equal(entry->value, "..."))
          simple_upper(note, entry->value, sizeof(note));
-         simple_text(sm, SIMPLE_FONT_NOTE, note, w - x, centre, dims,
-               SIMPLE_COL_DIM, TEXT_ALIGN_RIGHT);
-      }
+      else
+         note[0] = '\0';
+      simple_note(sm, note, w - x, centre, dims, SIMPLE_COL_DIM,
+            TEXT_ALIGN_RIGHT);
    }
 }
 
@@ -453,10 +709,8 @@ static void simple_draw_hints(simple_handle_t *sm, gfx_display_t *p_disp,
 
    simple_quad(p_disp, userdata, dims, 0.0f, box_b, w,
          s < 1.0f ? 1.0f : s, SIMPLE_COL_LINE);
-   simple_text(sm, SIMPLE_FONT_NOTE, "A OPEN   B BACK",
+   simple_note(sm, "A OPEN   B BACK   \xE2\x86\x95 MOVE",
          SIMPLE_GUTTER * s, y, dims, SIMPLE_COL_MUTED, TEXT_ALIGN_LEFT);
-   simple_text(sm, SIMPLE_FONT_NOTE, "GAMEPAD MODE",
-         w - SIMPLE_GUTTER * s, y, dims, SIMPLE_COL_DIM, TEXT_ALIGN_RIGHT);
 }
 
 static void simple_draw_msgbox(simple_handle_t *sm, gfx_display_t *p_disp,
@@ -531,6 +785,18 @@ static void simple_frame(void *data, video_frame_info_t *video_info)
       simple_quad(p_disp, userdata, dims, 0.0f, box_b, w, h - box_b,
             SIMPLE_COL_BELOW);
 
+   if (sm->has_continue && list && list->size)
+   {
+      const char *name = list->list[0].path;
+      unsigned hash    = 0;
+      size_t pick;
+      while (name && *name)
+         hash = hash * 31 + (unsigned char)*name++;
+      pick = hash % (sizeof(simple_band) / sizeof(simple_band[0]));
+      simple_band_quad(p_disp, userdata, dims, sm->m->band_h * sm->scale,
+            simple_band[pick][0], simple_band[pick][1]);
+   }
+
    simple_draw_header(sm, dims);
    if (list && list->size)
       simple_draw_rows(sm, p_disp, userdata, dims, list,
@@ -561,6 +827,7 @@ static int simple_pointer_up(void *data,
       menu_file_list_cbs_t *cbs,
       menu_entry_t *entry, unsigned action)
 {
+   float top, h;
    simple_handle_t *sm        = (simple_handle_t*)data;
    struct menu_state *menu_st = menu_state_get_ptr();
    menu_list_t *menu_list     = menu_st->entries.list;
@@ -575,10 +842,10 @@ static int simple_pointer_up(void *data,
       return 0;
 
    /* The breadcrumb line is the back button */
-   if (y < (unsigned)simple_list_top(sm))
-      return sm->is_home ? 0
-         : generic_menu_entry_action(sm, entry, menu_st->selection_ptr,
-               MENU_ACTION_CANCEL);
+   simple_entry_rect(sm, sm->first, &top, &h);
+   if (!sm->is_home && y < (unsigned)top)
+      return generic_menu_entry_action(sm, entry, menu_st->selection_ptr,
+            MENU_ACTION_CANCEL);
    if (ptr < size)
    {
       menu_st->selection_ptr = ptr;
