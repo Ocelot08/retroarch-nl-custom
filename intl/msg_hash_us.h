@@ -33422,6 +33422,98 @@ MSG_HASH(
    "Game Options"
    )
 MSG_HASH(
+   MENU_ENUM_LABEL_VALUE_SIMPLE_CONTROLS_MORE,
+   "More Controls Settings"
+   )
+MSG_HASH(
+   MENU_ENUM_SUBLABEL_SIMPLE_CONTROLS_MORE,
+   "Every controls setting, as RetroArch lists them."
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_VALUE_SIMPLE_SCREEN_MORE,
+   "More Screen Settings"
+   )
+MSG_HASH(
+   MENU_ENUM_SUBLABEL_SIMPLE_SCREEN_MORE,
+   "Every screen setting, as RetroArch lists them."
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_VALUE_SIMPLE_SOUND_MORE,
+   "More Sound Settings"
+   )
+MSG_HASH(
+   MENU_ENUM_SUBLABEL_SIMPLE_SOUND_MORE,
+   "Every sound setting, as RetroArch lists them."
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_VALUE_SIMPLE_SAVING_MORE,
+   "More Saving Settings"
+   )
+MSG_HASH(
+   MENU_ENUM_SUBLABEL_SIMPLE_SAVING_MORE,
+   "Every saving setting, as RetroArch lists them."
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_VALUE_SIMPLE_NAME_SMOOTH,
+   "Smooth Pixels"
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_VALUE_SIMPLE_NAME_SCREEN_SHAPE,
+   "Screen Shape"
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_VALUE_SIMPLE_NAME_ORIENTATION,
+   "Orientation"
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_VALUE_SIMPLE_NAME_SHOW_FPS,
+   "Show FPS"
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_VALUE_SIMPLE_NAME_VOLUME,
+   "Volume (dB)"
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_VALUE_SIMPLE_NAME_MUTE,
+   "Mute"
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_VALUE_SIMPLE_NAME_MENU_SOUNDS,
+   "Menu Sounds"
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_VALUE_SIMPLE_NAME_MUTE_FAST_FORWARD,
+   "Mute Fast-Forward"
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_VALUE_SIMPLE_NAME_TOUCH_CONTROLS,
+   "Touch Controls"
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_VALUE_SIMPLE_NAME_MENU_BUTTON,
+   "Menu Button"
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_VALUE_SIMPLE_NAME_VIBRATION,
+   "Vibration"
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_VALUE_SIMPLE_NAME_SWAP_OK_BACK,
+   "Swap OK and Back"
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_VALUE_SIMPLE_NAME_RESUME,
+   "Resume Games"
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_VALUE_SIMPLE_NAME_SAVE_ON_CLOSE,
+   "Save on Close"
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_VALUE_SIMPLE_NAME_SAVE_EVERY,
+   "Auto-Save Every"
+   )
+MSG_HASH(
    MENU_ENUM_LABEL_VALUE_SIMPLE_CHANGE_DISC,
    "Change Disc"
    )

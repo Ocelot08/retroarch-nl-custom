@@ -41,6 +41,7 @@
 #include "../../playlist.h"
 #include "../../runloop.h"
 #include "../../command.h"
+#include "../../audio/audio_driver.h"
 #include "../../msg_hash_lbl_str.h"
 
 #define SIMPLE_DESIGN_WIDTH   360.0f
@@ -235,6 +236,50 @@ static size_t simple_utf8_len(unsigned char c)
    return 4;
 }
 
+static float simple_note_width(simple_handle_t *sm, const char *s)
+{
+   const char *p;
+   float width         = 0.0f;
+   font_data_impl_t *f = &sm->fonts[SIMPLE_FONT_NOTE];
+   float track         = sm->m->font[SIMPLE_FONT_NOTE] * sm->scale
+      * SIMPLE_TRACKING;
+   if (!f->font || !s || !*s)
+      return 0.0f;
+   for (p = s; *p; )
+   {
+      size_t n = simple_utf8_len((unsigned char)*p);
+      width   += font_driver_get_message_width(f->font, p, n, 1.0f) + track;
+      p       += n;
+   }
+   return width - track;
+}
+
+/* Copies @src, cut short with an ellipsis if it is wider than @max_w */
+static void simple_fit(simple_handle_t *sm, enum simple_font fi,
+      const char *src, float max_w, char *dst, size_t len)
+{
+   size_t n;
+   font_data_t *font = sm->fonts[fi].font;
+
+   n = strlcpy(dst, src, len);
+   if (!font || n >= len
+         || font_driver_get_message_width(font, dst, n, 1.0f) <= max_w)
+      return;
+   while (n > 0)
+   {
+      do
+         n--;
+      while (n > 0 && ((unsigned char)dst[n] & 0xC0) == 0x80);
+      while (n > 0 && dst[n - 1] == ' ')
+         n--;
+      if (n + 4 > len)
+         continue;
+      memcpy(dst + n, "\xE2\x80\xA6", 4);
+      if (font_driver_get_message_width(font, dst, n + 3, 1.0f) <= max_w)
+         return;
+   }
+}
+
 /* Small caps notes, drawn a glyph at a time for the letter-spacing */
 static void simple_note(simple_handle_t *sm, const char *s,
       float x, float y_centre, unsigned dims, uint32_t color,
@@ -333,7 +378,11 @@ static bool simple_is_more(const char *label)
    return label && (
          string_is_equal(label, MENU_ENUM_LABEL_SIMPLE_ALL_SETTINGS_STR)
       || string_is_equal(label, MENU_ENUM_LABEL_SIMPLE_MORE_STR)
-      || string_is_equal(label, MENU_ENUM_LABEL_SIMPLE_GAMES_MORE_STR));
+      || string_is_equal(label, MENU_ENUM_LABEL_SIMPLE_GAMES_MORE_STR)
+      || string_is_equal(label, MENU_ENUM_LABEL_SIMPLE_CONTROLS_MORE_STR)
+      || string_is_equal(label, MENU_ENUM_LABEL_SIMPLE_SCREEN_MORE_STR)
+      || string_is_equal(label, MENU_ENUM_LABEL_SIMPLE_SOUND_MORE_STR)
+      || string_is_equal(label, MENU_ENUM_LABEL_SIMPLE_SAVING_MORE_STR));
 }
 
 /* Top and height of entry @i, in pixels */
@@ -732,6 +781,43 @@ static void simple_home_note(const simple_handle_t *sm, const char *label,
       strlcpy(s, "PAUSED", len);
 }
 
+/* A Settings category's note: the setting that best sums it up */
+static void simple_settings_note(const char *label, char *s, size_t len)
+{
+   settings_t *settings = config_get_ptr();
+   s[0] = '\0';
+   if (string_is_equal(label, MENU_ENUM_LABEL_SIMPLE_CONTROLS_STR))
+      strlcpy(s, !settings->bools.input_overlay_enable ? "TOUCH OFF"
+            : settings->bools.input_overlay_hide_when_gamepad_connected
+            ? "TOUCH \xC2\xB7 AUTO" : "TOUCH ON", len);
+   else if (string_is_equal(label, MENU_ENUM_LABEL_SIMPLE_SCREEN_STR))
+      strlcpy(s, settings->bools.video_smooth
+            ? "SMOOTH" : "SHARP PIXELS", len);
+   else if (string_is_equal(label, MENU_ENUM_LABEL_SIMPLE_SOUND_STR))
+      strlcpy(s, audio_state_get_ptr()->mute_enable ? "MUTED"
+            : settings->bools.audio_enable ? "ON" : "OFF", len);
+   else if (string_is_equal(label, MENU_ENUM_LABEL_SIMPLE_SAVING_STR))
+      strlcpy(s, settings->bools.savestate_auto_load
+            ? "RESUME ON" : "RESUME OFF", len);
+   else if (string_is_equal(label, MENU_ENUM_LABEL_SIMPLE_LIBRARY_STR))
+      strlcpy(s, settings->bools.network_on_demand_thumbnails
+            ? "BOX ART ON" : "BOX ART OFF", len);
+#ifdef HAVE_CHEEVOS
+   else if (string_is_equal(label, MENU_ENUM_LABEL_SIMPLE_ACCOUNTS_STR))
+   {
+      if (*settings->arrays.cheevos_username)
+         simple_upper(s, settings->arrays.cheevos_username, len);
+      else
+         strlcpy(s, "NOT SIGNED IN", len);
+   }
+#endif
+   else if (string_is_equal(label, MENU_ENUM_LABEL_ACCESSIBILITY_SETTINGS_STR))
+      strlcpy(s, settings->bools.accessibility_enable ? "ON" : "OFF", len);
+   else if (string_is_equal(label, MENU_ENUM_LABEL_SIMPLE_INTERFACE_STR))
+      strlcpy(s, settings->uints.menu_layout == MENU_LAYOUT_SIMPLE
+            ? "SIMPLE" : "CLASSIC", len);
+}
+
 static void simple_draw_continue(simple_handle_t *sm, unsigned dims,
       const char *word, bool selected)
 {
@@ -812,15 +898,22 @@ static void simple_draw_rows(simple_handle_t *sm, gfx_display_t *p_disp,
          simple_quad(p_disp, userdata, dims, x, top, w - 2.0f * x, line,
                SIMPLE_COL_LINE);
 
-      simple_text(sm, word_font, word, x, centre, dims,
-            more ? SIMPLE_COL_MUTED : SIMPLE_COL_FG, TEXT_ALIGN_LEFT);
-
       if (sm->is_home)
          simple_home_note(sm, list->list[i].label, note, sizeof(note));
       else if (entry->value[0] && !string_is_equal(entry->value, "..."))
          simple_upper(note, entry->value, sizeof(note));
       else
-         note[0] = '\0';
+         simple_settings_note(list->list[i].label, note, sizeof(note));
+
+      {
+         char fitted[NAME_MAX_LENGTH];
+         float note_w = simple_note_width(sm, note);
+         simple_fit(sm, word_font, word,
+               w - 2.0f * x - (note_w > 0.0f ? note_w + 16.0f * s : 0.0f),
+               fitted, sizeof(fitted));
+         simple_text(sm, word_font, fitted, x, centre, dims,
+               more ? SIMPLE_COL_MUTED : SIMPLE_COL_FG, TEXT_ALIGN_LEFT);
+      }
       simple_note(sm, note, w - x, centre, dims, SIMPLE_COL_DIM,
             TEXT_ALIGN_RIGHT);
    }

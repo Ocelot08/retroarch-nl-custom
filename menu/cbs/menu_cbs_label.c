@@ -45,6 +45,60 @@ static int action_bind_label_generic(
    return 0;
 }
 
+/* Plain names for the settings the Simple layout's short lists show */
+static const enum msg_hash_enums simple_names[][2] = {
+   { MENU_ENUM_LABEL_INPUT_OVERLAY_ENABLE,
+      MENU_ENUM_LABEL_VALUE_SIMPLE_NAME_TOUCH_CONTROLS },
+   { MENU_ENUM_LABEL_INPUT_MENU_ENUM_TOGGLE_GAMEPAD_COMBO,
+      MENU_ENUM_LABEL_VALUE_SIMPLE_NAME_MENU_BUTTON },
+   { MENU_ENUM_LABEL_ENABLE_DEVICE_VIBRATION,
+      MENU_ENUM_LABEL_VALUE_SIMPLE_NAME_VIBRATION },
+   { MENU_ENUM_LABEL_MENU_INPUT_SWAP_OK_CANCEL,
+      MENU_ENUM_LABEL_VALUE_SIMPLE_NAME_SWAP_OK_BACK },
+   { MENU_ENUM_LABEL_VIDEO_SMOOTH,
+      MENU_ENUM_LABEL_VALUE_SIMPLE_NAME_SMOOTH },
+   { MENU_ENUM_LABEL_VIDEO_ASPECT_RATIO_INDEX,
+      MENU_ENUM_LABEL_VALUE_SIMPLE_NAME_SCREEN_SHAPE },
+   { MENU_ENUM_LABEL_SCREEN_ORIENTATION,
+      MENU_ENUM_LABEL_VALUE_SIMPLE_NAME_ORIENTATION },
+   { MENU_ENUM_LABEL_FPS_SHOW,
+      MENU_ENUM_LABEL_VALUE_SIMPLE_NAME_SHOW_FPS },
+   { MENU_ENUM_LABEL_AUDIO_VOLUME,
+      MENU_ENUM_LABEL_VALUE_SIMPLE_NAME_VOLUME },
+   { MENU_ENUM_LABEL_AUDIO_MUTE,
+      MENU_ENUM_LABEL_VALUE_SIMPLE_NAME_MUTE },
+   { MENU_ENUM_LABEL_AUDIO_ENABLE_MENU,
+      MENU_ENUM_LABEL_VALUE_SIMPLE_NAME_MENU_SOUNDS },
+   { MENU_ENUM_LABEL_AUDIO_FASTFORWARD_MUTE,
+      MENU_ENUM_LABEL_VALUE_SIMPLE_NAME_MUTE_FAST_FORWARD },
+   { MENU_ENUM_LABEL_SAVESTATE_AUTO_LOAD,
+      MENU_ENUM_LABEL_VALUE_SIMPLE_NAME_RESUME },
+   { MENU_ENUM_LABEL_SAVESTATE_AUTO_SAVE,
+      MENU_ENUM_LABEL_VALUE_SIMPLE_NAME_SAVE_ON_CLOSE },
+   { MENU_ENUM_LABEL_AUTOSAVE_INTERVAL,
+      MENU_ENUM_LABEL_VALUE_SIMPLE_NAME_SAVE_EVERY },
+};
+
+static int action_bind_label_simple_name(
+      file_list_t *list,
+      unsigned type, unsigned i,
+      const char *label, const char *path,
+      char *s, size_t len)
+{
+   size_t j;
+   const char *row = (list && i < list->size) ? list->list[i].label : NULL;
+   if (     !row
+         || config_get_ptr()->uints.menu_layout != MENU_LAYOUT_SIMPLE)
+      return 0;
+   for (j = 0; j < ARRAY_SIZE(simple_names); j++)
+      if (string_is_equal(row, msg_hash_to_str(simple_names[j][0])))
+      {
+         strlcpy(s, msg_hash_to_str(simple_names[j][1]), len);
+         break;
+      }
+   return 0;
+}
+
 FILL_LABEL_MACRO(action_bind_label_rdb_entry_detail,         MENU_ENUM_LABEL_VALUE_RDB_ENTRY_DETAIL)
 FILL_LABEL_MACRO(action_bind_label_internal_memory,          MSG_INTERNAL_STORAGE)
 FILL_LABEL_MACRO(action_bind_label_removable_storage,        MSG_REMOVABLE_STORAGE)
@@ -120,6 +174,23 @@ int menu_cbs_init_bind_label(menu_file_list_cbs_t *cbs,
 
    switch (cbs->enum_idx)
    {
+      case MENU_ENUM_LABEL_INPUT_OVERLAY_ENABLE:
+      case MENU_ENUM_LABEL_INPUT_MENU_ENUM_TOGGLE_GAMEPAD_COMBO:
+      case MENU_ENUM_LABEL_ENABLE_DEVICE_VIBRATION:
+      case MENU_ENUM_LABEL_MENU_INPUT_SWAP_OK_CANCEL:
+      case MENU_ENUM_LABEL_VIDEO_SMOOTH:
+      case MENU_ENUM_LABEL_VIDEO_ASPECT_RATIO_INDEX:
+      case MENU_ENUM_LABEL_SCREEN_ORIENTATION:
+      case MENU_ENUM_LABEL_FPS_SHOW:
+      case MENU_ENUM_LABEL_AUDIO_VOLUME:
+      case MENU_ENUM_LABEL_AUDIO_MUTE:
+      case MENU_ENUM_LABEL_AUDIO_ENABLE_MENU:
+      case MENU_ENUM_LABEL_AUDIO_FASTFORWARD_MUTE:
+      case MENU_ENUM_LABEL_SAVESTATE_AUTO_LOAD:
+      case MENU_ENUM_LABEL_SAVESTATE_AUTO_SAVE:
+      case MENU_ENUM_LABEL_AUTOSAVE_INTERVAL:
+         BIND_ACTION_LABEL(cbs, action_bind_label_simple_name);
+         break;
       case MENU_ENUM_LABEL_LOAD_CONTENT_HISTORY:
       case MENU_ENUM_LABEL_GOTO_FAVORITES:
       case MENU_ENUM_LABEL_GOTO_IMAGES:

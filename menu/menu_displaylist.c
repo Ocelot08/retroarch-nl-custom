@@ -9876,6 +9876,54 @@ unsigned menu_displaylist_build_list(
                count++;
 #endif
          break;
+      case DISPLAYLIST_SIMPLE_CONTROLS_LIST:
+      case DISPLAYLIST_SIMPLE_SCREEN_LIST:
+      case DISPLAYLIST_SIMPLE_SOUND_LIST:
+      case DISPLAYLIST_SIMPLE_SAVING_LIST:
+         {
+            /* A few settings, then the classic list under More */
+            static const struct
+            {
+               enum menu_displaylist_ctl_state list;
+               enum msg_hash_enums label;
+               enum menu_displaylist_parse_type parse;
+            } rows[] = {
+               { DISPLAYLIST_SIMPLE_CONTROLS_LIST, MENU_ENUM_LABEL_INPUT_OVERLAY_ENABLE,                PARSE_ONLY_BOOL  },
+               { DISPLAYLIST_SIMPLE_CONTROLS_LIST, MENU_ENUM_LABEL_INPUT_MENU_ENUM_TOGGLE_GAMEPAD_COMBO, PARSE_ONLY_UINT  },
+               { DISPLAYLIST_SIMPLE_CONTROLS_LIST, MENU_ENUM_LABEL_ENABLE_DEVICE_VIBRATION,             PARSE_ONLY_BOOL  },
+               { DISPLAYLIST_SIMPLE_CONTROLS_LIST, MENU_ENUM_LABEL_MENU_INPUT_SWAP_OK_CANCEL,           PARSE_ONLY_BOOL  },
+               { DISPLAYLIST_SIMPLE_SCREEN_LIST,   MENU_ENUM_LABEL_VIDEO_SMOOTH,                        PARSE_ONLY_BOOL  },
+               { DISPLAYLIST_SIMPLE_SCREEN_LIST,   MENU_ENUM_LABEL_VIDEO_ASPECT_RATIO_INDEX,            PARSE_ONLY_UINT  },
+               { DISPLAYLIST_SIMPLE_SCREEN_LIST,   MENU_ENUM_LABEL_SCREEN_ORIENTATION,                  PARSE_ONLY_UINT  },
+               { DISPLAYLIST_SIMPLE_SCREEN_LIST,   MENU_ENUM_LABEL_FPS_SHOW,                            PARSE_ONLY_BOOL  },
+               { DISPLAYLIST_SIMPLE_SOUND_LIST,    MENU_ENUM_LABEL_AUDIO_VOLUME,                        PARSE_ONLY_FLOAT },
+               { DISPLAYLIST_SIMPLE_SOUND_LIST,    MENU_ENUM_LABEL_AUDIO_MUTE,                          PARSE_ONLY_BOOL  },
+               { DISPLAYLIST_SIMPLE_SOUND_LIST,    MENU_ENUM_LABEL_AUDIO_ENABLE_MENU,                   PARSE_ONLY_BOOL  },
+               { DISPLAYLIST_SIMPLE_SOUND_LIST,    MENU_ENUM_LABEL_AUDIO_FASTFORWARD_MUTE,              PARSE_ONLY_BOOL  },
+               { DISPLAYLIST_SIMPLE_SAVING_LIST,   MENU_ENUM_LABEL_SAVESTATE_AUTO_LOAD,                 PARSE_ONLY_BOOL  },
+               { DISPLAYLIST_SIMPLE_SAVING_LIST,   MENU_ENUM_LABEL_SAVESTATE_AUTO_SAVE,                 PARSE_ONLY_BOOL  },
+               { DISPLAYLIST_SIMPLE_SAVING_LIST,   MENU_ENUM_LABEL_AUTOSAVE_INTERVAL,                   PARSE_ONLY_UINT  },
+            };
+            static const enum msg_hash_enums more[][2] = {
+               { MENU_ENUM_LABEL_VALUE_SIMPLE_CONTROLS_MORE, MENU_ENUM_LABEL_SIMPLE_CONTROLS_MORE },
+               { MENU_ENUM_LABEL_VALUE_SIMPLE_SCREEN_MORE,   MENU_ENUM_LABEL_SIMPLE_SCREEN_MORE   },
+               { MENU_ENUM_LABEL_VALUE_SIMPLE_SOUND_MORE,    MENU_ENUM_LABEL_SIMPLE_SOUND_MORE    },
+               { MENU_ENUM_LABEL_VALUE_SIMPLE_SAVING_MORE,   MENU_ENUM_LABEL_SIMPLE_SAVING_MORE   },
+            };
+            size_t m = (size_t)(type - DISPLAYLIST_SIMPLE_CONTROLS_LIST);
+
+            for (i = 0; i < ARRAY_SIZE(rows); i++)
+               if (     rows[i].list == type
+                     && MENU_DISPLAYLIST_PARSE_SETTINGS_ENUM(list,
+                        rows[i].label, rows[i].parse, false) == 0)
+                  count++;
+            if (menu_entries_append(list,
+                     msg_hash_to_str(more[m][0]),
+                     msg_hash_to_str(more[m][1]),
+                     more[m][1], MENU_SETTING_ACTION, 0, 0, NULL))
+               count++;
+         }
+         break;
       case DISPLAYLIST_SIMPLE_SETTINGS_LIST:
          {
             static const enum msg_hash_enums rows[][2] = {
@@ -18701,6 +18749,10 @@ static bool menu_displaylist_ctl_internal(
          case DISPLAYLIST_SIMPLE_HELP_LIST:
          case DISPLAYLIST_SIMPLE_MORE_LIST:
          case DISPLAYLIST_SIMPLE_GAMES_MORE_LIST:
+         case DISPLAYLIST_SIMPLE_CONTROLS_LIST:
+         case DISPLAYLIST_SIMPLE_SCREEN_LIST:
+         case DISPLAYLIST_SIMPLE_SOUND_LIST:
+         case DISPLAYLIST_SIMPLE_SAVING_LIST:
             menu_entries_clear(info->list);
             count = menu_displaylist_build_list(info->list,
                   settings, type, false);

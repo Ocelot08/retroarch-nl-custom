@@ -103,6 +103,10 @@ GENERIC_DEFERRED_PUSH(deferred_push_simple_settings_list,           DISPLAYLIST_
 GENERIC_DEFERRED_PUSH(deferred_push_simple_help_list,               DISPLAYLIST_SIMPLE_HELP_LIST)
 GENERIC_DEFERRED_PUSH(deferred_push_simple_more_list,               DISPLAYLIST_SIMPLE_MORE_LIST)
 GENERIC_DEFERRED_PUSH(deferred_push_simple_games_more_list,         DISPLAYLIST_SIMPLE_GAMES_MORE_LIST)
+GENERIC_DEFERRED_PUSH(deferred_push_simple_controls_list,           DISPLAYLIST_SIMPLE_CONTROLS_LIST)
+GENERIC_DEFERRED_PUSH(deferred_push_simple_screen_list,             DISPLAYLIST_SIMPLE_SCREEN_LIST)
+GENERIC_DEFERRED_PUSH(deferred_push_simple_sound_list,              DISPLAYLIST_SIMPLE_SOUND_LIST)
+GENERIC_DEFERRED_PUSH(deferred_push_simple_saving_list,             DISPLAYLIST_SIMPLE_SAVING_LIST)
 GENERIC_DEFERRED_PUSH(deferred_push_options,                        DISPLAYLIST_OPTIONS)
 GENERIC_DEFERRED_PUSH(deferred_push_netplay,                        DISPLAYLIST_NETPLAY_ROOM_LIST)
 GENERIC_DEFERRED_PUSH(deferred_push_netplay_sublist,                DISPLAYLIST_NETPLAY)
@@ -847,6 +851,10 @@ static int menu_cbs_init_bind_deferred_push_compare_label(
       {MENU_ENUM_LABEL_DEFERRED_SIMPLE_HELP_LIST, deferred_push_simple_help_list},
       {MENU_ENUM_LABEL_DEFERRED_SIMPLE_MORE_LIST, deferred_push_simple_more_list},
       {MENU_ENUM_LABEL_DEFERRED_SIMPLE_GAMES_MORE_LIST, deferred_push_simple_games_more_list},
+      {MENU_ENUM_LABEL_DEFERRED_SIMPLE_CONTROLS_LIST, deferred_push_simple_controls_list},
+      {MENU_ENUM_LABEL_DEFERRED_SIMPLE_SCREEN_LIST, deferred_push_simple_screen_list},
+      {MENU_ENUM_LABEL_DEFERRED_SIMPLE_SOUND_LIST, deferred_push_simple_sound_list},
+      {MENU_ENUM_LABEL_DEFERRED_SIMPLE_SAVING_LIST, deferred_push_simple_saving_list},
       {MENU_ENUM_LABEL_DEFERRED_ACCOUNTS_YOUTUBE_LIST, deferred_push_accounts_youtube_list},
       {MENU_ENUM_LABEL_DEFERRED_ACCOUNTS_TWITCH_LIST, deferred_push_accounts_twitch_list},
       {MENU_ENUM_LABEL_DEFERRED_ACCOUNTS_FACEBOOK_LIST, deferred_push_accounts_facebook_list},

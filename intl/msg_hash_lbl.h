@@ -1860,6 +1860,38 @@ MSG_HASH(
    "deferred_simple_games_more_list"
    )
 MSG_HASH(
+   MENU_ENUM_LABEL_SIMPLE_CONTROLS_MORE,
+   "simple_controls_more"
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_DEFERRED_SIMPLE_CONTROLS_LIST,
+   "deferred_simple_controls_list"
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_SIMPLE_SCREEN_MORE,
+   "simple_screen_more"
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_DEFERRED_SIMPLE_SCREEN_LIST,
+   "deferred_simple_screen_list"
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_SIMPLE_SOUND_MORE,
+   "simple_sound_more"
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_DEFERRED_SIMPLE_SOUND_LIST,
+   "deferred_simple_sound_list"
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_SIMPLE_SAVING_MORE,
+   "simple_saving_more"
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_DEFERRED_SIMPLE_SAVING_LIST,
+   "deferred_simple_saving_list"
+   )
+MSG_HASH(
    MENU_ENUM_LABEL_DEFERRED_SIMPLE_GAMES_LIST,
    "deferred_simple_games_list"
    )
