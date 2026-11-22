@@ -55,6 +55,8 @@
 #define SIMPLE_DEBUG 0
 #endif
 
+#define SIMPLE_CRUMB_PARTS    12
+#define SIMPLE_CRUMB_PART     48
 #define SIMPLE_DESIGN_WIDTH   360.0f
 #define SIMPLE_GUTTER         22.0f
 #define SIMPLE_MORE_GAP       16.0f
@@ -82,6 +84,7 @@ enum simple_font
    SIMPLE_FONT_HOME,
    SIMPLE_FONT_NOTE,
    SIMPLE_FONT_TITLE,
+   SIMPLE_FONT_FULL,       /* RetroArch's own lists */
    SIMPLE_FONT_LAST
 };
 
@@ -101,11 +104,11 @@ typedef struct simple_metrics
 } simple_metrics_t;
 
 static const simple_metrics_t simple_touch = {
-   { 24.0f, 30.0f, 11.0f, 48.0f },
+   { 24.0f, 30.0f, 11.0f, 48.0f, 18.0f },
    50.0f, 80.0f, 50.0f, 110.0f, 60.0f,
    360.0f, 262.0f, 304.0f, 352.0f };
 static const simple_metrics_t simple_gamepad = {
-   { 17.0f, 20.0f, 9.5f, 22.0f },
+   { 17.0f, 20.0f, 9.5f, 22.0f, 14.0f },
    20.0f, 40.0f, 30.0f, 40.0f, 34.0f,
    96.0f, 46.0f, 66.0f, 88.0f };
 
@@ -143,6 +146,7 @@ typedef struct simple_handle
    unsigned n_cores;
    float scale;
    bool is_home;
+   bool full;               /* one of RetroArch's own lists: smaller type */
    bool has_continue;
    bool gamepad;
    bool dragging;
@@ -169,6 +173,7 @@ typedef struct simple_handle
    bool log_gamepad;
    bool log_rows;
    char log_title[NAME_MAX_LENGTH];
+   char crumb[SIMPLE_CRUMB_PARTS][SIMPLE_CRUMB_PART];
 } simple_handle_t;
 
 static void simple_color(float *c, int vert, uint32_t rgba)
@@ -220,7 +225,8 @@ static void simple_fonts_load(simple_handle_t *sm, bool is_threaded)
 {
    static const char *files[SIMPLE_FONT_LAST] = {
       "WorkSans-Light.ttf", "WorkSans-Light.ttf",
-      "IBMPlexMono-Medium.ttf", "WorkSans-Light.ttf" };
+      "IBMPlexMono-Medium.ttf", "WorkSans-Light.ttf",
+      "WorkSans-Light.ttf" };
    char dir[DIR_MAX_LENGTH];
    char path[PATH_MAX_LENGTH];
    settings_t *settings  = config_get_ptr();
@@ -928,6 +934,39 @@ static void simple_card_layout(simple_handle_t *sm, unsigned dims)
    }
 }
 
+/* Simple's own lists keep the large type; every other list is one of
+ * RetroArch's, drawn smaller. Ids, not titles, so renames don't matter.
+ * In the Classic layout every list is RetroArch's, the Main Menu too. */
+static void simple_set_page(simple_handle_t *sm, bool simple_layout)
+{
+   size_t i;
+   const char *label = NULL;
+   static const enum msg_hash_enums lists[] = {
+      MENU_ENUM_LABEL_CONTENT_SETTINGS,    /* the Game menu */
+      MENU_ENUM_LABEL_DEFERRED_SIMPLE_GAMES_LIST,
+      MENU_ENUM_LABEL_DEFERRED_SIMPLE_GAMES_MORE_LIST,
+      MENU_ENUM_LABEL_DEFERRED_SIMPLE_SETTINGS_LIST,
+      MENU_ENUM_LABEL_DEFERRED_SIMPLE_HELP_LIST,
+      MENU_ENUM_LABEL_DEFERRED_SIMPLE_CONTROLS_LIST,
+      MENU_ENUM_LABEL_DEFERRED_SIMPLE_SCREEN_LIST,
+      MENU_ENUM_LABEL_DEFERRED_SIMPLE_SOUND_LIST,
+      MENU_ENUM_LABEL_DEFERRED_SIMPLE_SAVING_LIST
+   };
+
+   menu_entries_get_last_stack(NULL, &label, NULL, NULL, NULL);
+   sm->is_home = simple_layout && string_is_equal(label,
+         msg_hash_to_str(MENU_ENUM_LABEL_MAIN_MENU));
+   sm->full    = !sm->is_home;
+   if (!simple_layout || sm->is_home)
+      return;
+   for (i = 0; i < ARRAY_SIZE(lists); i++)
+      if (string_is_equal(label, msg_hash_to_str(lists[i])))
+      {
+         sm->full = false;
+         return;
+      }
+}
+
 /* Test builds: a page line when the page changes, a sel line when the
  * selection moves, the rows again once the list is at rest somewhere new.
  * Rows are in window pixels, as the touch reader sees them. */
@@ -960,7 +999,7 @@ static void simple_log_state(simple_handle_t *sm, menu_list_t *menu_list,
       simple_log("page \"%s\" depth=%u mode=%s style=%s dims=%ux%u size=%u "
             "sel=%u", title, (unsigned)depth,
             sm->gamepad ? "gamepad" : "touch",
-            sm->is_home ? "home" : "list",
+            sm->is_home ? "home" : (sm->full ? "full" : "list"),
             (unsigned)VIDEO_SCALE_W(dims), (unsigned)VIDEO_SCALE_H(dims),
             (unsigned)size, (unsigned)selection);
    }
@@ -1017,12 +1056,7 @@ static void simple_render(void *data, unsigned dims, bool is_idle)
    }
 
    was_home = sm->is_home;
-   {
-      const char *label = NULL;
-      menu_entries_get_last_stack(NULL, &label, NULL, NULL, NULL);
-      sm->is_home = string_is_equal(label,
-            msg_hash_to_str(MENU_ENUM_LABEL_MAIN_MENU));
-   }
+   simple_set_page(sm, settings->uints.menu_layout == MENU_LAYOUT_SIMPLE);
    if (sm->is_home && !was_home)
       simple_home_counts(sm);
 
@@ -1098,10 +1132,86 @@ static void simple_render(void *data, unsigned dims, bool is_idle)
    }
 }
 
+/* Titles of the open levels, root first, upper case. A deep stack keeps
+ * the root and the last levels; *gap says some were left out. */
+static size_t simple_crumb_parts(simple_handle_t *sm, bool *gap)
+{
+   size_t i, first;
+   size_t n                   = 0;
+   char title[NAME_MAX_LENGTH];
+   struct menu_state *menu_st = menu_state_get_ptr();
+   const file_list_t *stack   = menu_st->entries.list
+      ? MENU_LIST_GET(menu_st->entries.list, 0) : NULL;
+   bool simple_layout         = config_get_ptr()->uints.menu_layout
+      == MENU_LAYOUT_SIMPLE;
+
+   *gap = false;
+   if (!stack || !stack->size)
+      return 0;
+   first = (stack->size > SIMPLE_CRUMB_PARTS)
+      ? stack->size - (SIMPLE_CRUMB_PARTS - 1) : 1;
+   *gap  = first > 1;
+
+   for (i = 0; i < stack->size; i++)
+   {
+      const struct item_file *item = &stack->list[i];
+      menu_file_list_cbs_t *cbs    = (menu_file_list_cbs_t*)item->actiondata;
+
+      if (i > 0 && i < first)
+         continue;
+      title[0] = '\0';
+      if (i == 0 && simple_layout)
+         strlcpy(title, "Home", sizeof(title));
+      else if (i == stack->size - 1)
+         menu_entries_get_title(title, sizeof(title));
+      else if (cbs && cbs->action_get_title)
+         cbs->action_get_title(item->path, item->label, item->type,
+               title, sizeof(title));
+      simple_upper(sm->crumb[n++], title, SIMPLE_CRUMB_PART);
+   }
+   return n;
+}
+
+/* "<- A / B / C", or with the middle levels as an ellipsis */
+static void simple_crumb_join(simple_handle_t *sm, char *s, size_t len,
+      size_t n, size_t keep_from, bool gap)
+{
+   size_t i;
+   strlcpy(s, n > 1 ? "\xE2\x86\x90 " : "", len);
+   strlcat(s, sm->crumb[0], len);
+   if (gap || keep_from > 1)
+      strlcat(s, " / \xE2\x80\xA6", len);
+   for (i = keep_from; i < n; i++)
+   {
+      strlcat(s, " / ", len);
+      strlcat(s, sm->crumb[i], len);
+   }
+}
+
+static void simple_crumb(simple_handle_t *sm, char *s, size_t len,
+      float max_w)
+{
+   size_t keep_from;
+   bool gap;
+   size_t n = simple_crumb_parts(sm, &gap);
+
+   s[0] = '\0';
+   if (!n)
+      return;
+   for (keep_from = 1; keep_from < n; keep_from++)
+   {
+      simple_crumb_join(sm, s, len, n, keep_from, gap);
+      if (simple_note_width(sm, s) <= max_w)
+         return;
+   }
+   /* Only the current level fits */
+   strlcpy(s, "\xE2\x86\x90 \xE2\x80\xA6 / ", len);
+   strlcat(s, sm->crumb[n - 1], len);
+}
+
 static void simple_draw_header(simple_handle_t *sm, unsigned dims)
 {
-   char title[NAME_MAX_LENGTH];
-   char crumb[NAME_MAX_LENGTH + 16];
+   char crumb[SIMPLE_CRUMB_PARTS * (SIMPLE_CRUMB_PART + 3) + 8];
    float s   = sm->scale;
    float w   = (float)VIDEO_SCALE_W(dims);
    float x   = SIMPLE_GUTTER * s;
@@ -1117,10 +1227,9 @@ static void simple_draw_header(simple_handle_t *sm, unsigned dims)
       return;
    }
 
-   title[0] = '\0';
-   menu_entries_get_title(title, sizeof(title));
-   strlcpy(crumb, "\xE2\x86\x90 HOME / ", sizeof(crumb));
-   simple_upper(crumb + strlen(crumb), title, sizeof(crumb) - strlen(crumb));
+   /* Room left of RETROARCH, with a gap */
+   simple_crumb(sm, crumb, sizeof(crumb),
+         w - 2.0f * x - simple_note_width(sm, "RETROARCH") - 16.0f * s);
    simple_note(sm, crumb, x, y, dims, SIMPLE_COL_MUTED, TEXT_ALIGN_LEFT);
    simple_note(sm, "RETROARCH", w - x, y, dims, SIMPLE_COL_DIM,
          TEXT_ALIGN_RIGHT);
@@ -1225,7 +1334,8 @@ static void simple_draw_rows(simple_handle_t *sm, gfx_display_t *p_disp,
    float bottom = simple_rows_bottom(sm, dims);
    float view_t = simple_view_top(sm);
    enum simple_font word_font = sm->is_home
-      ? SIMPLE_FONT_HOME : SIMPLE_FONT_WORD;
+      ? SIMPLE_FONT_HOME
+      : (sm->full ? SIMPLE_FONT_FULL : SIMPLE_FONT_WORD);
 
    for (i = sm->first; i < list->size; i++)
    {
