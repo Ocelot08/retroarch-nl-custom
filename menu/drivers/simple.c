@@ -107,8 +107,13 @@ typedef struct simple_handle
    font_data_impl_t fonts[SIMPLE_FONT_LAST];
    menu_entry_t entry;
    const simple_metrics_t *m;
+   const file_list_t *last_list;
    size_t first;
    size_t more_idx;
+   size_t last_selection;
+   float scroll_y;
+   float drag_start_y;
+   float drag_start_scroll;
    unsigned dims;
    unsigned n_systems;
    unsigned n_cores;
@@ -116,6 +121,7 @@ typedef struct simple_handle
    bool is_home;
    bool has_continue;
    bool gamepad;
+   bool dragging;
    char core_note[64];
    char msgbox[1024];
 } simple_handle_t;
@@ -349,10 +355,82 @@ static void simple_entry_rect(const simple_handle_t *sm, size_t i,
       *h   = m->home_row * s;
       return;
    }
-   *top = (m->list_top + (float)(i - sm->first) * m->list_row) * s;
+   *top = (m->list_top + (float)i * m->list_row) * s - sm->scroll_y;
    *h   = m->list_row * s;
    if (i >= sm->more_idx)
       *top += SIMPLE_MORE_GAP * s;
+}
+
+/* Pages scroll under the header: a drag follows the finger, a flick
+ * carries on with the menu's own decaying acceleration, and a move by
+ * buttons brings the selection into view. */
+static void simple_scroll(simple_handle_t *sm, const file_list_t *list,
+      size_t selection, float bottom)
+{
+   float top, h, max;
+   float s      = sm->scale;
+   float view_t = sm->m->list_top * s;
+   size_t size  = list ? list->size : 0;
+   float extent = (float)size * sm->m->list_row * s
+      + (sm->more_idx < size ? SIMPLE_MORE_GAP * s : 0.0f);
+
+   max = extent - (bottom - view_t);
+   if (max < 0.0f)
+      max = 0.0f;
+
+   if (list != sm->last_list)
+   {
+      sm->last_list      = list;
+      sm->scroll_y       = 0.0f;
+      sm->last_selection = (size_t)-1;
+      sm->dragging       = false;
+   }
+
+   if (     (sm->pointer.flags & MENU_INP_PTR_FLG_PRESSED)
+         && (sm->pointer.flags & MENU_INP_PTR_FLG_DRAGGED))
+   {
+      float y = (float)VIDEO_POS_Y(sm->pointer.pos);
+      if (!sm->dragging)
+      {
+         sm->dragging          = true;
+         sm->drag_start_y      = y;
+         sm->drag_start_scroll = sm->scroll_y;
+      }
+      sm->scroll_y = sm->drag_start_scroll - (y - sm->drag_start_y);
+   }
+   else
+   {
+      sm->dragging  = false;
+      sm->scroll_y -= sm->pointer.y_accel;
+   }
+
+   if (selection != sm->last_selection && !sm->dragging && size)
+   {
+      simple_entry_rect(sm, selection, &top, &h);
+      if (top < view_t)
+         sm->scroll_y -= view_t - top;
+      else if (top + h > bottom)
+         sm->scroll_y += top + h - bottom;
+      sm->last_selection = selection;
+   }
+
+   if (sm->scroll_y > max)
+      sm->scroll_y = max;
+   if (sm->scroll_y < 0.0f)
+      sm->scroll_y = 0.0f;
+   sm->first = (size_t)(sm->scroll_y / (sm->m->list_row * s));
+}
+
+/* Top of the scrolling rows; above it is the header */
+static float simple_view_top(const simple_handle_t *sm)
+{
+   float top, h;
+   if (sm->is_home)
+   {
+      simple_entry_rect(sm, 0, &top, &h);
+      return top;
+   }
+   return sm->m->list_top * sm->scale;
 }
 
 /* Bottom of the rows: gamepad mode keeps a line for button hints */
@@ -502,52 +580,38 @@ static void simple_render(void *data, unsigned dims, bool is_idle)
       }
 
    bottom = simple_rows_bottom(sm, dims);
-   if (sm->is_home)
-      sm->first = 0;
-   else
-   {
-      float top, h;
-      if (selection < sm->first)
-         sm->first = selection;
-      for (;;)
-      {
-         simple_entry_rect(sm, selection, &top, &h);
-         if (top + h <= bottom || sm->first >= selection)
-            break;
-         sm->first++;
-      }
-      if (sm->first >= size)
-         sm->first = 0;
-   }
-   menu_st->entries.begin = sm->first;
-   {
-      float top, h;
-      simple_entry_rect(sm, sm->first, &top, &h);
-      p_disp->header_height = (unsigned)top;
-   }
-
    if (     settings->bools.menu_mouse_enable
          || settings->bools.menu_pointer_enable)
-   {
       menu_input_get_pointer_state(&sm->pointer);
-      if (     (sm->pointer.type != MENU_POINTER_DISABLED)
-            && (sm->pointer.flags & MENU_INP_PTR_FLG_ACTIVE))
-      {
-         float y = (float)VIDEO_POS_Y(sm->pointer.pos);
-         menu_st->input_state.ptr = (unsigned)size;
+   else
+      memset(&sm->pointer, 0, sizeof(sm->pointer));
+   if (sm->is_home)
+   {
+      sm->first     = 0;
+      sm->scroll_y  = 0.0f;
+      sm->last_list = NULL;
+   }
+   else
+      simple_scroll(sm, list, selection, bottom);
+   menu_st->entries.begin = sm->first;
+   p_disp->header_height  = (unsigned)simple_view_top(sm);
+
+   if (     (sm->pointer.type != MENU_POINTER_DISABLED)
+         && (sm->pointer.flags & MENU_INP_PTR_FLG_ACTIVE))
+   {
+      float y = (float)VIDEO_POS_Y(sm->pointer.pos);
+      menu_st->input_state.ptr = (unsigned)size;
+      if (y >= simple_view_top(sm) && y < bottom)
          for (i = sm->first; i < size; i++)
          {
             float top, h;
             simple_entry_rect(sm, i, &top, &h);
-            if (top + h > bottom)
-               break;
             if (y >= top && y < top + h)
             {
                menu_st->input_state.ptr = (unsigned)i;
                break;
             }
          }
-      }
    }
 }
 
@@ -639,6 +703,7 @@ static void simple_draw_rows(simple_handle_t *sm, gfx_display_t *p_disp,
    float x      = SIMPLE_GUTTER * s;
    float line   = s < 1.0f ? 1.0f : s;
    float bottom = simple_rows_bottom(sm, dims);
+   float view_t = simple_view_top(sm);
    enum simple_font word_font = sm->is_home
       ? SIMPLE_FONT_HOME : SIMPLE_FONT_WORD;
 
@@ -651,7 +716,9 @@ static void simple_draw_rows(simple_handle_t *sm, gfx_display_t *p_disp,
       bool more           = !sm->is_home && i == sm->more_idx;
 
       simple_entry_rect(sm, i, &top, &h);
-      if (top + h > bottom)
+      if (top + h <= view_t)
+         continue;
+      if (top >= bottom || (sm->is_home && top + h > bottom))
          break;
       centre = top + h * 0.5f;
 
@@ -681,7 +748,7 @@ static void simple_draw_rows(simple_handle_t *sm, gfx_display_t *p_disp,
          continue;
       }
 
-      if (!more && (i > sm->first || !sm->is_home || sm->has_continue))
+      if (!more && (i > 0 || !sm->is_home || sm->has_continue))
          simple_quad(p_disp, userdata, dims, x, top, w - 2.0f * x, line,
                SIMPLE_COL_LINE);
 
@@ -797,13 +864,30 @@ static void simple_frame(void *data, video_frame_info_t *video_info)
             simple_band[pick][0], simple_band[pick][1]);
    }
 
-   simple_draw_header(sm, dims);
    if (list && list->size)
       simple_draw_rows(sm, p_disp, userdata, dims, list,
             menu_st->selection_ptr);
+   for (i = 0; i < SIMPLE_FONT_LAST; i++)
+      font_flush(dims, &sm->fonts[i]);
+
+   /* Rows scrolled out of view go under the header and the hints */
+   if (!sm->is_home)
+   {
+      float view_t = simple_view_top(sm);
+      float line   = sm->scale < 1.0f ? 1.0f : sm->scale;
+      float x      = SIMPLE_GUTTER * sm->scale;
+      float rows_b = simple_rows_bottom(sm, dims);
+      simple_quad(p_disp, userdata, dims, 0.0f, 0.0f, w, view_t,
+            SIMPLE_COL_BG);
+      simple_quad(p_disp, userdata, dims, x, view_t, w - 2.0f * x, line,
+            SIMPLE_COL_LINE);
+      if (rows_b < box_b)
+         simple_quad(p_disp, userdata, dims, 0.0f, rows_b, w,
+               box_b - rows_b, SIMPLE_COL_BG);
+   }
+   simple_draw_header(sm, dims);
    if (sm->gamepad)
       simple_draw_hints(sm, p_disp, userdata, dims);
-
    for (i = 0; i < SIMPLE_FONT_LAST; i++)
       font_flush(dims, &sm->fonts[i]);
 
@@ -858,7 +942,10 @@ static void simple_navigation_clear(void *data, bool pending_push)
 {
    simple_handle_t *sm = (simple_handle_t*)data;
    if (sm)
-      sm->first = 0;
+   {
+      sm->first     = 0;
+      sm->last_list = NULL;
+   }
 }
 
 static int simple_list_bind_init(menu_file_list_cbs_t *cbs,
