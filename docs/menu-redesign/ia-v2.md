@@ -12,7 +12,7 @@
 ## Decisions since v1
 
 1. **Who it's for:** most people: add games, start one, keep progress, make it look right. Power users keep Classic and the other menu drivers.
-2. **Don't re-home advanced settings.** Settings ends in **All Settings**, which opens the classic Settings list unchanged. Curated "More" lists only for Controls, Screen, Sound and Saving; every other More row opens the existing classic list.
+2. **Don't re-home advanced settings.** Settings ends in **All Settings**, which opens the classic Settings list unchanged. Every "More" row opens RetroArch's own list for that category, unchanged: there are no hand-picked More lists. In the Simple driver those lists use smaller type than Simple's own lists.
 3. **Plain names:** Games, Emulators (cores), Screen (video), Sound, Game Options (core options), Touch Controls, System Files (BIOS), Box Art (thumbnails).
 4. **Home has five rows.** Touch Controls is not on Home; it lives in Settings › Controls and the Game menu's Controls.
 5. **The Game menu has a Home row**, for bigger changes during a game.
@@ -128,12 +128,12 @@ Downloads
 ```
 Settings
 ├─ Controls ›       Touch Controls ›, Set Up Controller, Menu Button, Vibration,
-│                   Swap OK and Back, Hotkeys ›, More Controls Settings (curated)
+│                   Swap OK and Back, Hotkeys ›, More Controls Settings → classic
 ├─ Screen ›         Screen Style › (previews), Screen Shape, Orientation, Show FPS,
-│                   More Screen Settings (curated)
-├─ Sound ›          Volume, Mute, Menu Sounds, Fast-Forward Sound, More Sound Settings (curated)
-├─ Saving ›         Resume Where I Left Off, Save In-Game Progress Every, Number Saves
-│                   Automatically, Keep Saves, Cloud Sync ›, More Saving Settings (curated)
+│                   More Screen Settings → classic
+├─ Sound ›          Volume, Mute, Menu Sounds, Mute Fast-Forward, More Sound Settings → classic
+├─ Saving ›         Resume Games, Save on Close, Auto-Save Every, Number Saves, Keep Saves,
+│                   Cloud Sync ›, More Saving Settings → classic
 ├─ Library ›        Show Box Art, Download Missing Box Art, Rescan Games, Games Folder,
 │                   Clean Up Lists, More → Playlists
 ├─ Accounts ›       RetroAchievements ›, Nickname, More → User
@@ -197,8 +197,8 @@ Checked against the Android build. `config_save_on_exit` and Touch Support are a
 
 | Setting | Android today | Simple |
 |---|---|---|
-| `savestate_auto_save`, `savestate_auto_load` | off | on (Resume Where I Left Off) |
-| `savestate_auto_index` | off | on (Number Saves Automatically) |
+| `savestate_auto_save`, `savestate_auto_load` | off | on (Resume Games, Save on Close) |
+| `savestate_auto_index` | off | on (Number Saves) |
 | `savestate_max_keep` | 0 (all) | a limit, e.g. 10 |
 | `savestate_thumbnail_enable` | off on ARM | on (the slot's screenshot beside the Game menu) |
 | `menu_singleclick_playlists` | off | on |

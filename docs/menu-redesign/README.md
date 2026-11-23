@@ -93,11 +93,16 @@ menu buttons; the breadcrumb line goes back. Choices step from small
 arrows with 48dp targets, numbers open a slider row, and prompts show as
 a card with answer rows. It has no keyboard, images or art yet.
 
-In the Simple layout, Settings › Controls, Screen, Sound and Saving are
-short lists of the common settings under plain names, each ending in a
-More row that opens the classic list.
+In the Simple layout, every Settings category (Controls, Screen, Sound,
+Saving, Library, Accounts, Accessibility, Interface) and the Game menu's
+Controls and Screen are short lists of the common settings under plain
+names, each ending in a More row that opens the classic list. RetroArch's
+own lists are drawn in smaller type. The breadcrumb shows the whole path,
+the middle levels as an ellipsis when it is too long. Help has Switch to
+Classic Menu; in the Classic layout the Main Menu lists Settings, so the
+way back is Settings › User Interface › Menu Layout.
 
-Gamepad Mode (Help, or Settings › User Interface) draws the menu in a 4:3
+Gamepad Mode (Help, or Settings › Interface) draws the menu in a 4:3
 box at the top, smaller, with button hints, and shows the touch controls
 below it to work the menu with. Without it the menu fills the screen and
 the touch controls are hidden while the menu is open. Other drivers keep
