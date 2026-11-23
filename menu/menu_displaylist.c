@@ -9874,6 +9874,8 @@ unsigned menu_displaylist_build_list(
       case DISPLAYLIST_SIMPLE_INTERFACE_LIST:
       case DISPLAYLIST_SIMPLE_GAME_CONTROLS_LIST:
       case DISPLAYLIST_SIMPLE_GAME_SCREEN_LIST:
+      case DISPLAYLIST_SIMPLE_DOWNLOADS_LIST:
+      case DISPLAYLIST_SIMPLE_BOX_ART_LIST:
          {
             /* A few rows, then the classic list under More. A row is a
              * setting under its plain name, or (named) a list to open; a
@@ -9974,6 +9976,18 @@ unsigned menu_displaylist_build_list(
                   PARSE_ONLY_UINT, MSG_UNKNOWN },
                { DISPLAYLIST_SIMPLE_GAME_SCREEN_LIST, MENU_ENUM_LABEL_SCREEN_ORIENTATION,
                   PARSE_ONLY_UINT, MSG_UNKNOWN },
+#if defined(HAVE_COMPRESSION) && !defined(HAVE_MIST)
+               { DISPLAYLIST_SIMPLE_DOWNLOADS_LIST, MENU_ENUM_LABEL_DOWNLOAD_CORE_SYSTEM_FILES,
+                  PARSE_NONE, MENU_ENUM_LABEL_VALUE_SIMPLE_NAME_SYSTEM_FILES },
+#endif
+               { DISPLAYLIST_SIMPLE_DOWNLOADS_LIST, MENU_ENUM_LABEL_SIMPLE_BOX_ART,
+                  PARSE_NONE, MENU_ENUM_LABEL_VALUE_SIMPLE_BOX_ART },
+#ifdef HAVE_NETWORKING
+               { DISPLAYLIST_SIMPLE_BOX_ART_LIST, MENU_ENUM_LABEL_PL_THUMBNAILS_UPDATER_LIST,
+                  PARSE_NONE, MENU_ENUM_LABEL_VALUE_SIMPLE_NAME_GET_ART },
+               { DISPLAYLIST_SIMPLE_BOX_ART_LIST, MENU_ENUM_LABEL_NETWORK_ON_DEMAND_THUMBNAILS,
+                  PARSE_ONLY_BOOL, MSG_UNKNOWN },
+#endif
             };
             static const enum msg_hash_enums more[][2] = {
                { MENU_ENUM_LABEL_VALUE_SIMPLE_CONTROLS_MORE,
@@ -9996,6 +10010,8 @@ unsigned menu_displaylist_build_list(
                   MENU_ENUM_LABEL_SIMPLE_CONTROLS_MORE },
                { MENU_ENUM_LABEL_VALUE_SIMPLE_SCREEN_MORE,
                   MENU_ENUM_LABEL_SIMPLE_SCREEN_MORE },
+               { MENU_ENUM_LABEL_VALUE_SIMPLE_DOWNLOADS_MORE,
+                  MENU_ENUM_LABEL_SIMPLE_DOWNLOADS_MORE },
             };
             size_t m = (size_t)(type - DISPLAYLIST_SIMPLE_CONTROLS_LIST);
 
@@ -10016,6 +10032,30 @@ unsigned menu_displaylist_build_list(
                            MENU_ENUM_LABEL_SHADER_OPTIONS,
                            MENU_SETTING_ACTION, 0, 0, NULL))
                      count++;
+            }
+#endif
+#if defined(HAVE_NETWORKING) && defined(HAVE_UPDATE_CORES) && !defined(HAVE_LAKKA)
+            /* As the Online Updater shows them */
+            if (     type == DISPLAYLIST_SIMPLE_DOWNLOADS_LIST
+                  && settings->bools.menu_show_core_updater)
+            {
+               bool update = core_info_count() > 0;
+#if defined(ANDROID)
+               if (play_feature_delivery_enabled())
+                  update = false;
+#endif
+               if (update && menu_entries_append(list,
+                        msg_hash_to_str(MENU_ENUM_LABEL_VALUE_SIMPLE_NAME_UPDATE_EMULATORS),
+                        MENU_ENUM_LABEL_UPDATE_INSTALLED_CORES_STR,
+                        MENU_ENUM_LABEL_UPDATE_INSTALLED_CORES,
+                        MENU_SETTING_ACTION, 0, 0, NULL))
+                  count++;
+               if (menu_entries_append(list,
+                        msg_hash_to_str(MENU_ENUM_LABEL_VALUE_SIMPLE_NAME_EMULATORS),
+                        MENU_ENUM_LABEL_CORE_UPDATER_LIST_STR,
+                        MENU_ENUM_LABEL_CORE_UPDATER_LIST,
+                        MENU_SETTING_ACTION, 0, 0, NULL))
+                  count++;
             }
 #endif
             for (i = 0; i < ARRAY_SIZE(rows); i++)
@@ -18879,6 +18919,8 @@ static bool menu_displaylist_ctl_internal(
          case DISPLAYLIST_SIMPLE_INTERFACE_LIST:
          case DISPLAYLIST_SIMPLE_GAME_CONTROLS_LIST:
          case DISPLAYLIST_SIMPLE_GAME_SCREEN_LIST:
+         case DISPLAYLIST_SIMPLE_DOWNLOADS_LIST:
+         case DISPLAYLIST_SIMPLE_BOX_ART_LIST:
             menu_entries_clear(info->list);
             count = menu_displaylist_build_list(info->list,
                   settings, type, false);

@@ -33602,6 +33602,42 @@ MSG_HASH(
    "Shaders"
    )
 MSG_HASH(
+   MENU_ENUM_LABEL_VALUE_SIMPLE_NAME_UPDATE_EMULATORS,
+   "Update Emulators"
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_VALUE_SIMPLE_NAME_EMULATORS,
+   "Emulators"
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_VALUE_SIMPLE_NAME_SYSTEM_FILES,
+   "System Files"
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_VALUE_SIMPLE_NAME_GET_ART,
+   "Get Missing Box Art"
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_VALUE_SIMPLE_NAME_ART_BROWSING,
+   "Download While Browsing"
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_VALUE_SIMPLE_BOX_ART,
+   "Box Art"
+   )
+MSG_HASH(
+   MENU_ENUM_SUBLABEL_SIMPLE_BOX_ART,
+   "Covers for the games in your lists."
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_VALUE_SIMPLE_DOWNLOADS_MORE,
+   "More Downloads"
+   )
+MSG_HASH(
+   MENU_ENUM_SUBLABEL_SIMPLE_DOWNLOADS_MORE,
+   "Everything RetroArch can download or update."
+   )
+MSG_HASH(
    MENU_ENUM_LABEL_VALUE_SIMPLE_NAME_ACCESSIBILITY,
    "Accessibility"
    )

@@ -1916,6 +1916,22 @@ MSG_HASH(
    "deferred_simple_game_screen_list"
    )
 MSG_HASH(
+   MENU_ENUM_LABEL_DEFERRED_SIMPLE_DOWNLOADS_LIST,
+   "deferred_simple_downloads_list"
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_DEFERRED_SIMPLE_BOX_ART_LIST,
+   "deferred_simple_box_art_list"
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_SIMPLE_BOX_ART,
+   "simple_box_art"
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_SIMPLE_DOWNLOADS_MORE,
+   "simple_downloads_more"
+   )
+MSG_HASH(
    MENU_ENUM_LABEL_SIMPLE_LIBRARY_MORE,
    "simple_library_more"
    )
