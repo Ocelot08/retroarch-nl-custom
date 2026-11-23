@@ -426,7 +426,11 @@ static bool simple_is_more(const char *label)
       || string_is_equal(label, MENU_ENUM_LABEL_SIMPLE_CONTROLS_MORE_STR)
       || string_is_equal(label, MENU_ENUM_LABEL_SIMPLE_SCREEN_MORE_STR)
       || string_is_equal(label, MENU_ENUM_LABEL_SIMPLE_SOUND_MORE_STR)
-      || string_is_equal(label, MENU_ENUM_LABEL_SIMPLE_SAVING_MORE_STR));
+      || string_is_equal(label, MENU_ENUM_LABEL_SIMPLE_SAVING_MORE_STR)
+      || string_is_equal(label, MENU_ENUM_LABEL_SIMPLE_LIBRARY_MORE_STR)
+      || string_is_equal(label, MENU_ENUM_LABEL_SIMPLE_ACCOUNTS_MORE_STR)
+      || string_is_equal(label, MENU_ENUM_LABEL_SIMPLE_ACCESSIBILITY_MORE_STR)
+      || string_is_equal(label, MENU_ENUM_LABEL_SIMPLE_INTERFACE_MORE_STR));
 }
 
 static rarch_setting_t *simple_row_setting(const file_list_t *list,
@@ -950,7 +954,13 @@ static void simple_set_page(simple_handle_t *sm, bool simple_layout)
       MENU_ENUM_LABEL_DEFERRED_SIMPLE_CONTROLS_LIST,
       MENU_ENUM_LABEL_DEFERRED_SIMPLE_SCREEN_LIST,
       MENU_ENUM_LABEL_DEFERRED_SIMPLE_SOUND_LIST,
-      MENU_ENUM_LABEL_DEFERRED_SIMPLE_SAVING_LIST
+      MENU_ENUM_LABEL_DEFERRED_SIMPLE_SAVING_LIST,
+      MENU_ENUM_LABEL_DEFERRED_SIMPLE_LIBRARY_LIST,
+      MENU_ENUM_LABEL_DEFERRED_SIMPLE_ACCOUNTS_LIST,
+      MENU_ENUM_LABEL_DEFERRED_SIMPLE_ACCESSIBILITY_LIST,
+      MENU_ENUM_LABEL_DEFERRED_SIMPLE_INTERFACE_LIST,
+      MENU_ENUM_LABEL_DEFERRED_SIMPLE_GAME_CONTROLS_LIST,
+      MENU_ENUM_LABEL_DEFERRED_SIMPLE_GAME_SCREEN_LIST
    };
 
    menu_entries_get_last_stack(NULL, &label, NULL, NULL, NULL);
@@ -1294,7 +1304,7 @@ static void simple_settings_note(const char *label, char *s, size_t len)
          strlcpy(s, "NOT SIGNED IN", len);
    }
 #endif
-   else if (string_is_equal(label, MENU_ENUM_LABEL_ACCESSIBILITY_SETTINGS_STR))
+   else if (string_is_equal(label, MENU_ENUM_LABEL_SIMPLE_ACCESSIBILITY_STR))
       strlcpy(s, settings->bools.accessibility_enable ? "ON" : "OFF", len);
    else if (string_is_equal(label, MENU_ENUM_LABEL_SIMPLE_INTERFACE_STR))
       strlcpy(s, settings->uints.menu_layout == MENU_LAYOUT_SIMPLE

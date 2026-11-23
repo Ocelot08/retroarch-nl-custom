@@ -1892,6 +1892,62 @@ MSG_HASH(
    "deferred_simple_saving_list"
    )
 MSG_HASH(
+   MENU_ENUM_LABEL_DEFERRED_SIMPLE_LIBRARY_LIST,
+   "deferred_simple_library_list"
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_DEFERRED_SIMPLE_ACCOUNTS_LIST,
+   "deferred_simple_accounts_list"
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_DEFERRED_SIMPLE_ACCESSIBILITY_LIST,
+   "deferred_simple_accessibility_list"
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_DEFERRED_SIMPLE_INTERFACE_LIST,
+   "deferred_simple_interface_list"
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_DEFERRED_SIMPLE_GAME_CONTROLS_LIST,
+   "deferred_simple_game_controls_list"
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_DEFERRED_SIMPLE_GAME_SCREEN_LIST,
+   "deferred_simple_game_screen_list"
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_SIMPLE_LIBRARY_MORE,
+   "simple_library_more"
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_SIMPLE_ACCOUNTS_MORE,
+   "simple_accounts_more"
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_SIMPLE_ACCESSIBILITY_MORE,
+   "simple_accessibility_more"
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_SIMPLE_INTERFACE_MORE,
+   "simple_interface_more"
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_SIMPLE_ACCESSIBILITY,
+   "simple_accessibility"
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_SIMPLE_GAME_CONTROLS,
+   "simple_game_controls"
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_SIMPLE_GAME_SCREEN,
+   "simple_game_screen"
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_SIMPLE_CLASSIC,
+   "simple_classic"
+   )
+MSG_HASH(
    MENU_ENUM_LABEL_DEFERRED_SIMPLE_GAMES_LIST,
    "deferred_simple_games_list"
    )

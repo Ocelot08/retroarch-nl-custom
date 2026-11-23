@@ -4982,29 +4982,16 @@ static unsigned menu_displaylist_parse_simple_game_menu(
    {
       if (menu_entries_append(list,
                msg_hash_to_str(MENU_ENUM_LABEL_VALUE_SIMPLE_CONTROLS),
-               MENU_ENUM_LABEL_CORE_INPUT_REMAPPING_OPTIONS_STR,
-               MENU_ENUM_LABEL_CORE_INPUT_REMAPPING_OPTIONS,
+               MENU_ENUM_LABEL_SIMPLE_GAME_CONTROLS_STR,
+               MENU_ENUM_LABEL_SIMPLE_GAME_CONTROLS,
                MENU_SETTING_ACTION, 0, 0, NULL))
          count++;
-
-#if defined(HAVE_CG) || defined(HAVE_GLSL) || defined(HAVE_SLANG) || defined(HAVE_HLSL)
-      {
-         gfx_ctx_flags_t flags;
-         flags.flags     = 0;
-         video_context_driver_get_flags(&flags);
-
-         if (     BIT32_GET(flags.flags, GFX_CTX_FLAGS_SHADERS_SLANG)
-               || BIT32_GET(flags.flags, GFX_CTX_FLAGS_SHADERS_GLSL)
-               || BIT32_GET(flags.flags, GFX_CTX_FLAGS_SHADERS_CG)
-               || BIT32_GET(flags.flags, GFX_CTX_FLAGS_SHADERS_HLSL))
-            if (menu_entries_append(list,
-                     msg_hash_to_str(MENU_ENUM_LABEL_VALUE_SIMPLE_SCREEN),
-                     MENU_ENUM_LABEL_SHADER_OPTIONS_STR,
-                     MENU_ENUM_LABEL_SHADER_OPTIONS,
-                     MENU_SETTING_ACTION, 0, 0, NULL))
-               count++;
-      }
-#endif
+      if (menu_entries_append(list,
+               msg_hash_to_str(MENU_ENUM_LABEL_VALUE_SIMPLE_SCREEN),
+               MENU_ENUM_LABEL_SIMPLE_GAME_SCREEN_STR,
+               MENU_ENUM_LABEL_SIMPLE_GAME_SCREEN,
+               MENU_SETTING_ACTION, 0, 0, NULL))
+         count++;
 
       if (menu_entries_append(list,
                msg_hash_to_str(MENU_ENUM_LABEL_VALUE_SIMPLE_GAME_OPTIONS),
@@ -5815,6 +5802,7 @@ static bool menu_history_in_main_menu(const char *menu_ident,
       settings_t *settings)
 {
    return   (!strcmp(menu_ident, "rgui"))
+         || (!strcmp(menu_ident, "simple"))
          || (!strcmp(menu_ident, "glui") && !settings->bools.menu_materialui_show_nav_bar)
          || (!strcmp(menu_ident, "ozone") && !settings->bools.ozone_show_sidebar)
          || (!strcmp(menu_ident, "xmb") && !settings->bools.menu_xmb_show_horizontal_list);
@@ -9880,44 +9868,173 @@ unsigned menu_displaylist_build_list(
       case DISPLAYLIST_SIMPLE_SCREEN_LIST:
       case DISPLAYLIST_SIMPLE_SOUND_LIST:
       case DISPLAYLIST_SIMPLE_SAVING_LIST:
+      case DISPLAYLIST_SIMPLE_LIBRARY_LIST:
+      case DISPLAYLIST_SIMPLE_ACCOUNTS_LIST:
+      case DISPLAYLIST_SIMPLE_ACCESSIBILITY_LIST:
+      case DISPLAYLIST_SIMPLE_INTERFACE_LIST:
+      case DISPLAYLIST_SIMPLE_GAME_CONTROLS_LIST:
+      case DISPLAYLIST_SIMPLE_GAME_SCREEN_LIST:
          {
-            /* A few settings, then the classic list under More */
+            /* A few rows, then the classic list under More. A row is a
+             * setting under its plain name, or (named) a list to open; a
+             * setting this build lacks is left out. Lists in the order of
+             * their ids, from Controls. */
             static const struct
             {
                enum menu_displaylist_ctl_state list;
                enum msg_hash_enums label;
                enum menu_displaylist_parse_type parse;
+               enum msg_hash_enums name;     /* MSG_UNKNOWN: a setting */
             } rows[] = {
-               { DISPLAYLIST_SIMPLE_CONTROLS_LIST, MENU_ENUM_LABEL_INPUT_OVERLAY_ENABLE,                PARSE_ONLY_BOOL  },
-               { DISPLAYLIST_SIMPLE_CONTROLS_LIST, MENU_ENUM_LABEL_INPUT_MENU_ENUM_TOGGLE_GAMEPAD_COMBO, PARSE_ONLY_UINT  },
-               { DISPLAYLIST_SIMPLE_CONTROLS_LIST, MENU_ENUM_LABEL_ENABLE_DEVICE_VIBRATION,             PARSE_ONLY_BOOL  },
-               { DISPLAYLIST_SIMPLE_CONTROLS_LIST, MENU_ENUM_LABEL_MENU_INPUT_SWAP_OK_CANCEL,           PARSE_ONLY_BOOL  },
-               { DISPLAYLIST_SIMPLE_SCREEN_LIST,   MENU_ENUM_LABEL_VIDEO_SMOOTH,                        PARSE_ONLY_BOOL  },
-               { DISPLAYLIST_SIMPLE_SCREEN_LIST,   MENU_ENUM_LABEL_VIDEO_ASPECT_RATIO_INDEX,            PARSE_ONLY_UINT  },
-               { DISPLAYLIST_SIMPLE_SCREEN_LIST,   MENU_ENUM_LABEL_SCREEN_ORIENTATION,                  PARSE_ONLY_UINT  },
-               { DISPLAYLIST_SIMPLE_SCREEN_LIST,   MENU_ENUM_LABEL_FPS_SHOW,                            PARSE_ONLY_BOOL  },
-               { DISPLAYLIST_SIMPLE_SOUND_LIST,    MENU_ENUM_LABEL_AUDIO_VOLUME,                        PARSE_ONLY_FLOAT },
-               { DISPLAYLIST_SIMPLE_SOUND_LIST,    MENU_ENUM_LABEL_AUDIO_MUTE,                          PARSE_ONLY_BOOL  },
-               { DISPLAYLIST_SIMPLE_SOUND_LIST,    MENU_ENUM_LABEL_AUDIO_ENABLE_MENU,                   PARSE_ONLY_BOOL  },
-               { DISPLAYLIST_SIMPLE_SOUND_LIST,    MENU_ENUM_LABEL_AUDIO_FASTFORWARD_MUTE,              PARSE_ONLY_BOOL  },
-               { DISPLAYLIST_SIMPLE_SAVING_LIST,   MENU_ENUM_LABEL_SAVESTATE_AUTO_LOAD,                 PARSE_ONLY_BOOL  },
-               { DISPLAYLIST_SIMPLE_SAVING_LIST,   MENU_ENUM_LABEL_SAVESTATE_AUTO_SAVE,                 PARSE_ONLY_BOOL  },
-               { DISPLAYLIST_SIMPLE_SAVING_LIST,   MENU_ENUM_LABEL_AUTOSAVE_INTERVAL,                   PARSE_ONLY_UINT  },
+               { DISPLAYLIST_SIMPLE_CONTROLS_LIST, MENU_ENUM_LABEL_INPUT_OVERLAY_ENABLE,
+                  PARSE_ONLY_BOOL, MSG_UNKNOWN },
+               { DISPLAYLIST_SIMPLE_CONTROLS_LIST, MENU_ENUM_LABEL_OVERLAY_TOUCH_LAYOUT,
+                  PARSE_NONE, MENU_ENUM_LABEL_VALUE_SIMPLE_NAME_TOUCH_LAYOUT },
+               { DISPLAYLIST_SIMPLE_CONTROLS_LIST, MENU_ENUM_LABEL_INPUT_RETROPAD_BINDS,
+                  PARSE_NONE, MENU_ENUM_LABEL_VALUE_SIMPLE_NAME_SET_UP_CONTROLLER },
+               { DISPLAYLIST_SIMPLE_CONTROLS_LIST, MENU_ENUM_LABEL_INPUT_MENU_ENUM_TOGGLE_GAMEPAD_COMBO,
+                  PARSE_ONLY_UINT, MSG_UNKNOWN },
+               { DISPLAYLIST_SIMPLE_CONTROLS_LIST, MENU_ENUM_LABEL_ENABLE_DEVICE_VIBRATION,
+                  PARSE_ONLY_BOOL, MSG_UNKNOWN },
+               { DISPLAYLIST_SIMPLE_CONTROLS_LIST, MENU_ENUM_LABEL_MENU_INPUT_SWAP_OK_CANCEL,
+                  PARSE_ONLY_BOOL, MSG_UNKNOWN },
+               { DISPLAYLIST_SIMPLE_CONTROLS_LIST, MENU_ENUM_LABEL_INPUT_HOTKEY_BINDS,
+                  PARSE_NONE, MENU_ENUM_LABEL_VALUE_SIMPLE_NAME_HOTKEYS },
+               { DISPLAYLIST_SIMPLE_SCREEN_LIST, MENU_ENUM_LABEL_VIDEO_SMOOTH,
+                  PARSE_ONLY_BOOL, MSG_UNKNOWN },
+               { DISPLAYLIST_SIMPLE_SCREEN_LIST, MENU_ENUM_LABEL_VIDEO_ASPECT_RATIO_INDEX,
+                  PARSE_ONLY_UINT, MSG_UNKNOWN },
+               { DISPLAYLIST_SIMPLE_SCREEN_LIST, MENU_ENUM_LABEL_SCREEN_ORIENTATION,
+                  PARSE_ONLY_UINT, MSG_UNKNOWN },
+               { DISPLAYLIST_SIMPLE_SCREEN_LIST, MENU_ENUM_LABEL_FPS_SHOW,
+                  PARSE_ONLY_BOOL, MSG_UNKNOWN },
+               { DISPLAYLIST_SIMPLE_SOUND_LIST, MENU_ENUM_LABEL_AUDIO_VOLUME,
+                  PARSE_ONLY_FLOAT, MSG_UNKNOWN },
+               { DISPLAYLIST_SIMPLE_SOUND_LIST, MENU_ENUM_LABEL_AUDIO_MUTE,
+                  PARSE_ONLY_BOOL, MSG_UNKNOWN },
+               { DISPLAYLIST_SIMPLE_SOUND_LIST, MENU_ENUM_LABEL_AUDIO_ENABLE_MENU,
+                  PARSE_ONLY_BOOL, MSG_UNKNOWN },
+               { DISPLAYLIST_SIMPLE_SOUND_LIST, MENU_ENUM_LABEL_AUDIO_FASTFORWARD_MUTE,
+                  PARSE_ONLY_BOOL, MSG_UNKNOWN },
+               { DISPLAYLIST_SIMPLE_SAVING_LIST, MENU_ENUM_LABEL_SAVESTATE_AUTO_LOAD,
+                  PARSE_ONLY_BOOL, MSG_UNKNOWN },
+               { DISPLAYLIST_SIMPLE_SAVING_LIST, MENU_ENUM_LABEL_SAVESTATE_AUTO_SAVE,
+                  PARSE_ONLY_BOOL, MSG_UNKNOWN },
+               { DISPLAYLIST_SIMPLE_SAVING_LIST, MENU_ENUM_LABEL_AUTOSAVE_INTERVAL,
+                  PARSE_ONLY_UINT, MSG_UNKNOWN },
+               { DISPLAYLIST_SIMPLE_SAVING_LIST, MENU_ENUM_LABEL_SAVESTATE_AUTO_INDEX,
+                  PARSE_ONLY_BOOL, MSG_UNKNOWN },
+               { DISPLAYLIST_SIMPLE_SAVING_LIST, MENU_ENUM_LABEL_SAVESTATE_MAX_KEEP,
+                  PARSE_ONLY_UINT, MSG_UNKNOWN },
+               { DISPLAYLIST_SIMPLE_SAVING_LIST, MENU_ENUM_LABEL_CLOUD_SYNC_SETTINGS,
+                  PARSE_ACTION, MSG_UNKNOWN },
+               { DISPLAYLIST_SIMPLE_LIBRARY_LIST, MENU_ENUM_LABEL_THUMBNAILS,
+                  PARSE_ONLY_UINT, MSG_UNKNOWN },
+#ifdef HAVE_NETWORKING
+               { DISPLAYLIST_SIMPLE_LIBRARY_LIST, MENU_ENUM_LABEL_PL_THUMBNAILS_UPDATER_LIST,
+                  PARSE_NONE, MENU_ENUM_LABEL_VALUE_SIMPLE_NAME_GET_BOX_ART },
+#endif
+               { DISPLAYLIST_SIMPLE_LIBRARY_LIST, MENU_ENUM_LABEL_SIMPLE_ADD_GAMES,
+                  PARSE_NONE, MENU_ENUM_LABEL_VALUE_SIMPLE_NAME_RESCAN },
+               { DISPLAYLIST_SIMPLE_LIBRARY_LIST, MENU_ENUM_LABEL_RGUI_BROWSER_DIRECTORY,
+                  PARSE_ONLY_DIR, MSG_UNKNOWN },
+               { DISPLAYLIST_SIMPLE_LIBRARY_LIST, MENU_ENUM_LABEL_PLAYLIST_MANAGER_LIST,
+                  PARSE_NONE, MENU_ENUM_LABEL_VALUE_SIMPLE_NAME_CLEAN_UP },
+               { DISPLAYLIST_SIMPLE_ACCOUNTS_LIST, MENU_ENUM_LABEL_RETRO_ACHIEVEMENTS_SETTINGS,
+                  PARSE_ACTION, MSG_UNKNOWN },
+               { DISPLAYLIST_SIMPLE_ACCOUNTS_LIST, MENU_ENUM_LABEL_NETPLAY_NICKNAME,
+                  PARSE_ONLY_STRING, MSG_UNKNOWN },
+               { DISPLAYLIST_SIMPLE_ACCESSIBILITY_LIST, MENU_ENUM_LABEL_ACCESSIBILITY_ENABLED,
+                  PARSE_ONLY_BOOL, MSG_UNKNOWN },
+               { DISPLAYLIST_SIMPLE_ACCESSIBILITY_LIST, MENU_ENUM_LABEL_ACCESSIBILITY_NARRATOR_SPEECH_SPEED,
+                  PARSE_ONLY_UINT, MSG_UNKNOWN },
+               { DISPLAYLIST_SIMPLE_ACCESSIBILITY_LIST, MENU_ENUM_LABEL_AI_SERVICE_SETTINGS,
+                  PARSE_ACTION, MSG_UNKNOWN },
+               { DISPLAYLIST_SIMPLE_INTERFACE_LIST, MENU_ENUM_LABEL_USER_LANGUAGE,
+                  PARSE_ONLY_UINT, MSG_UNKNOWN },
+               { DISPLAYLIST_SIMPLE_INTERFACE_LIST, MENU_ENUM_LABEL_MENU_LAYOUT,
+                  PARSE_ONLY_UINT, MSG_UNKNOWN },
+               { DISPLAYLIST_SIMPLE_INTERFACE_LIST, MENU_ENUM_LABEL_MENU_SIMPLE_GAMEPAD_MODE,
+                  PARSE_ONLY_BOOL, MSG_UNKNOWN },
+               { DISPLAYLIST_SIMPLE_INTERFACE_LIST, MENU_ENUM_LABEL_ONSCREEN_NOTIFICATIONS_SETTINGS,
+                  PARSE_ACTION, MSG_UNKNOWN },
+               { DISPLAYLIST_SIMPLE_INTERFACE_LIST, MENU_ENUM_LABEL_MENU_ENABLE_KIOSK_MODE,
+                  PARSE_ONLY_BOOL, MSG_UNKNOWN },
+               { DISPLAYLIST_SIMPLE_GAME_CONTROLS_LIST, MENU_ENUM_LABEL_INPUT_OVERLAY_ENABLE,
+                  PARSE_ONLY_BOOL, MSG_UNKNOWN },
+               { DISPLAYLIST_SIMPLE_GAME_CONTROLS_LIST, MENU_ENUM_LABEL_OVERLAY_LAYOUT_PROFILE_LOAD,
+                  PARSE_NONE, MENU_ENUM_LABEL_VALUE_SIMPLE_NAME_TOUCH_LAYOUT },
+               { DISPLAYLIST_SIMPLE_GAME_CONTROLS_LIST, MENU_ENUM_LABEL_OVERLAY_EDIT_LAYOUT,
+                  PARSE_NONE, MENU_ENUM_LABEL_VALUE_SIMPLE_NAME_EDIT_TOUCH_LAYOUT },
+               { DISPLAYLIST_SIMPLE_GAME_CONTROLS_LIST, MENU_ENUM_LABEL_CORE_INPUT_REMAPPING_OPTIONS,
+                  PARSE_NONE, MENU_ENUM_LABEL_VALUE_SIMPLE_NAME_CHANGE_BUTTONS },
+               { DISPLAYLIST_SIMPLE_GAME_CONTROLS_LIST, MENU_ENUM_LABEL_INPUT_TURBO_FIRE_SETTINGS,
+                  PARSE_ACTION, MSG_UNKNOWN },
+               { DISPLAYLIST_SIMPLE_GAME_SCREEN_LIST, MENU_ENUM_LABEL_VIDEO_ASPECT_RATIO_INDEX,
+                  PARSE_ONLY_UINT, MSG_UNKNOWN },
+               { DISPLAYLIST_SIMPLE_GAME_SCREEN_LIST, MENU_ENUM_LABEL_SCREEN_ORIENTATION,
+                  PARSE_ONLY_UINT, MSG_UNKNOWN },
             };
             static const enum msg_hash_enums more[][2] = {
-               { MENU_ENUM_LABEL_VALUE_SIMPLE_CONTROLS_MORE, MENU_ENUM_LABEL_SIMPLE_CONTROLS_MORE },
-               { MENU_ENUM_LABEL_VALUE_SIMPLE_SCREEN_MORE,   MENU_ENUM_LABEL_SIMPLE_SCREEN_MORE   },
-               { MENU_ENUM_LABEL_VALUE_SIMPLE_SOUND_MORE,    MENU_ENUM_LABEL_SIMPLE_SOUND_MORE    },
-               { MENU_ENUM_LABEL_VALUE_SIMPLE_SAVING_MORE,   MENU_ENUM_LABEL_SIMPLE_SAVING_MORE   },
+               { MENU_ENUM_LABEL_VALUE_SIMPLE_CONTROLS_MORE,
+                  MENU_ENUM_LABEL_SIMPLE_CONTROLS_MORE },
+               { MENU_ENUM_LABEL_VALUE_SIMPLE_SCREEN_MORE,
+                  MENU_ENUM_LABEL_SIMPLE_SCREEN_MORE },
+               { MENU_ENUM_LABEL_VALUE_SIMPLE_SOUND_MORE,
+                  MENU_ENUM_LABEL_SIMPLE_SOUND_MORE },
+               { MENU_ENUM_LABEL_VALUE_SIMPLE_SAVING_MORE,
+                  MENU_ENUM_LABEL_SIMPLE_SAVING_MORE },
+               { MENU_ENUM_LABEL_VALUE_SIMPLE_LIBRARY_MORE,
+                  MENU_ENUM_LABEL_SIMPLE_LIBRARY_MORE },
+               { MENU_ENUM_LABEL_VALUE_SIMPLE_ACCOUNTS_MORE,
+                  MENU_ENUM_LABEL_SIMPLE_ACCOUNTS_MORE },
+               { MENU_ENUM_LABEL_VALUE_SIMPLE_ACCESSIBILITY_MORE,
+                  MENU_ENUM_LABEL_SIMPLE_ACCESSIBILITY_MORE },
+               { MENU_ENUM_LABEL_VALUE_SIMPLE_INTERFACE_MORE,
+                  MENU_ENUM_LABEL_SIMPLE_INTERFACE_MORE },
+               { MENU_ENUM_LABEL_VALUE_SIMPLE_CONTROLS_MORE,
+                  MENU_ENUM_LABEL_SIMPLE_CONTROLS_MORE },
+               { MENU_ENUM_LABEL_VALUE_SIMPLE_SCREEN_MORE,
+                  MENU_ENUM_LABEL_SIMPLE_SCREEN_MORE },
             };
             size_t m = (size_t)(type - DISPLAYLIST_SIMPLE_CONTROLS_LIST);
 
+#if defined(HAVE_CG) || defined(HAVE_GLSL) || defined(HAVE_SLANG) || defined(HAVE_HLSL)
+            /* Shaders first, where the video driver runs them */
+            if (type == DISPLAYLIST_SIMPLE_GAME_SCREEN_LIST)
+            {
+               gfx_ctx_flags_t flags;
+               flags.flags = 0;
+               video_context_driver_get_flags(&flags);
+               if (     BIT32_GET(flags.flags, GFX_CTX_FLAGS_SHADERS_SLANG)
+                     || BIT32_GET(flags.flags, GFX_CTX_FLAGS_SHADERS_GLSL)
+                     || BIT32_GET(flags.flags, GFX_CTX_FLAGS_SHADERS_CG)
+                     || BIT32_GET(flags.flags, GFX_CTX_FLAGS_SHADERS_HLSL))
+                  if (menu_entries_append(list,
+                           msg_hash_to_str(MENU_ENUM_LABEL_VALUE_SIMPLE_NAME_SHADERS),
+                           MENU_ENUM_LABEL_SHADER_OPTIONS_STR,
+                           MENU_ENUM_LABEL_SHADER_OPTIONS,
+                           MENU_SETTING_ACTION, 0, 0, NULL))
+                     count++;
+            }
+#endif
             for (i = 0; i < ARRAY_SIZE(rows); i++)
-               if (     rows[i].list == type
-                     && MENU_DISPLAYLIST_PARSE_SETTINGS_ENUM(list,
-                        rows[i].label, rows[i].parse, false) == 0)
+            {
+               if (rows[i].list != type)
+                  continue;
+               if (rows[i].name == MSG_UNKNOWN)
+               {
+                  if (MENU_DISPLAYLIST_PARSE_SETTINGS_ENUM(list,
+                           rows[i].label, rows[i].parse, false) == 0)
+                     count++;
+               }
+               else if (menu_entries_append(list,
+                        msg_hash_to_str(rows[i].name),
+                        msg_hash_to_str(rows[i].label),
+                        rows[i].label, MENU_SETTING_ACTION, 0, 0, NULL))
                   count++;
-            if (menu_entries_append(list,
+            }
+            if (m < ARRAY_SIZE(more) && menu_entries_append(list,
                      msg_hash_to_str(more[m][0]),
                      msg_hash_to_str(more[m][1]),
                      more[m][1], MENU_SETTING_ACTION, 0, 0, NULL))
@@ -9939,8 +10056,8 @@ unsigned menu_displaylist_build_list(
                   MENU_ENUM_LABEL_SIMPLE_LIBRARY },
                { MENU_ENUM_LABEL_VALUE_SIMPLE_ACCOUNTS,
                   MENU_ENUM_LABEL_SIMPLE_ACCOUNTS },
-               { MENU_ENUM_LABEL_VALUE_ACCESSIBILITY_SETTINGS,
-                  MENU_ENUM_LABEL_ACCESSIBILITY_SETTINGS },
+               { MENU_ENUM_LABEL_VALUE_SIMPLE_NAME_ACCESSIBILITY,
+                  MENU_ENUM_LABEL_SIMPLE_ACCESSIBILITY },
                { MENU_ENUM_LABEL_VALUE_SIMPLE_INTERFACE,
                   MENU_ENUM_LABEL_SIMPLE_INTERFACE },
                { MENU_ENUM_LABEL_VALUE_SIMPLE_ALL_SETTINGS,
@@ -9956,8 +10073,11 @@ unsigned menu_displaylist_build_list(
          }
          break;
       case DISPLAYLIST_SIMPLE_HELP_LIST:
-         if (MENU_DISPLAYLIST_PARSE_SETTINGS_ENUM(list,
-                  MENU_ENUM_LABEL_MENU_LAYOUT, PARSE_ONLY_UINT, false) == 0)
+         if (menu_entries_append(list,
+                  msg_hash_to_str(MENU_ENUM_LABEL_VALUE_SIMPLE_CLASSIC),
+                  MENU_ENUM_LABEL_SIMPLE_CLASSIC_STR,
+                  MENU_ENUM_LABEL_SIMPLE_CLASSIC,
+                  MENU_SETTING_ACTION, 0, 0, NULL))
             count++;
          if (MENU_DISPLAYLIST_PARSE_SETTINGS_ENUM(list,
                   MENU_ENUM_LABEL_MENU_SIMPLE_GAMEPAD_MODE, PARSE_ONLY_BOOL, false) == 0)
@@ -18753,6 +18873,12 @@ static bool menu_displaylist_ctl_internal(
          case DISPLAYLIST_SIMPLE_SCREEN_LIST:
          case DISPLAYLIST_SIMPLE_SOUND_LIST:
          case DISPLAYLIST_SIMPLE_SAVING_LIST:
+         case DISPLAYLIST_SIMPLE_LIBRARY_LIST:
+         case DISPLAYLIST_SIMPLE_ACCOUNTS_LIST:
+         case DISPLAYLIST_SIMPLE_ACCESSIBILITY_LIST:
+         case DISPLAYLIST_SIMPLE_INTERFACE_LIST:
+         case DISPLAYLIST_SIMPLE_GAME_CONTROLS_LIST:
+         case DISPLAYLIST_SIMPLE_GAME_SCREEN_LIST:
             menu_entries_clear(info->list);
             count = menu_displaylist_build_list(info->list,
                   settings, type, false);
