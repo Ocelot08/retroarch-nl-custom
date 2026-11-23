@@ -94,8 +94,8 @@ arrows with 48dp targets, numbers open a slider row, and prompts show as
 a card with answer rows. It has no keyboard, images or art yet.
 
 In the Simple layout, every Settings category (Controls, Screen, Sound,
-Saving, Library, Accounts, Accessibility, Interface) and the Game menu's
-Controls and Screen are short lists of the common settings under plain
+Saving, Library, Accounts, Accessibility, Interface), Downloads and the
+Game menu's Controls and Screen are short lists of the common settings under plain
 names, each ending in a More row that opens the classic list. RetroArch's
 own lists are drawn in smaller type. The breadcrumb shows the whole path,
 the middle levels as an ellipsis when it is too long. Help has Switch to

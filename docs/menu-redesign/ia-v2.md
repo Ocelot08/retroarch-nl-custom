@@ -117,8 +117,10 @@ A game's detail page (D2): Play, Favorite, Emulator, Information, Remove. A game
 ```
 Downloads
 ├─ Update Everything           3 UPDATES (yellow); progress page while running
+│                              (built so far: Update Emulators, installed emulators only)
 ├─ Emulators ›                 filters: For Your Games, Installed, Updates, All; search
 ├─ Missing System Files ›      per emulator: file, MISSING (yellow) or FOUND; Open System Folder
+│                              (built so far: System Files, RetroArch's downloader)
 ├─ Box Art ›                   Get Missing Box Art; Download While Browsing; counts per system
 └─ More ›                      → Online Updater
 ```

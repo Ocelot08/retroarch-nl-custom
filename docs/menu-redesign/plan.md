@@ -1,12 +1,14 @@
 # Build plan: architecture and order of work
 
-- **Status:** draft, 11 Nov 2026, after the first Simple test build on the phone.
+- **Status:** 22 Nov 2026, after the two lines of work were combined: the design and value controls on one side, the touch fix, lists and test tooling on the other.
 - **Follows:** `frontend-redesign-brief.md` (options 2 and 3) and `ia-v2.md` (structure, templates, states).
 - **Where things stand:**
-  - The simple driver (`menu/drivers/simple.c`) draws every list in one style.
-  - It takes taps in touch mode and the touch gamepad in Gamepad Mode.
-  - Its button hints follow the OK/Cancel swap.
-  - It scrolls by drag and flick. It has no art, keyboard or animation yet, and dialogs are a plain card.
+  - The simple driver (`menu/drivers/simple.c`) has three page styles: Home, Simple's own lists, and RetroArch's lists in smaller type. They are told apart by list id.
+  - It takes taps in touch mode and the touch gamepad in Gamepad Mode. Its button hints follow the OK/Cancel swap.
+  - It scrolls by drag and flick with an edge bounce. Choices step on the row, numbers open a slider, and prompts show as a card.
+  - It has no art, keyboard or page animation yet.
+  - Short lists: all eight Settings categories, Downloads, Help, and the Game menu's Controls and Screen.
+  - Not seen on a phone yet: Downloads, the Home title and note fixes, and the Game menu lists with a game running.
 
 ## What is architectural
 
@@ -27,9 +29,11 @@ The driver needs one agreed way to learn which one to draw, for a page and for a
 
 Every page style, setting page and prompt depends on this, so settle it before building more page styles.
 
+**So far:** pages go by list id, in `simple_set_page`, and rows by their setting's type. RetroArch keeps no per-list data to hang a type on, and ids don't change when a title does.
+
 ### 2. One layout model for drawing, touch and animation
 
-- **Today:** `simple_render` works out the row positions and `simple_pointer_up` works them out again. Touch broke without anyone noticing because these two parts don't share their numbers.
+- **Today:** `simple_entry_rect` places each row, and drawing, touch and scrolling all ask it. The slider, the arrows and the prompt card still work out their own places.
 - **Instead:** each frame builds one list of boxes, and drawing, hit-testing, scrolling, focus and animation all read it.
 - **Why:** animation is then those boxes moving over time, using RetroArch's existing `gfx_animation`. It needs no special cases.
 
@@ -98,6 +102,8 @@ Decide before designing notifications and error states.
 
 Each of these cost time in the first device test.
 
+Done: driver logging, the scripted run and the signing key. Left: separate test data, and CI off this Mac.
+
 - **Driver logging.** A short log line per tap, per action and per page change in `simple.c`, behind a debug flag, so a failure shows up in logcat.
 - **A scripted device run.** An adb script that opens the test app, taps through the main paths and saves screenshots, so every build gets the same check.
   - Wait for the app to be in front before each tap.
@@ -145,12 +151,13 @@ Each of these cost time in the first device test.
 
 ## Known issues from the first device test
 
+The first and the lost presses were seen on the driver before the two lines were combined.
+
 - **Wrong item after Back** (once, Gamepad Mode):
   - After going back from Help, Help was highlighted but OK opened Settings.
   - It did not repeat when the selection was moved first.
   - Needs driver logging to find.
 - **Menu rows don't take taps in Gamepad Mode.** The touch gamepad owns every touch while shown. Covered by step 4.
-- **The selection is a thin yellow line at the left edge.** Check it against the Figma "Chosen set".
 - **Not yet tested with a physical controller.**
 - **Touch gamepad presses sometimes all lost after a page opens**
   (Gamepad Mode): once, eight presses in a row after Help opened did
@@ -167,3 +174,8 @@ Each of these cost time in the first device test.
   the app saw no tap at all. The scripted check retries a tap the app did
   not log, and refuses touch gamepad presses outside Gamepad Mode, where
   they would land on the menu.
+- **Downloads, against `ia-v2.md`:**
+  - Update Emulators updates installed emulators, not everything: RetroArch has no single update-all.
+  - System Files is RetroArch's downloader, and does not know what is missing.
+  - There are no update counts or summary: they need a request to the server when the page opens.
+- **The sublabel map is binary searched.** Rows go in enum order; `tools/sublabel_map_check.py` checks it. On an Apple silicon Mac, run the Python checks with an arm64 Python.
