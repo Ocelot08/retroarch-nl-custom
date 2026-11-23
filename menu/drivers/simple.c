@@ -322,6 +322,31 @@ static void simple_fit(simple_handle_t *sm, enum simple_font fi,
    }
 }
 
+/* As simple_fit, for notes: their width has the letter-spacing */
+static void simple_fit_note(simple_handle_t *sm, const char *src,
+      float max_w, char *dst, size_t len)
+{
+   size_t n = strlcpy(dst, src, len);
+
+   if (n >= len)
+      n = len - 1;
+   if (simple_note_width(sm, dst) <= max_w)
+      return;
+   while (n > 0)
+   {
+      do
+         n--;
+      while (n > 0 && ((unsigned char)dst[n] & 0xC0) == 0x80);
+      while (n > 0 && dst[n - 1] == ' ')
+         n--;
+      if (n + 4 > len)
+         continue;
+      memcpy(dst + n, "\xE2\x80\xA6", 4);
+      if (simple_note_width(sm, dst) <= max_w)
+         return;
+   }
+}
+
 /* Small caps notes, drawn a glyph at a time for the letter-spacing */
 static void simple_note(simple_handle_t *sm, const char *s,
       float x, float y_centre, unsigned dims, uint32_t color,
@@ -783,8 +808,14 @@ static void simple_home_counts(simple_handle_t *sm)
       playlist_get_index(g_defaults.content_history, 0, &entry);
       if (     entry && entry->core_name && *entry->core_name
             && !string_is_equal(entry->core_name, "DETECT"))
-         simple_upper(sm->core_note, entry->core_name,
-               sizeof(sm->core_note));
+      {
+         /* "Maker - System (Core)": the maker is the part to lose */
+         const char *name = strstr(entry->core_name, " - ");
+         const char *core = strchr(entry->core_name, '(');
+         name = (name && (!core || name < core))
+            ? name + 3 : entry->core_name;
+         simple_upper(sm->core_note, name, sizeof(sm->core_note));
+      }
    }
 }
 
@@ -1315,10 +1346,15 @@ static void simple_draw_continue(simple_handle_t *sm, unsigned dims,
       const char *word, bool selected)
 {
    char title[NAME_MAX_LENGTH];
+   char fitted[NAME_MAX_LENGTH];
+   char note[sizeof(sm->core_note)];
+   char *tags;
    const char *split = strstr(word, ": ");
+   font_data_t *font = sm->fonts[SIMPLE_FONT_TITLE].font;
    float s           = sm->scale;
    float w           = (float)VIDEO_SCALE_W(dims);
    float x           = SIMPLE_GUTTER * s;
+   float room        = w - 2.0f * x;
    uint32_t label_c  = (!sm->gamepad || selected)
       ? SIMPLE_COL_ACCENT : SIMPLE_COL_MUTED;
 
@@ -1326,9 +1362,20 @@ static void simple_draw_continue(simple_handle_t *sm, unsigned dims,
    simple_note(sm, "CONTINUE", x, sm->m->cont_label_y * s, dims,
          label_c, TEXT_ALIGN_LEFT);
    if (sm->core_note[0])
-      simple_note(sm, sm->core_note, w - x, sm->m->cont_label_y * s,
+   {
+      simple_fit_note(sm, sm->core_note,
+            room - simple_note_width(sm, "CONTINUE") - 16.0f * s,
+            note, sizeof(note));
+      simple_note(sm, note, w - x, sm->m->cont_label_y * s,
             dims, SIMPLE_COL_MUTED, TEXT_ALIGN_RIGHT);
-   simple_text(sm, SIMPLE_FONT_TITLE, title, x, sm->m->cont_title_y * s,
+   }
+   /* Too long: the "(USA)" tags go before any of the name does */
+   if (     font && (tags = strstr(title, " (")) && tags != title
+         && font_driver_get_message_width(font, title, strlen(title), 1.0f)
+            > (int)room)
+      *tags = '\0';
+   simple_fit(sm, SIMPLE_FONT_TITLE, title, room, fitted, sizeof(fitted));
+   simple_text(sm, SIMPLE_FONT_TITLE, fitted, x, sm->m->cont_title_y * s,
          dims, SIMPLE_COL_FG, TEXT_ALIGN_LEFT);
 }
 
