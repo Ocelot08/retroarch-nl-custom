@@ -33690,6 +33690,10 @@ MSG_HASH(
    "Close Game"
    )
 MSG_HASH(
+   MENU_ENUM_LABEL_VALUE_SIMPLE_QUIT_ASK,
+   "Quit RetroArch?"
+   )
+MSG_HASH(
    MENU_ENUM_LABEL_VALUE_OVERLAY_CUSTOM_BUTTONS,
    "Custom Buttons"
    )

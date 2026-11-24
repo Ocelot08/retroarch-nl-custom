@@ -137,6 +137,7 @@ typedef struct simple_handle
    size_t last_selection;
    /* A number row opened to its slider, or (size_t)-1 */
    size_t open_idx;
+   size_t open_depth;               /* stack depth it was opened at */
    float scroll_y;
    float drag_start_y;
    float drag_start_scroll;
@@ -516,8 +517,23 @@ static int simple_entry_action(void *userdata, menu_entry_t *entry,
    return generic_menu_entry_action(userdata, entry, i, action);
 }
 
+static float simple_number_get(const rarch_setting_t *setting)
+{
+   switch (setting->type)
+   {
+      case ST_FLOAT:
+         return *setting->value.target.fraction;
+      case ST_INT:
+         return (float)*setting->value.target.integer;
+      default:
+         break;
+   }
+   return (float)setting_uint_get(setting);
+}
+
 /* A number with a range opens to a slider; other values step. Named
- * options are ranged integers too, so the value has to read as one. */
+ * options are ranged integers too, and can start with a digit ("90 deg",
+ * "4:3"), so an integer's text has to start with its value. */
 static bool simple_is_number(const rarch_setting_t *setting,
       const char *value)
 {
@@ -535,7 +551,8 @@ static bool simple_is_number(const rarch_setting_t *setting,
       return false;
    return     setting->ui_type != ST_UI_TYPE_UINT_COMBOBOX
            && setting->ui_type != ST_UI_TYPE_UINT_RADIO_BUTTONS
-           && (setting->max - setting->min) / setting->step <= 400.0f;
+           && (setting->max - setting->min) / setting->step <= 400.0f
+           && (float)strtol(value, NULL, 10) == simple_number_get(setting);
 }
 
 static bool simple_is_choice(const rarch_setting_t *setting,
@@ -546,20 +563,6 @@ static bool simple_is_choice(const rarch_setting_t *setting,
    return    setting->type == ST_UINT || setting->type == ST_INT
           || setting->type == ST_FLOAT
           || setting->type == ST_STRING_OPTIONS;
-}
-
-static float simple_number_get(const rarch_setting_t *setting)
-{
-   switch (setting->type)
-   {
-      case ST_FLOAT:
-         return *setting->value.target.fraction;
-      case ST_INT:
-         return (float)*setting->value.target.integer;
-      default:
-         break;
-   }
-   return (float)setting_uint_get(setting);
 }
 
 /* Moves a number to @frac of its range a step at a time, so every
@@ -946,7 +949,10 @@ static void simple_card_layout(simple_handle_t *sm, unsigned dims)
       return;
    sm->card_confirm = menu_st->dialog_st.confirm_cmd != 0;
    rows             = sm->card_confirm ? 2 : 1;
-   sm->card_lines   = simple_wrap(sm, sm->msgbox,
+   sm->card_lines   = simple_wrap(sm,
+         menu_st->dialog_st.confirm_msg == MSG_PRESS_AGAIN_TO_QUIT
+         ? msg_hash_to_str(MENU_ENUM_LABEL_VALUE_SIMPLE_QUIT_ASK)
+         : sm->msgbox,
          w - 4.0f * SIMPLE_GUTTER * s, sm->card_text,
          sizeof(sm->card_text));
    sm->card_h       = (SIMPLE_CARD_PAD + SIMPLE_CARD_GAP + 6.0f
@@ -998,6 +1004,9 @@ static void simple_set_page(simple_handle_t *sm, bool simple_layout)
    };
 
    menu_entries_get_last_stack(NULL, &label, NULL, NULL, NULL);
+   /* A prompt keeps the page it covers */
+   if (string_is_equal(label, MENU_ENUM_LABEL_INFO_SCREEN_STR))
+      return;
    sm->is_home = simple_layout && string_is_equal(label,
          msg_hash_to_str(MENU_ENUM_LABEL_MAIN_MENU));
    sm->full    = !sm->is_home;
@@ -1064,6 +1073,34 @@ static void simple_log_state(simple_handle_t *sm, menu_list_t *menu_list,
    }
 }
 
+/* Closes an open slider when its page is left (pages share one list) or
+ * its value stops being a number */
+static void simple_check_open(simple_handle_t *sm, menu_list_t *menu_list,
+      const file_list_t *list)
+{
+   size_t depth = menu_list ? MENU_LIST_GET_STACK_SIZE(menu_list, 0) : 0;
+
+   if (depth != sm->open_depth)
+   {
+      sm->open_depth = depth;
+      sm->open_idx   = (size_t)-1;
+   }
+   if (     sm->open_idx == (size_t)-1
+         || (sm->pointer.flags & MENU_INP_PTR_FLG_PRESSED))
+      return;
+   if (!list || sm->open_idx >= list->size)
+   {
+      sm->open_idx = (size_t)-1;
+      return;
+   }
+   MENU_ENTRY_INITIALIZE(sm->hit_entry);
+   sm->hit_entry.flags |= MENU_ENTRY_FLAG_VALUE_ENABLED;
+   menu_entry_get(&sm->hit_entry, 0, sm->open_idx, NULL, true);
+   if (!simple_is_number(simple_row_setting(list, sm->open_idx),
+            sm->hit_entry.value))
+      sm->open_idx = (size_t)-1;
+}
+
 static void simple_render(void *data, unsigned dims, bool is_idle)
 {
    size_t i;
@@ -1101,6 +1138,7 @@ static void simple_render(void *data, unsigned dims, bool is_idle)
 
    was_home = sm->is_home;
    simple_set_page(sm, settings->uints.menu_layout == MENU_LAYOUT_SIMPLE);
+   simple_check_open(sm, menu_list, list);
    if (sm->is_home && !was_home)
       simple_home_counts(sm);
 
@@ -1180,7 +1218,7 @@ static void simple_render(void *data, unsigned dims, bool is_idle)
  * the root and the last levels; *gap says some were left out. */
 static size_t simple_crumb_parts(simple_handle_t *sm, bool *gap)
 {
-   size_t i, first;
+   size_t i, first, size;
    size_t n                   = 0;
    char title[NAME_MAX_LENGTH];
    struct menu_state *menu_st = menu_state_get_ptr();
@@ -1192,11 +1230,16 @@ static size_t simple_crumb_parts(simple_handle_t *sm, bool *gap)
    *gap = false;
    if (!stack || !stack->size)
       return 0;
-   first = (stack->size > SIMPLE_CRUMB_PARTS)
-      ? stack->size - (SIMPLE_CRUMB_PARTS - 1) : 1;
+   size  = stack->size;
+   if (     size > 1
+         && string_is_equal(stack->list[size - 1].label,
+            MENU_ENUM_LABEL_INFO_SCREEN_STR))
+      size--;
+   first = (size > SIMPLE_CRUMB_PARTS)
+      ? size - (SIMPLE_CRUMB_PARTS - 1) : 1;
    *gap  = first > 1;
 
-   for (i = 0; i < stack->size; i++)
+   for (i = 0; i < size; i++)
    {
       const struct item_file *item = &stack->list[i];
       menu_file_list_cbs_t *cbs    = (menu_file_list_cbs_t*)item->actiondata;
