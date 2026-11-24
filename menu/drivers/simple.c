@@ -82,10 +82,11 @@ void android_app_update_viewport_inset(void);
 #define SIMPLE_COL_BELOW      0x0E1014FF
 #define SIMPLE_COL_FG         0xEEF0F4FF
 #define SIMPLE_COL_MUTED      0x9AA0ADFF
-#define SIMPLE_COL_DIM        0x5E6472FF
+#define SIMPLE_COL_DIM        0x7B818FFF   /* 4.5:1 on the page */
 #define SIMPLE_COL_LINE       0x2F333DFF
 #define SIMPLE_COL_ACCENT     0xF2D64BFF
 #define SIMPLE_COL_SHEET      0x20232BFF
+#define SIMPLE_COL_SELECT     0x4A5060FF   /* selected text */
 
 enum simple_font
 {
@@ -575,6 +576,18 @@ static void simple_keep_options(simple_handle_t *sm, size_t i)
    strlcpy(sm->opt_title, e->rich_label[0] ? e->rich_label : e->path,
          sizeof(sm->opt_title));
    strlcpy(sm->opt_desc, e->sublabel, sizeof(sm->opt_desc));
+   /* Rows without one bound: the setting's own, kept between its id and
+    * its name */
+   if (     !sm->opt_desc[0] && setting->short_description
+         && setting->enum_idx != MSG_UNKNOWN
+         && string_is_equal(setting->short_description, msg_hash_to_str(
+               (enum msg_hash_enums)(setting->enum_idx + 2))))
+   {
+      const char *desc = msg_hash_to_str(
+            (enum msg_hash_enums)(setting->enum_idx + 1));
+      if (desc && !string_is_equal(desc, "null"))
+         strlcpy(sm->opt_desc, desc, sizeof(sm->opt_desc));
+   }
    simple_upper(sm->kb_label, sm->opt_title, sizeof(sm->kb_label));
 }
 
@@ -1156,6 +1169,31 @@ static void simple_desc_layout(simple_handle_t *sm, unsigned dims)
          * SIMPLE_DESC_LINE + SIMPLE_DESC_GAP) * sm->scale : 0.0f;
 }
 
+/* RetroArch's prompts ask for a second press; the card asks a question */
+static const char *simple_card_question(const simple_handle_t *sm,
+      unsigned msg)
+{
+   size_t i;
+   static const enum msg_hash_enums asks[][2] = {
+      { MSG_PRESS_AGAIN_TO_QUIT,
+         MENU_ENUM_LABEL_VALUE_SIMPLE_QUIT_ASK },
+      { MSG_PRESS_AGAIN_TO_CLOSE_CONTENT,
+         MENU_ENUM_LABEL_VALUE_SIMPLE_CLOSE_ASK },
+      { MSG_PRESS_AGAIN_TO_RESET,
+         MENU_ENUM_LABEL_VALUE_SIMPLE_RESTART_ASK },
+      { MSG_OVERLAY_GAMEPAD_IMPORT_CONFIRM,
+         MENU_ENUM_LABEL_VALUE_SIMPLE_GAMEPAD_IMPORT_ASK },
+      { MSG_OVERLAY_LAYOUT_RESET_CONFIRM,
+         MENU_ENUM_LABEL_VALUE_SIMPLE_GAMEPAD_RESET_ASK },
+      { MSG_OVERLAY_LAYOUT_PROFILE_DELETE_CONFIRM,
+         MENU_ENUM_LABEL_VALUE_SIMPLE_GAMEPAD_DELETE_ASK }
+   };
+   for (i = 0; i < ARRAY_SIZE(asks); i++)
+      if (msg == (unsigned)asks[i][0])
+         return msg_hash_to_str(asks[i][1]);
+   return sm->msgbox;
+}
+
 static void simple_card_layout(simple_handle_t *sm, unsigned dims)
 {
    struct menu_state *menu_st = menu_state_get_ptr();
@@ -1171,9 +1209,7 @@ static void simple_card_layout(simple_handle_t *sm, unsigned dims)
    sm->card_confirm = menu_st->dialog_st.confirm_cmd != 0;
    rows             = sm->card_confirm ? 2 : 1;
    sm->card_lines   = simple_wrap(sm, SIMPLE_FONT_WORD,
-         menu_st->dialog_st.confirm_msg == MSG_PRESS_AGAIN_TO_QUIT
-         ? msg_hash_to_str(MENU_ENUM_LABEL_VALUE_SIMPLE_QUIT_ASK)
-         : sm->msgbox,
+         simple_card_question(sm, menu_st->dialog_st.confirm_msg),
          w - 4.0f * SIMPLE_GUTTER * s, sm->card_text,
          sizeof(sm->card_text));
    sm->card_h       = (SIMPLE_CARD_PAD + SIMPLE_CARD_GAP + 6.0f
@@ -1520,9 +1556,13 @@ static void simple_crumb(simple_handle_t *sm, char *s, size_t len,
       if (simple_note_width(sm, s) <= max_w)
          return;
    }
-   /* Only the current level fits */
-   strlcpy(s, "\xE2\x86\x90 \xE2\x80\xA6 / ", len);
-   strlcat(s, sm->crumb[n - 1], len);
+   /* Only the current level fits, if that */
+   {
+      char full[SIMPLE_CRUMB_PART + 16];
+      strlcpy(full, "\xE2\x86\x90 \xE2\x80\xA6 / ", sizeof(full));
+      strlcat(full, sm->crumb[n - 1], sizeof(full));
+      simple_fit_note(sm, full, max_w, s, len);
+   }
 }
 
 static void simple_draw_header(simple_handle_t *sm, unsigned dims)
@@ -1701,22 +1741,30 @@ static void simple_draw_word(simple_handle_t *sm, enum simple_font fi,
          && font_driver_get_message_width(font, word, strlen(word), 1.0f)
             > max_w)
    {
-      const char *p;
-      size_t n = 0;
-      for (p = strchr(word, ' '); p; p = strchr(p + 1, ' '))
+      /* After a space or, for a path, a slash; else anywhere */
+      size_t i;
+      size_t n   = 0;
+      size_t any = 0;
+      for (i = 1; word[i]; i++)
       {
-         if (font_driver_get_message_width(font, word, (size_t)(p - word),
-                  1.0f) > max_w)
+         size_t to = i + (word[i] == '/' ? 1 : 0);
+         if (((unsigned char)word[i] & 0xC0) == 0x80)
+            continue;
+         if (font_driver_get_message_width(font, word, to, 1.0f) > max_w)
             break;
-         n = (size_t)(p - word);
+         any = i;
+         if (word[i] == ' ' || word[i] == '/')
+            n = to;
       }
+      if (!n)
+         n = any;
       if (n > 0 && n < sizeof(fitted))
       {
          memcpy(fitted, word, n);
          fitted[n] = '\0';
          simple_text(sm, fi, fitted, x, centre - line_h * 0.5f, dims,
                color, TEXT_ALIGN_LEFT);
-         word   += n + 1;
+         word   += n + (word[n] == ' ' ? 1 : 0);
          centre += line_h * 0.5f;
       }
    }
@@ -1941,7 +1989,7 @@ static void simple_draw_kb(simple_handle_t *sm, gfx_display_t *p_disp,
             simple_quad(p_disp, userdata, dims, tx, ly,
                   (float)font_driver_get_message_width(
                      sm->fonts[SIMPLE_FONT_FULL].font, line, n, 1.0f),
-                  line_h, SIMPLE_COL_DIM);
+                  line_h, SIMPLE_COL_SELECT);
          simple_text(sm, SIMPLE_FONT_FULL, line, tx, ly + line_h * 0.5f,
                dims, SIMPLE_COL_FG, TEXT_ALIGN_LEFT);
          if (     r == sm->kb_cursor_line && !sm->kb_selected
@@ -1956,7 +2004,7 @@ static void simple_draw_kb(simple_handle_t *sm, gfx_display_t *p_disp,
    }
    simple_note(sm, "DONE SAVES \xC2\xB7 BACK CANCELS", tx,
          y + (float)shown * line_h + pad * 0.5f + note_h * 0.5f, dims,
-         SIMPLE_COL_DIM, TEXT_ALIGN_LEFT);
+         SIMPLE_COL_MUTED, TEXT_ALIGN_LEFT);
 
    /* Without the system's keyboard, RetroArch's own */
    gfx_display_draw_keyboard(p_disp, userdata, dims, 0,

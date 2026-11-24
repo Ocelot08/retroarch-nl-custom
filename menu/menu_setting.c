@@ -704,7 +704,12 @@ static void menu_input_st_float_cb(void *userdata, const char *str)
 
 static void menu_input_st_string_cb(void *userdata, const char *str)
 {
-   if (str && *str)
+   /* A cancelled line is NULL. The Simple layout has no other way to
+    * clear a text; a password starts empty, so it is not cleared. */
+   if (     str && (*str
+            || (menu_driver_layout_simple()
+               && menu_input_dialog_get_kb_text_type()
+                  == MENU_INPUT_DIALOG_KB_TYPE_TEXT)))
    {
       struct menu_state *menu_st  = menu_state_get_ptr();
       const char *label           = menu_st->input_dialog_kb_label_setting;
@@ -714,7 +719,8 @@ static void menu_input_st_string_cb(void *userdata, const char *str)
          rarch_setting_t *setting = NULL;
          if ((setting = menu_setting_find(label)))
          {
-            if (setting->value.target.string)
+            if (     setting->value.target.string
+                  && (*str || setting->type == ST_STRING))
                strlcpy(setting->value.target.string, str, setting->size);
             /* menu_setting_generic() runs the change handler; it was
              * run here as well, and the row's command fired twice */

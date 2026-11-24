@@ -426,11 +426,13 @@ static const title_enum_map_t *title_enum_lookup(const char *label)
    return NULL;
 }
 
-/* The Simple layout's names for two of RetroArch's pages */
+/* The Simple layout's names for some of RetroArch's pages */
 static enum msg_hash_enums title_simple_name(enum msg_hash_enums title)
 {
    if (config_get_ptr()->uints.menu_layout != MENU_LAYOUT_SIMPLE)
       return title;
+   if (title == MENU_ENUM_LABEL_VALUE_SETTINGS)
+      return MENU_ENUM_LABEL_VALUE_SIMPLE_ALL_SETTINGS;
    if (title == MENU_ENUM_LABEL_VALUE_PLAYLISTS_TAB)
       return MENU_ENUM_LABEL_VALUE_SIMPLE_SYSTEMS;
    if (title == MENU_ENUM_LABEL_VALUE_PLAYLIST_MANAGER_LIST)

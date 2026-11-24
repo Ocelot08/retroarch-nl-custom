@@ -33710,6 +33710,26 @@ MSG_HASH(
    "Quit RetroArch?"
    )
 MSG_HASH(
+   MENU_ENUM_LABEL_VALUE_SIMPLE_CLOSE_ASK,
+   "Close this game?"
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_VALUE_SIMPLE_RESTART_ASK,
+   "Restart this game?"
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_VALUE_SIMPLE_GAMEPAD_IMPORT_ASK,
+   "Import this gamepad? It replaces one with the same name."
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_VALUE_SIMPLE_GAMEPAD_RESET_ASK,
+   "Reset Default and use it for all games?"
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_VALUE_SIMPLE_GAMEPAD_DELETE_ASK,
+   "Delete this gamepad?"
+   )
+MSG_HASH(
    MENU_ENUM_LABEL_VALUE_SIMPLE_NAME_CHOOSE_FOLDER,
    "Choose Games Folder"
    )
