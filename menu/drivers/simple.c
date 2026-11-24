@@ -42,6 +42,8 @@
 #include "../../playlist.h"
 #include "../../runloop.h"
 #include "../../command.h"
+#include "../../input/input_driver.h"
+#include "../../input/input_osk.h"
 #include "../../audio/audio_driver.h"
 #include "../menu_setting.h"
 #include "../../setting_list.h"
@@ -179,6 +181,16 @@ typedef struct simple_handle
    float card_rows_y;
    unsigned card_lines;
    unsigned desc_lines;
+   /* Text being typed, laid out as the card is; kb_open as it began */
+   char kb_text[1024];
+   char kb_open[1024];
+   char kb_label[NAME_MAX_LENGTH];
+   float kb_cursor_x;
+   unsigned kb_lines;
+   unsigned kb_cursor_line;
+   bool kb_on;
+   bool kb_untouched;
+   bool kb_selected;
    bool card_on;
    bool card_confirm;
    bool msg_seen;
@@ -551,6 +563,7 @@ static void simple_keep_options(simple_handle_t *sm, size_t i)
       ? MENU_LIST_GET_SELECTION(menu_st->entries.list, 0) : NULL;
    rarch_setting_t *setting   = simple_row_setting(list, i);
 
+   sm->kb_label[0] = '\0';
    if (sm->is_home || !setting)
       return;
    MENU_ENTRY_INITIALIZE((*e));
@@ -562,6 +575,7 @@ static void simple_keep_options(simple_handle_t *sm, size_t i)
    strlcpy(sm->opt_title, e->rich_label[0] ? e->rich_label : e->path,
          sizeof(sm->opt_title));
    strlcpy(sm->opt_desc, e->sublabel, sizeof(sm->opt_desc));
+   simple_upper(sm->kb_label, sm->opt_title, sizeof(sm->kb_label));
 }
 
 static int simple_entry_action(void *userdata, menu_entry_t *entry,
@@ -1032,6 +1046,98 @@ static unsigned simple_wrap(simple_handle_t *sm, enum simple_font fi,
    return lines > SIMPLE_CARD_MAX ? SIMPLE_CARD_MAX : lines;
 }
 
+#define SIMPLE_KB_LINES   5
+#define SIMPLE_KB_LINE    1.3f
+#define SIMPLE_KB_PAD     16.0f
+
+/* Lays out the text being typed, broken anywhere: an address has no
+ * spaces. A password shows as stars. */
+static void simple_kb_layout(simple_handle_t *sm, unsigned dims)
+{
+   size_t i, n, cursor;
+   size_t pos          = 0;
+   size_t line_start   = 0;
+   bool seen           = false;
+   bool secret         = input_driver_text_entry_type()
+      == INPUT_TEXT_TYPE_PASSWORD;
+   const char *text    = NULL;
+   font_data_t *font   = sm->fonts[SIMPLE_FONT_FULL].font;
+   float max_w         = (float)VIDEO_SCALE_W(dims)
+      - 4.0f * SIMPLE_GUTTER * sm->scale;
+
+   if (!menu_input_dialog_get_display_kb())
+   {
+      if (sm->kb_on)
+         sm->kb_label[0] = '\0';
+      sm->kb_on = false;
+      return;
+   }
+   cursor = 0;
+   if (!(text = input_driver_keyboard_line_view(&cursor)))
+      text = "";
+   if (!sm->kb_on)
+   {
+      const char *label = menu_input_dialog_get_kb_label();
+      strlcpy(sm->kb_open, text, sizeof(sm->kb_open));
+      /* The row's own name, if it was a setting's */
+      if (!sm->kb_label[0])
+         simple_upper(sm->kb_label, label ? label : "",
+               sizeof(sm->kb_label));
+      sm->kb_untouched = true;
+   }
+   else if (sm->kb_untouched && !string_is_equal(text, sm->kb_open))
+      sm->kb_untouched = false;
+   /* The system's keyboard starts with all of it selected */
+   sm->kb_selected    = *text && (input_driver_keyboard_line_selected()
+         || (sm->kb_untouched && input_osk_native_active()));
+   sm->kb_lines       = 1;
+   sm->kb_cursor_line = 0;
+   sm->kb_cursor_x    = 0.0f;
+
+   for (i = 0; text[i]; i += n)
+   {
+      char glyph[8];
+      n = simple_utf8_len((unsigned char)text[i]);
+      if (n > strlen(text + i))
+         break;
+      if (secret)
+         strlcpy(glyph, "*", sizeof(glyph));
+      else
+      {
+         memcpy(glyph, text + i, n);
+         glyph[n] = '\0';
+      }
+      if (pos + strlen(glyph) + 2 >= sizeof(sm->kb_text))
+         break;
+      if (!seen && i >= cursor)
+      {
+         seen               = true;
+         sm->kb_cursor_line = sm->kb_lines - 1;
+         sm->kb_cursor_x    = font ? font_driver_get_message_width(font,
+               sm->kb_text + line_start, pos - line_start, 1.0f) : 0.0f;
+      }
+      strlcpy(sm->kb_text + pos, glyph, sizeof(sm->kb_text) - pos);
+      if (     font && pos > line_start
+            && font_driver_get_message_width(font, sm->kb_text + line_start,
+               pos + strlen(glyph) - line_start, 1.0f) > max_w)
+      {
+         sm->kb_text[pos++] = '\n';
+         line_start         = pos;
+         sm->kb_lines++;
+         strlcpy(sm->kb_text + pos, glyph, sizeof(sm->kb_text) - pos);
+      }
+      pos += strlen(glyph);
+   }
+   sm->kb_text[pos] = '\0';
+   if (!seen)
+   {
+      sm->kb_cursor_line = sm->kb_lines - 1;
+      sm->kb_cursor_x    = font ? font_driver_get_message_width(font,
+            sm->kb_text + line_start, pos - line_start, 1.0f) : 0.0f;
+   }
+   sm->kb_on = true;
+}
+
 #define SIMPLE_DESC_LINE  1.3f
 #define SIMPLE_DESC_GAP   12.0f
 
@@ -1312,6 +1418,7 @@ static void simple_render(void *data, unsigned dims, bool is_idle)
    /* The touch reader scales touches by this; unset, every tap is 0,0 */
    p_disp->framebuf_dims  = dims;
    simple_card_layout(sm, dims);
+   simple_kb_layout(sm, dims);
    if (SIMPLE_DEBUG)
       simple_log_state(sm, menu_list, selection, size, dims);
 
@@ -1701,6 +1808,9 @@ static void simple_draw_rows(simple_handle_t *sm, gfx_display_t *p_disp,
             strlcpy(note, "CURRENT", sizeof(note));
          else if (text && !entry->value[0])
             strlcpy(note, "NOT SET", sizeof(note));
+         /* A password is not put on screen */
+         else if (text && setting->ui_type == ST_UI_TYPE_PASSWORD_LINE_EDIT)
+            strlcpy(note, "SET", sizeof(note));
          note_w = simple_note_width(sm, note);
          if (!sm->is_home && note_w > max_note)
          {
@@ -1787,6 +1897,72 @@ static void simple_draw_hints(simple_handle_t *sm, gfx_display_t *p_disp,
          ? "B OPEN   A BACK   \xE2\x86\x95 MOVE"
          : "A OPEN   B BACK   \xE2\x86\x95 MOVE",
          SIMPLE_GUTTER * s, y, dims, SIMPLE_COL_MUTED, TEXT_ALIGN_LEFT);
+}
+
+/* The text being typed, at the top: a keyboard covers the bottom */
+static void simple_draw_kb(simple_handle_t *sm, gfx_display_t *p_disp,
+      void *userdata, unsigned dims)
+{
+   char line[sizeof(sm->kb_text)];
+   unsigned r;
+   const char *p  = sm->kb_text;
+   float s        = sm->scale;
+   float w        = (float)VIDEO_SCALE_W(dims);
+   float x        = SIMPLE_GUTTER * s;
+   float tx       = 2.0f * x;
+   float line_h   = sm->m->font[SIMPLE_FONT_FULL] * SIMPLE_KB_LINE * s;
+   float note_h   = sm->m->font[SIMPLE_FONT_NOTE] * 2.0f * s;
+   float pad      = SIMPLE_KB_PAD * s * (sm->gamepad ? 0.5f : 1.0f);
+   float top      = sm->m->list_top * s;
+   float y        = top + pad + note_h + pad * 0.5f;
+   unsigned max   = sm->gamepad ? 3 : SIMPLE_KB_LINES;
+   unsigned shown = sm->kb_lines > max ? max : sm->kb_lines;
+   /* The lines around the cursor */
+   unsigned first = sm->kb_cursor_line >= max
+      ? sm->kb_cursor_line - max + 1 : 0;
+
+   simple_quad(p_disp, userdata, dims, 0.0f, 0.0f, w,
+         simple_box_bottom(sm, dims), 0x000000A6);
+   simple_quad(p_disp, userdata, dims, x, top, w - 2.0f * x,
+         y - top + (float)shown * line_h + pad * 0.5f + note_h + pad,
+         SIMPLE_COL_SHEET);
+   simple_note(sm, sm->kb_label, tx, top + pad + note_h * 0.5f, dims,
+         SIMPLE_COL_MUTED, TEXT_ALIGN_LEFT);
+
+   for (r = 0; r < first + shown; r++)
+   {
+      size_t n = strcspn(p, "\n");
+      if (r >= first)
+      {
+         float ly = y + (float)(r - first) * line_h;
+         memcpy(line, p, n);
+         line[n] = '\0';
+         if (sm->kb_selected && n)
+            simple_quad(p_disp, userdata, dims, tx, ly,
+                  (float)font_driver_get_message_width(
+                     sm->fonts[SIMPLE_FONT_FULL].font, line, n, 1.0f),
+                  line_h, SIMPLE_COL_DIM);
+         simple_text(sm, SIMPLE_FONT_FULL, line, tx, ly + line_h * 0.5f,
+               dims, SIMPLE_COL_FG, TEXT_ALIGN_LEFT);
+         if (     r == sm->kb_cursor_line && !sm->kb_selected
+               && ((menu_driver_get_current_time() / 500000) & 1))
+            simple_quad(p_disp, userdata, dims, tx + sm->kb_cursor_x,
+                  ly + line_h * 0.15f, 2.0f * s, line_h * 0.7f,
+                  SIMPLE_COL_ACCENT);
+      }
+      p += n;
+      if (*p)
+         p++;
+   }
+   simple_note(sm, "DONE SAVES \xC2\xB7 BACK CANCELS", tx,
+         y + (float)shown * line_h + pad * 0.5f + note_h * 0.5f, dims,
+         SIMPLE_COL_DIM, TEXT_ALIGN_LEFT);
+
+   /* Without the system's keyboard, RetroArch's own */
+   gfx_display_draw_keyboard(p_disp, userdata, dims, 0,
+         sm->fonts[SIMPLE_FONT_FULL].font, menu_state_get_ptr()->osk_grid,
+         input_driver_keyboard_textbox_focus()
+         ? 44 : menu_state_get_ptr()->osk_ptr, SIMPLE_COL_FG);
 }
 
 static void simple_draw_card(simple_handle_t *sm, gfx_display_t *p_disp,
@@ -1911,6 +2087,14 @@ static void simple_frame(void *data, video_frame_info_t *video_info)
       simple_draw_hints(sm, p_disp, userdata, dims);
    for (i = 0; i < SIMPLE_FONT_LAST; i++)
       font_flush(dims, &sm->fonts[i]);
+
+   if (sm->kb_on)
+   {
+      int f;
+      simple_draw_kb(sm, p_disp, userdata, dims);
+      for (f = 0; f < SIMPLE_FONT_LAST; f++)
+         font_flush(dims, &sm->fonts[f]);
+   }
 
    if (sm->card_on)
    {
@@ -2093,7 +2277,7 @@ menu_ctx_driver_t menu_ctx_simple = {
    NULL,                         /* update_thumbnail_image */
    NULL,                         /* refresh_thumbnail_image */
    NULL,                         /* set_thumbnail_content */
-   NULL,                         /* osk_ptr_at_pos */
+   gfx_display_osk_ptr_at_pos,
    NULL,                         /* osk_pointer_over_textbox */
    NULL,                         /* update_savestate_thumbnail_path */
    NULL,                         /* update_savestate_thumbnail_image */
