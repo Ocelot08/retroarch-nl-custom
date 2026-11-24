@@ -2252,7 +2252,15 @@ static void gfx_widgets_overlay_rect(gfx_display_t *p_disp, void *userdata,
       unsigned video_dims, int x, int y, int w, int h,
       uint32_t hex, float alpha)
 {
-   float color[16] = COLOR_HEX_TO_FLOAT(hex, alpha);
+   unsigned i;
+   float color[16];
+   for (i = 0; i < 16; i += 4)
+   {
+      color[i]     = HEX_R(hex);
+      color[i + 1] = HEX_G(hex);
+      color[i + 2] = HEX_B(hex);
+      color[i + 3] = alpha;
+   }
    if (w > 0 && h > 0)
       gfx_display_draw_quad(p_disp, userdata, video_dims, x, y,
             VIDEO_SCALE_PACK(w, h), video_dims, color, NULL);
