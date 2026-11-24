@@ -89,18 +89,33 @@ others in Settings › Drivers › Menu. It draws whatever list is open with
 the Simple type and spacing: Work Sans Light for words, IBM Plex Mono for
 notes and values, sizes in dp on a 360 dp wide design. Use it with Menu
 Layout set to Simple. It takes taps, swipes (with an edge bounce) and the
-menu buttons; the breadcrumb line goes back. Choices step from small
-arrows with 48dp targets, numbers open a slider row, and prompts show as
-a card with answer rows. It has no keyboard, images or art yet.
+menu buttons; the breadcrumb line and Android's Back go back. A setting's
+word opens its options under its description; the right side changes it,
+or opens the list of a long one. Numbers open a slider row, those with no
+set end keep small arrows, and prompts show as a card with answer rows.
+Text is typed with the system's keyboard into a box at the top. It has no
+images or art yet.
+
+A name too wide for its row takes the smaller type, then a second line.
+A text value too wide shows as SET, and passwords always do.
 
 In the Simple layout, every Settings category (Controls, Screen, Sound,
 Saving, Library, Accounts, Accessibility, Interface), Downloads and the
 Game menu's Controls and Screen are short lists of the common settings under plain
 names, each ending in a More row that opens the classic list. RetroArch's
-own lists are drawn in smaller type. The breadcrumb shows the whole path,
+own lists, and the More rows, are drawn in smaller type. Games has Game
+Lists, RetroArch's playlists, ending in Edit Game Lists. The breadcrumb shows the whole path,
 the middle levels as an ellipsis when it is too long. Help has Switch to
 Classic Menu; in the Classic layout the Main Menu lists Settings, so the
 way back is Settings › User Interface › Menu Layout.
+
+Choosing the Simple layout draws the menu behind a camera cutout
+(Settings › Screen › Use Camera Area); the header moves clear of it, and
+a game's picture stays below it. A game always has touch controls, the
+default ones if its own cannot be read, or Back to open the Game menu.
+Settings changed before a game starts are saved first when that game's
+emulator has settings of its own. A game that cannot be opened says why,
+and offers to choose its folder.
 
 Gamepad Mode (Help, or Settings › Interface) draws the menu in a 4:3
 box at the top, smaller, with button hints, and shows the touch controls

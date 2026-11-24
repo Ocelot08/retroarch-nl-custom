@@ -8,7 +8,8 @@
   - It scrolls by drag and flick with an edge bounce. Choices step on the row, numbers open a slider, and prompts show as a card.
   - It has no art, keyboard or page animation yet.
   - Short lists: all eight Settings categories, Downloads, Help, and the Game menu's Controls and Screen.
-  - Not seen on a phone yet: Downloads, the Home title and note fixes, and the Game menu lists with a game running.
+  - Options pages with descriptions, a text box, drawing behind the camera, and Back are in.
+  - Not seen on a phone yet: landscape, a physical controller, the Vulkan driver, RetroArch's own keyboard in Simple, and the reworded Close, Restart and gamepad prompts.
 
 ## What is architectural
 
@@ -110,7 +111,7 @@ Done: driver logging, the scripted run and the signing key. Left: separate test 
   - Hold each press for about 150 ms: a bare `input tap` can fall between frames.
 - **One debug signing key, kept outside the repository.** Test builds from different machines then install over each other. Today a build from a second machine meant uninstalling the test app.
 - **Separate test data.** The Simple test app uses the same `/storage/emulated/0/RetroArch` saves and states as the working app. Point it at its own folders.
-- **CI.** The jobs AGENTS.md asks for run on Linux. A Mac needs docker or podman, or a Linux machine, to run them.
+- **CI.** The jobs AGENTS.md asks for run on Linux, and `tools/ci_local.py` skips them on a Mac, with docker or without. Run them in a Linux machine or a cloud session, with `TMPDIR` unset (Wine crashed with it set) and Python 3.12. Known failures from before the redesign: `input_state_grab_check` on `input/input_overlay_layout.c` (since `919eca3c3d`), and `overlay_apng_press_on_screen_test` (cause not found).
 
 ## Order of work
 
@@ -178,4 +179,15 @@ The first and the lost presses were seen on the driver before the two lines were
   - Update Emulators updates installed emulators, not everything: RetroArch has no single update-all.
   - System Files is RetroArch's downloader, and does not know what is missing.
   - There are no update counts or summary: they need a request to the server when the page opens.
+- **RA TESTER shares folders with the working app** (history, playlists,
+  saves, per-emulator settings). Its history links to folders Android
+  allowed only the working app, and an emulator's settings can name a
+  gamepad in the working app's private folder. Give it its own folders.
+- **Settings changed during a game** that has its own settings are dropped
+  when it closes: "Keeping changes" in `ia-v2.md`, not built.
+- **Orientation** does not turn the screen while the app runs: RetroArch
+  skips that on Android. Probably applies after a restart; not checked.
+- **The text box's cursor** stays at the end on Android, which does not
+  report where it is.
+- **Languages** outside Latin show as boxes: the bundled font is a subset.
 - **The sublabel map is binary searched.** Rows go in enum order; `tools/sublabel_map_check.py` checks it. On an Apple silicon Mac, run the Python checks with an arm64 Python.

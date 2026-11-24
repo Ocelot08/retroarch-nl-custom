@@ -32,6 +32,8 @@
   - **With a summary** (Downloads): the same line, then the page name in smaller light type and a summary in small capitals ("3 UPDATES · 2 FILES MISSING"). Only for pages where one line about the whole page helps.
   - **To do:** apply this to every L2 and deeper page in the Pages frame. Keep the summary on Downloads and its pages, Games and its lists, and Game Options; drop it elsewhere. Game pages keep their art, as a shorter band behind the header.
 - **Touch targets:** 48×48dp minimum, measured as the touch area, not the drawn control (Figma frames are 360 wide, so 1 Figma px = 1dp). Controls stay drawn at their original small size; a row is 48dp tall and ‹ › get 48×48 targets with a gap between them. An open number row is two 48dp rows: the headline (closes it) and the slider. In code, scale by the screen density (about 3× on the S24).
+- **Changing a value (decided 23 Nov 2026, replaces ‹ ›):** the word opens a page with the setting's description and options. The right 40% of the row changes it: on/off flips, up to five options step, more open the list. Numbers keep the slider; only numbers with no set end keep ‹ ›. Values a tap changes are bright.
+- **Text that doesn't fit:** the smaller type, then two lines in the same row, then an ellipsis.
 
 ## Templates (the chosen set)
 
@@ -101,7 +103,8 @@ Save State and Load State keep RetroArch's names, which players already know. St
 Games
 ├─ Recent ›                    covers under the word; a cover starts its game
 ├─ Favorites ›                 covers under the word
-├─ Systems ›                   each system with a fan of covers and its count
+├─ Game Lists ›                each system with a fan of covers and its count; ends in
+│                              Edit Game Lists (was Systems)
 │  └─ <System> ›               its games A–Z; sort and search in the header
 ├─ Add Games ›                 Import Content: scan a folder, a single file, or a manual
 │                              scan; note "2 D AGO"
@@ -137,7 +140,7 @@ Settings
 ├─ Saving ›         Resume Games, Save on Close, Auto-Save Every, Number Saves, Keep Saves,
 │                   Cloud Sync ›, More Saving Settings → classic
 ├─ Library ›        Show Box Art, Download Missing Box Art, Rescan Games, Games Folder,
-│                   Clean Up Lists, More → Playlists
+│                   Edit Game Lists, More → Playlists
 ├─ Accounts ›       RetroAchievements ›, Nickname, More → User
 ├─ Accessibility ›  Screen Reader, Reading Speed, AI Translation ›, More → Accessibility
 ├─ Interface ›      Language, Menu Style (Simple / Classic), Menu Mode (Touch / Gamepad / Auto),
