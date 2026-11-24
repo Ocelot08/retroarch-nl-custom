@@ -33303,7 +33303,7 @@ MSG_HASH(
    )
 MSG_HASH(
    MENU_ENUM_SUBLABEL_SIMPLE_GAMES,
-   "Recent games, favorites, systems, and adding games."
+   "Recent games, favorites, game lists, and adding games."
    )
 MSG_HASH(
    MENU_ENUM_LABEL_VALUE_SIMPLE_SETTINGS,
@@ -33339,7 +33339,7 @@ MSG_HASH(
    )
 MSG_HASH(
    MENU_ENUM_LABEL_VALUE_SIMPLE_SYSTEMS,
-   "Systems"
+   "Game Lists"
    )
 MSG_HASH(
    MENU_ENUM_LABEL_VALUE_SIMPLE_ADD_GAMES,
@@ -33551,7 +33551,7 @@ MSG_HASH(
    )
 MSG_HASH(
    MENU_ENUM_LABEL_VALUE_SIMPLE_NAME_CLEAN_UP,
-   "Clean Up Lists"
+   "Edit Game Lists"
    )
 MSG_HASH(
    MENU_ENUM_LABEL_VALUE_SIMPLE_NAME_NICKNAME,

@@ -1498,6 +1498,7 @@ static void simple_draw_rows(simple_handle_t *sm, gfx_display_t *p_disp,
 
       {
          char fitted[NAME_MAX_LENGTH];
+         enum simple_font font    = more ? SIMPLE_FONT_FULL : word_font;
          rarch_setting_t *setting = sm->is_home ? NULL
             : simple_row_setting(list, i);
          float note_w = simple_note_width(sm, note);
@@ -1516,10 +1517,10 @@ static void simple_draw_rows(simple_handle_t *sm, gfx_display_t *p_disp,
             note_w = (w - x) - (lc - 24.0f * s);
             note[0] = '\0';
          }
-         simple_fit(sm, word_font, word,
+         simple_fit(sm, font, word,
                w - 2.0f * x - (note_w > 0.0f ? note_w + 16.0f * s : 0.0f),
                fitted, sizeof(fitted));
-         simple_text(sm, word_font, fitted, x, centre, dims,
+         simple_text(sm, font, fitted, x, centre, dims,
                more ? SIMPLE_COL_MUTED : SIMPLE_COL_FG, TEXT_ALIGN_LEFT);
 
          if (i == sm->open_idx && simple_is_number(setting, entry->value))
@@ -1679,8 +1680,10 @@ static void simple_frame(void *data, video_frame_info_t *video_info)
       float rows_b = simple_rows_bottom(sm, dims);
       simple_quad(p_disp, userdata, dims, 0.0f, 0.0f, w, view_t,
             SIMPLE_COL_BG);
-      simple_quad(p_disp, userdata, dims, x, view_t, w - 2.0f * x, line,
-            SIMPLE_COL_LINE);
+      /* The first row's line, held here while it is scrolled past */
+      if (sm->scroll_y > 0.0f || !list || !list->size)
+         simple_quad(p_disp, userdata, dims, x, view_t, w - 2.0f * x, line,
+               SIMPLE_COL_LINE);
       if (rows_b < box_b)
          simple_quad(p_disp, userdata, dims, 0.0f, rows_b, w,
                box_b - rows_b, SIMPLE_COL_BG);

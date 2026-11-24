@@ -426,6 +426,18 @@ static const title_enum_map_t *title_enum_lookup(const char *label)
    return NULL;
 }
 
+/* The Simple layout's names for two of RetroArch's pages */
+static enum msg_hash_enums title_simple_name(enum msg_hash_enums title)
+{
+   if (config_get_ptr()->uints.menu_layout != MENU_LAYOUT_SIMPLE)
+      return title;
+   if (title == MENU_ENUM_LABEL_VALUE_PLAYLISTS_TAB)
+      return MENU_ENUM_LABEL_VALUE_SIMPLE_SYSTEMS;
+   if (title == MENU_ENUM_LABEL_VALUE_PLAYLIST_MANAGER_LIST)
+      return MENU_ENUM_LABEL_VALUE_SIMPLE_NAME_CLEAN_UP;
+   return title;
+}
+
 static int action_get_title_from_enum(
       const char *path, const char *label,
       unsigned menu_type, char *s, size_t len)
@@ -434,7 +446,7 @@ static int action_get_title_from_enum(
    const char *title;
    if (!e)
       return 1;
-   title = msg_hash_to_str((enum msg_hash_enums)e->title);
+   title = msg_hash_to_str(title_simple_name((enum msg_hash_enums)e->title));
    switch (e->variant)
    {
       case TITLE_VARIANT_FILL:

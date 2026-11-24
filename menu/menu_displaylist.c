@@ -20011,6 +20011,16 @@ static bool menu_displaylist_ctl_internal(
                         MENU_ENUM_LABEL_NO_PLAYLISTS,
                         MENU_SETTING_NO_ITEM, 0, 0, NULL);
 
+               if (     !is_horizontal
+                     && settings->uints.menu_layout == MENU_LAYOUT_SIMPLE
+                     && !settings->bools.kiosk_mode_enable)
+                  if (menu_entries_append(info->list,
+                           msg_hash_to_str(MENU_ENUM_LABEL_VALUE_SIMPLE_NAME_CLEAN_UP),
+                           MENU_ENUM_LABEL_PLAYLIST_MANAGER_LIST_STR,
+                           MENU_ENUM_LABEL_PLAYLIST_MANAGER_LIST,
+                           MENU_SETTING_ACTION, 0, 0, NULL))
+                     count++;
+
                info->flags       |=  MD_FLAG_NEED_REFRESH
                                   |  MD_FLAG_NEED_PUSH;
             }

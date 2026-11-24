@@ -109,6 +109,8 @@ static const enum msg_hash_enums simple_names[][2] = {
       MENU_ENUM_LABEL_VALUE_SIMPLE_NAME_HOTKEYS },
    { MENU_ENUM_LABEL_NETWORK_ON_DEMAND_THUMBNAILS,
       MENU_ENUM_LABEL_VALUE_SIMPLE_NAME_ART_BROWSING },
+   { MENU_ENUM_LABEL_PLAYLIST_MANAGER_LIST,
+      MENU_ENUM_LABEL_VALUE_SIMPLE_NAME_CLEAN_UP },
 };
 
 static int action_bind_label_simple_name(
@@ -237,6 +239,7 @@ int menu_cbs_init_bind_label(menu_file_list_cbs_t *cbs,
       case MENU_ENUM_LABEL_INPUT_RETROPAD_BINDS:
       case MENU_ENUM_LABEL_INPUT_HOTKEY_BINDS:
       case MENU_ENUM_LABEL_NETWORK_ON_DEMAND_THUMBNAILS:
+      case MENU_ENUM_LABEL_PLAYLIST_MANAGER_LIST:
          BIND_ACTION_LABEL(cbs, action_bind_label_simple_name);
          break;
       case MENU_ENUM_LABEL_LOAD_CONTENT_HISTORY:
