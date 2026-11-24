@@ -11618,6 +11618,15 @@ unsigned menu_displaylist_build_list(
                   MENU_ENUM_LABEL_MANUAL_CONTENT_SCAN_LIST,
                   MENU_SETTING_ACTION, 0, 0, NULL))
             count++;
+#if defined(ANDROID) && defined(HAVE_SAF)
+         if (settings->uints.menu_layout == MENU_LAYOUT_SIMPLE)
+            if (menu_entries_append(list,
+                     msg_hash_to_str(MENU_ENUM_LABEL_VALUE_SIMPLE_NAME_CHOOSE_FOLDER),
+                     msg_hash_to_str(MENU_ENUM_LABEL_FILE_BROWSER_OPEN_PICKER),
+                     MENU_ENUM_LABEL_FILE_BROWSER_OPEN_PICKER,
+                     MENU_SETTING_ACTION, 0, 0, NULL))
+               count++;
+#endif
          break;
       case DISPLAYLIST_NETWORK_INFO:
 #if defined(HAVE_NETWORKING) && defined(HAVE_IFINFO)

@@ -3207,6 +3207,41 @@ static bool playlist_entry_path_is_valid(const char *entry_path)
    return path_is_valid(entry_path);
 }
 
+static int action_ok_dialog_init(struct menu_state *menu_st);
+
+/* Says why a game did not start. In the Simple layout, in plain words,
+ * and with a way to allow its folder where the system has to. */
+static void action_ok_game_failed(const char *content_path,
+      const char *core_path)
+{
+   bool simple            = config_get_ptr()->uints.menu_layout
+      == MENU_LAYOUT_SIMPLE;
+   bool file_ok           = playlist_entry_path_is_valid(content_path);
+   enum msg_hash_enums id = MSG_FAILED_TO_LOAD_FROM_PLAYLIST;
+   const char *_msg       = NULL;
+
+#if defined(ANDROID) && defined(HAVE_SAF)
+   if (     simple && !file_ok
+         && string_starts_with_size(content_path, "saf://",
+            STRLEN_CONST("saf://")))
+   {
+      struct menu_state *menu_st = menu_state_get_ptr();
+      menu_dialog_confirm_set(menu_st, MSG_SIMPLE_GAME_FOLDER,
+            CMD_EVENT_MENU_CHOOSE_FOLDER);
+      action_ok_dialog_init(menu_st);
+      return;
+   }
+#endif
+   if (simple && content_path && *content_path && !file_ok)
+      id = MSG_SIMPLE_GAME_FILE;
+   else if (simple && core_path && *core_path && !path_is_valid(core_path))
+      id = MSG_SIMPLE_GAME_EMULATOR;
+   _msg = msg_hash_to_str(id);
+   RARCH_ERR("[Content] %s\n", _msg);
+   runloop_msg_queue_push(_msg, strlen(_msg), 1, simple ? 300 : 100, true,
+         NULL, MESSAGE_QUEUE_ICON_DEFAULT, MESSAGE_QUEUE_CATEGORY_ERROR);
+}
+
 /* Simple layout's Continue: the newest History entry, with its core */
 static int action_ok_simple_continue(const char *path,
       const char *label, unsigned type, size_t idx, size_t entry_idx)
@@ -3217,7 +3252,9 @@ static int action_ok_simple_continue(const char *path,
    const struct playlist_entry *entry = NULL;
    core_info_t *core_info             = NULL;
    playlist_t *history                = g_defaults.content_history;
-   const char *_msg                   = NULL;
+
+   content_path[0] = '\0';
+   core_path[0]    = '\0';
 
    if (history && playlist_size(history) > 0)
       playlist_get_index(history, 0, &entry);
@@ -3255,9 +3292,7 @@ static int action_ok_simple_continue(const char *path,
                *content_label ? content_label : NULL);
    }
 
-   _msg = msg_hash_to_str(MSG_FAILED_TO_LOAD_FROM_PLAYLIST);
-   runloop_msg_queue_push(_msg, strlen(_msg), 1, 100, true, NULL,
-         MESSAGE_QUEUE_ICON_DEFAULT, MESSAGE_QUEUE_CATEGORY_ERROR);
+   action_ok_game_failed(content_path, core_path);
    return 0;
 }
 
@@ -3517,12 +3552,7 @@ static int action_ok_playlist_entry_collection(const char *path,
          core_path, content_path, *content_label ? content_label : NULL);
 
 error:
-   {
-      const char *_msg = msg_hash_to_str(MSG_FAILED_TO_LOAD_FROM_PLAYLIST);
-      RARCH_ERR("[Content] %s\n", _msg);
-      runloop_msg_queue_push(_msg, strlen(_msg), 1, 100, true, NULL,
-            MESSAGE_QUEUE_ICON_DEFAULT, MESSAGE_QUEUE_CATEGORY_ERROR);
-   }
+   action_ok_game_failed(content_path, core_path);
 
    /* Single-click playlist return */
    if (settings->bools.input_menu_singleclick_playlists)

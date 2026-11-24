@@ -5689,6 +5689,11 @@ bool command_event(enum event_command cmd, void *data)
          menu_first_run_download_start();
 #endif
          break;
+      case CMD_EVENT_MENU_CHOOSE_FOLDER:
+#if defined(ANDROID) && defined(HAVE_SAF)
+         android_show_saf_tree_picker();
+#endif
+         break;
       case CMD_EVENT_MENU_SAVE_CURRENT_CONFIG:
          /* Same as at quit: the companion's live layout first. */
          ui_companion_event_command(CMD_EVENT_MENU_SAVE_CURRENT_CONFIG);

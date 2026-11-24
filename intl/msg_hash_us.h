@@ -33166,6 +33166,18 @@ MSG_HASH(
    "Failed to load from playlist."
    )
 MSG_HASH(
+   MSG_SIMPLE_GAME_FOLDER,
+   "This game can't be opened. It may have moved, or RetroArch may need access to its folder. Choose the folder now?"
+   )
+MSG_HASH(
+   MSG_SIMPLE_GAME_FILE,
+   "This game's file can't be found."
+   )
+MSG_HASH(
+   MSG_SIMPLE_GAME_EMULATOR,
+   "This game's emulator isn't installed."
+   )
+MSG_HASH(
    MSG_FAILED_TO_LOAD_MOVIE_FILE,
    "Failed to load movie file."
    )
@@ -33696,6 +33708,10 @@ MSG_HASH(
 MSG_HASH(
    MENU_ENUM_LABEL_VALUE_SIMPLE_QUIT_ASK,
    "Quit RetroArch?"
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_VALUE_SIMPLE_NAME_CHOOSE_FOLDER,
+   "Choose Games Folder"
    )
 MSG_HASH(
    MENU_ENUM_LABEL_VALUE_OVERLAY_CUSTOM_BUTTONS,
