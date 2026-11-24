@@ -330,6 +330,7 @@ static int input_overlay_builtin_profile_find(const char *name);
 static void input_overlay_profile_file(char *s, size_t len, const char *name);
 static void input_overlay_profiles_ensure(void);
 static bool input_overlay_builtin_profile_reset(unsigned i);
+static bool input_overlay_builtin_pack(unsigned i, char *s, size_t len);
 
 /* The gamepads every build has, made from the overlays
  * input_overlay_builtin_pack() names */
@@ -2365,7 +2366,19 @@ const char *input_overlay_gamepad_path(const char *pack)
       return preset;
    if (pack && strstr(pack, SYSTEM_OVERLAY_DIR))
       pack = preset;
-   return input_overlay_profile_for(pack);
+   chosen = input_overlay_profile_for(pack);
+
+   /* A gamepad that cannot be read is better replaced than missing */
+   if (chosen && *chosen && !path_get_archive_delim(chosen))
+   {
+      static char builtin[PATH_MAX_LENGTH];
+      char file[PATH_MAX_LENGTH];
+      fill_pathname_expand_special(file, chosen, sizeof(file));
+      if (     !path_is_valid(file)
+            && input_overlay_builtin_pack(0, builtin, sizeof(builtin)))
+         return builtin;
+   }
+   return chosen;
 }
 
 /* Loads the overlay again for a layout changed under it, on the page

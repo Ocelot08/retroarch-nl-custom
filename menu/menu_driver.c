@@ -5176,6 +5176,11 @@ bool menu_driver_alive(void)
    return (menu_driver_state.flags & MENU_ST_FLAG_ALIVE) != 0;
 }
 
+bool menu_driver_layout_simple(void)
+{
+   return config_get_ptr()->uints.menu_layout == MENU_LAYOUT_SIMPLE;
+}
+
 /* The label of the text entry that is open. */
 const char *menu_input_dialog_get_kb_label(void)
 {

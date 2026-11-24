@@ -2541,6 +2541,12 @@ static void android_input_key_read(AInputEvent *event, int source,
    key->meta_state = AKeyEvent_getMetaState(event);
 }
 
+/* The Back gesture comes as a press and its release at once, which a
+ * state read once a frame would miss: it counts as held this long. */
+#define ANDROID_BACK_HOLD_USEC 60000
+
+static retro_time_t android_back_until = 0;
+
 /* A key from the input queue; *handled is the queue's answer */
 static void android_input_key_fields(int port, bool is_keyboard,
       const android_input_fields_t *key, int *handled)
@@ -2553,6 +2559,13 @@ static void android_input_key_fields(int port, bool is_keyboard,
       *handled = 0;
       return;
    }
+
+   /* The system's Back, not a pad's button of that code */
+   if (     key->keycode == AKEYCODE_BACK
+         && key->action  == AKEY_EVENT_ACTION_DOWN
+         && android_key_back_is_aliased(key->source))
+      android_back_until = cpu_features_get_time_usec()
+         + ANDROID_BACK_HOLD_USEC;
 
    if (is_keyboard)
    {
@@ -3672,6 +3685,12 @@ static int16_t android_input_state(
          {
             const struct retro_keybind *keyptr =
                input_autoconf_bind(0, RARCH_MENU_TOGGLE);
+#ifdef HAVE_MENU
+            if (     android_back_until
+                  && menu_driver_layout_simple()
+                  && cpu_features_get_time_usec() < android_back_until)
+               return 1;
+#endif
             if (keyptr->joykey == 0)
                return ANDROID_KEYBOARD_INPUT_PRESSED(AKEYCODE_BACK);
          }

@@ -20560,6 +20560,38 @@ INPUT_NOINLINE static void input_enabler_tap_frame(
    input_core_read_gate_set(input_st);
 }
 
+#if defined(HAVE_MENU) && defined(HAVE_OVERLAY)
+/* In the Simple layout, the platform's Back opens the menu over a game
+ * with no touch gamepad shown, which would have had a menu button. On
+ * release, and only of a press made in the game, so that the press that
+ * closes the menu does not open it again. */
+static void input_driver_back_opens_menu(
+      const input_driver_state_t *input_st, const settings_t *settings,
+      bool menu_is_alive, input_bits_t *current_bits)
+{
+   static bool held          = false;
+   static bool ours          = false;
+   const input_overlay_t *ol = input_st->overlay_ptr;
+   bool active               = !menu_is_alive
+      && settings->uints.menu_layout == MENU_LAYOUT_SIMPLE
+      && !(ol && (ol->flags & INPUT_OVERLAY_ENABLE));
+   bool back                 = input_driver_device_state(0,
+         RARCH_DEVICE_POINTER_SCREEN, 0,
+         RARCH_DEVICE_ID_POINTER_BACK) != 0;
+
+   if (!active)
+      ours = false;
+   else if (back && !held)
+      ours = true;
+   else if (!back && ours)
+   {
+      BIT256_SET_PTR(current_bits, RARCH_MENU_TOGGLE);
+      ours = false;
+   }
+   held    = back;
+}
+#endif
+
 void input_driver_collect_system_input(input_driver_state_t *input_st,
       settings_t *settings, input_bits_t *current_bits)
 {
@@ -20959,6 +20991,11 @@ void input_driver_collect_system_input(input_driver_state_t *input_st,
       if (input_enabler_tap.busy)
          input_enabler_tap_idle(input_st);
    }
+
+#if defined(HAVE_MENU) && defined(HAVE_OVERLAY)
+   input_driver_back_opens_menu(input_st, settings, menu_is_alive,
+         current_bits);
+#endif
 }
 
 #if defined(HAVE_MENU) && defined(HAVE_ACCESSIBILITY)
