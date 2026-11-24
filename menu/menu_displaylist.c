@@ -20086,6 +20086,36 @@ static bool menu_displaylist_ctl_internal(
                   {
                      switch (setting->type)
                      {
+                        case ST_BOOL:
+                           {
+                              unsigned i;
+                              char val_d[16];
+                              menu_file_list_cbs_t *cbs = NULL;
+                              unsigned checked          =
+                                 *setting->value.target.boolean ? 0 : 1;
+
+                              snprintf(val_d, sizeof(val_d), "%d", setting->enum_idx);
+
+                              /* On, then Off; each carries its value */
+                              for (i = 0; i < 2; i++)
+                                 if (menu_entries_append(info->list,
+                                          msg_hash_to_str(i
+                                             ? MENU_ENUM_LABEL_VALUE_OFF
+                                             : MENU_ENUM_LABEL_VALUE_ON),
+                                          val_d,
+                                          MENU_ENUM_LABEL_NO_ITEMS,
+                                          MENU_SETTING_DROPDOWN_SETTING_UINT_ITEM,
+                                          1 - i, 1 - i, NULL))
+                                    count++;
+
+                              if (info->list->size > checked)
+                                 cbs = (menu_file_list_cbs_t*)
+                                    info->list->list[checked].actiondata;
+                              if (cbs)
+                                 cbs->checked           = true;
+                              menu_st->selection_ptr    = checked;
+                           }
+                           break;
                         case ST_STRING_OPTIONS:
                            {
                               char val_d[16];

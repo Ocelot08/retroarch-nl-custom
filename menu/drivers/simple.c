@@ -33,6 +33,7 @@
 #endif
 
 #include "../menu_driver.h"
+#include "../menu_cbs.h"
 #include "../../gfx/gfx_display.h"
 #include "../../gfx/font_driver.h"
 #include "../../configuration.h"
@@ -129,7 +130,7 @@ typedef struct simple_handle
    menu_entry_t entry;
    /* Main thread's own, for taps; entry above is the drawing thread's */
    menu_entry_t hit_entry;
-   menu_entry_t log_entry;          /* test builds' action log */
+   menu_entry_t log_entry;          /* descriptions, the action log */
    const simple_metrics_t *m;
    const file_list_t *last_list;
    size_t first;
@@ -139,6 +140,7 @@ typedef struct simple_handle
    size_t open_idx;
    size_t open_depth;               /* stack depth it was opened at */
    float scroll_y;
+   float desc_h;                    /* height of the description */
    float drag_start_y;
    float drag_start_scroll;
    float spring_v;
@@ -154,14 +156,21 @@ typedef struct simple_handle
    bool bouncing;
    bool sliding;
    bool was_pressed;
+   bool opts;               /* the option list opt_path names */
    char core_note[64];
    char msgbox[1024];
+   /* Of the setting whose option list was last opened */
+   char opt_path[16];
+   char opt_title[NAME_MAX_LENGTH];
+   char opt_desc[MENU_LABEL_MAX_LENGTH];
+   char desc_text[MENU_LABEL_MAX_LENGTH];
    /* The prompt card, laid out on the main thread for the drawing one */
    char card_text[1024];
    float card_y;
    float card_h;
    float card_rows_y;
    unsigned card_lines;
+   unsigned desc_lines;
    bool card_on;
    bool card_confirm;
    bool msg_seen;
@@ -498,10 +507,35 @@ static const char *simple_action_name(enum menu_action action)
    return "other";
 }
 
+/* Keeps the name and description of row @i for its option list */
+static void simple_keep_options(simple_handle_t *sm, size_t i)
+{
+   struct menu_state *menu_st = menu_state_get_ptr();
+   menu_entry_t *e            = &sm->log_entry;
+   const file_list_t *list    = menu_st->entries.list
+      ? MENU_LIST_GET_SELECTION(menu_st->entries.list, 0) : NULL;
+   rarch_setting_t *setting   = simple_row_setting(list, i);
+
+   if (sm->is_home || !setting)
+      return;
+   MENU_ENTRY_INITIALIZE((*e));
+   e->flags |= MENU_ENTRY_FLAG_RICH_LABEL_ENABLED
+             | MENU_ENTRY_FLAG_SUBLABEL_ENABLED;
+   menu_entry_get(e, 0, i, NULL, true);
+   snprintf(sm->opt_path, sizeof(sm->opt_path), "%d",
+         (int)setting->enum_idx);
+   strlcpy(sm->opt_title, e->rich_label[0] ? e->rich_label : e->path,
+         sizeof(sm->opt_title));
+   strlcpy(sm->opt_desc, e->sublabel, sizeof(sm->opt_desc));
+}
+
 static int simple_entry_action(void *userdata, menu_entry_t *entry,
       size_t i, enum menu_action action)
 {
    simple_handle_t *sm = (simple_handle_t*)userdata;
+
+   if (sm && (action == MENU_ACTION_OK || action == MENU_ACTION_SELECT))
+      simple_keep_options(sm, i);
 
    /* NOOP comes every frame */
    if (SIMPLE_DEBUG && sm && action != MENU_ACTION_NOOP)
@@ -565,6 +599,33 @@ static bool simple_is_choice(const rarch_setting_t *setting,
           || setting->type == ST_STRING_OPTIONS;
 }
 
+#define SIMPLE_OPTIONS_STEP 5      /* as many step with a tap */
+#define SIMPLE_OPTIONS_MAX  200
+
+/* How many options a choice has; 0 is more than a list can show */
+static unsigned simple_options(const rarch_setting_t *setting)
+{
+   float n;
+   if (setting->type == ST_STRING_OPTIONS)
+   {
+      unsigned c    = 1;
+      const char *p = setting->aux.values;
+      if (!p)
+         return 0;
+      for (; *p; p++)
+         if (*p == '|')
+            c++;
+      return c;
+   }
+   if (     (setting->type != ST_UINT && setting->type != ST_INT)
+         || !(setting->flags & SD_FLAG_ENFORCE_MAXRANGE))
+      return 0;
+   n = (setting->max - ((setting->flags & SD_FLAG_ENFORCE_MINRANGE)
+            ? setting->min : 0.0f))
+      / (setting->step < 1.0f ? 1.0f : setting->step) + 1.0f;
+   return (n < 1.0f || n > (float)SIMPLE_OPTIONS_MAX) ? 0 : (unsigned)n;
+}
+
 /* Moves a number to @frac of its range a step at a time, so every
  * handler the setting has runs as it would for left and right */
 static void simple_number_set(rarch_setting_t *setting, unsigned type,
@@ -618,7 +679,8 @@ static void simple_entry_rect(const simple_handle_t *sm, size_t i,
       *h   = m->home_row * s;
       return;
    }
-   *top = (m->list_top + (float)i * m->list_row) * s - sm->scroll_y;
+   *top = (m->list_top + (float)i * m->list_row) * s - sm->scroll_y
+      + sm->desc_h;
    *h   = m->list_row * s;
    if (i >= sm->more_idx)
       *top += SIMPLE_MORE_GAP * s;
@@ -634,7 +696,7 @@ static void simple_scroll(simple_handle_t *sm, const file_list_t *list,
 {
    float top, h, max;
    float s      = sm->scale;
-   float view_t = sm->m->list_top * s;
+   float view_t = sm->m->list_top * s + sm->desc_h;
    size_t size  = list ? list->size : 0;
    float extent = (float)size * sm->m->list_row * s
       + (sm->more_idx < size ? SIMPLE_MORE_GAP * s : 0.0f)
@@ -750,7 +812,7 @@ static float simple_view_top(const simple_handle_t *sm)
       simple_entry_rect(sm, 0, &top, &h);
       return top;
    }
-   return sm->m->list_top * sm->scale;
+   return sm->m->list_top * sm->scale + sm->desc_h;
 }
 
 /* Bottom of the rows: gamepad mode keeps a line for button hints */
@@ -888,14 +950,14 @@ static void simple_render_messagebox(void *data, const char *msg)
 #define SIMPLE_CARD_GAP    14.0f
 #define SIMPLE_CARD_MAX    10
 
-/* Wraps @src to @max_w in the word font, a line per '\n' in @dst */
-static unsigned simple_wrap(simple_handle_t *sm, const char *src,
-      float max_w, char *dst, size_t len)
+/* Wraps @src to @max_w, a line per '\n' in @dst */
+static unsigned simple_wrap(simple_handle_t *sm, enum simple_font fi,
+      const char *src, float max_w, char *dst, size_t len)
 {
    size_t n          = 0;
    size_t line_start = 0;
    unsigned lines    = 1;
-   font_data_t *font = sm->fonts[SIMPLE_FONT_WORD].font;
+   font_data_t *font = sm->fonts[fi].font;
 
    dst[0] = '\0';
    while (*src && n + 2 < len && lines <= SIMPLE_CARD_MAX)
@@ -935,6 +997,24 @@ static unsigned simple_wrap(simple_handle_t *sm, const char *src,
    return lines > SIMPLE_CARD_MAX ? SIMPLE_CARD_MAX : lines;
 }
 
+#define SIMPLE_DESC_LINE  1.3f
+#define SIMPLE_DESC_GAP   12.0f
+
+/* The description above a setting's options */
+static void simple_desc_layout(simple_handle_t *sm, unsigned dims)
+{
+   unsigned lines = 0;
+   if (sm->opts && sm->opt_desc[0])
+      lines = simple_wrap(sm, SIMPLE_FONT_FULL, sm->opt_desc,
+            (float)VIDEO_SCALE_W(dims) - 2.0f * SIMPLE_GUTTER * sm->scale,
+            sm->desc_text, sizeof(sm->desc_text));
+   if (lines > (sm->gamepad ? 2u : 6u))
+      lines = sm->gamepad ? 2 : 6;
+   sm->desc_lines = lines;
+   sm->desc_h     = lines ? ((float)lines * sm->m->font[SIMPLE_FONT_FULL]
+         * SIMPLE_DESC_LINE + SIMPLE_DESC_GAP) * sm->scale : 0.0f;
+}
+
 static void simple_card_layout(simple_handle_t *sm, unsigned dims)
 {
    struct menu_state *menu_st = menu_state_get_ptr();
@@ -949,7 +1029,7 @@ static void simple_card_layout(simple_handle_t *sm, unsigned dims)
       return;
    sm->card_confirm = menu_st->dialog_st.confirm_cmd != 0;
    rows             = sm->card_confirm ? 2 : 1;
-   sm->card_lines   = simple_wrap(sm,
+   sm->card_lines   = simple_wrap(sm, SIMPLE_FONT_WORD,
          menu_st->dialog_st.confirm_msg == MSG_PRESS_AGAIN_TO_QUIT
          ? msg_hash_to_str(MENU_ENUM_LABEL_VALUE_SIMPLE_QUIT_ASK)
          : sm->msgbox,
@@ -982,6 +1062,7 @@ static void simple_card_layout(simple_handle_t *sm, unsigned dims)
 static void simple_set_page(simple_handle_t *sm, bool simple_layout)
 {
    size_t i;
+   const char *path  = NULL;
    const char *label = NULL;
    static const enum msg_hash_enums lists[] = {
       MENU_ENUM_LABEL_CONTENT_SETTINGS,    /* the Game menu */
@@ -1003,10 +1084,13 @@ static void simple_set_page(simple_handle_t *sm, bool simple_layout)
       MENU_ENUM_LABEL_DEFERRED_SIMPLE_BOX_ART_LIST
    };
 
-   menu_entries_get_last_stack(NULL, &label, NULL, NULL, NULL);
+   menu_entries_get_last_stack(&path, &label, NULL, NULL, NULL);
    /* A prompt keeps the page it covers */
    if (string_is_equal(label, MENU_ENUM_LABEL_INFO_SCREEN_STR))
       return;
+   sm->opts    = sm->opt_path[0] && string_is_equal(path, sm->opt_path)
+      && string_is_equal(label,
+            MENU_ENUM_LABEL_DEFERRED_DROPDOWN_BOX_LIST_STR);
    sm->is_home = simple_layout && string_is_equal(label,
          msg_hash_to_str(MENU_ENUM_LABEL_MAIN_MENU));
    sm->full    = !sm->is_home;
@@ -1139,6 +1223,7 @@ static void simple_render(void *data, unsigned dims, bool is_idle)
    was_home = sm->is_home;
    simple_set_page(sm, settings->uints.menu_layout == MENU_LAYOUT_SIMPLE);
    simple_check_open(sm, menu_list, list);
+   simple_desc_layout(sm, dims);
    if (sm->is_home && !was_home)
       simple_home_counts(sm);
 
@@ -1249,6 +1334,8 @@ static size_t simple_crumb_parts(simple_handle_t *sm, bool *gap)
       title[0] = '\0';
       if (i == 0 && simple_layout)
          strlcpy(title, "Home", sizeof(title));
+      else if (i == stack->size - 1 && sm->opts)
+         strlcpy(title, sm->opt_title, sizeof(title));
       else if (i == stack->size - 1)
          menu_entries_get_title(title, sizeof(title));
       else if (cbs && cbs->action_get_title)
@@ -1320,6 +1407,32 @@ static void simple_draw_header(simple_handle_t *sm, unsigned dims)
    simple_note(sm, crumb, x, y, dims, SIMPLE_COL_MUTED, TEXT_ALIGN_LEFT);
    simple_note(sm, "RETROARCH", w - x, y, dims, SIMPLE_COL_DIM,
          TEXT_ALIGN_RIGHT);
+}
+
+static void simple_draw_desc(simple_handle_t *sm, unsigned dims)
+{
+   char line[256];
+   unsigned r;
+   const char *p = sm->desc_text;
+   float line_h  = sm->m->font[SIMPLE_FONT_FULL] * SIMPLE_DESC_LINE
+      * sm->scale;
+   float y       = sm->m->list_top * sm->scale;
+
+   for (r = 0; r < sm->desc_lines && *p; r++)
+   {
+      size_t n = strcspn(p, "\n");
+      if (n < sizeof(line))
+      {
+         memcpy(line, p, n);
+         line[n] = '\0';
+         simple_text(sm, SIMPLE_FONT_FULL, line, SIMPLE_GUTTER * sm->scale,
+               y + ((float)r + 0.3f) * line_h, dims, SIMPLE_COL_MUTED,
+               TEXT_ALIGN_LEFT);
+      }
+      p += n;
+      if (*p)
+         p++;
+   }
 }
 
 /* A Home row's note on the right, and whether it needs the player */
@@ -1425,6 +1538,50 @@ static void simple_draw_continue(simple_handle_t *sm, unsigned dims,
          dims, SIMPLE_COL_FG, TEXT_ALIGN_LEFT);
 }
 
+/* A row's word. One too wide takes the smaller type, then a second
+ * line where the row is tall enough, then an ellipsis. */
+static void simple_draw_word(simple_handle_t *sm, enum simple_font fi,
+      const char *word, float x, float centre, float h, float max_w,
+      unsigned dims, uint32_t color)
+{
+   char fitted[NAME_MAX_LENGTH];
+   float line_h      = sm->m->font[SIMPLE_FONT_FULL] * 1.2f * sm->scale;
+   font_data_t *font = sm->fonts[fi].font;
+
+   if (     fi == SIMPLE_FONT_WORD && font
+         && font_driver_get_message_width(font, word, strlen(word), 1.0f)
+            > max_w)
+   {
+      fi   = SIMPLE_FONT_FULL;
+      font = sm->fonts[fi].font;
+   }
+   if (     fi == SIMPLE_FONT_FULL && font && 2.0f * line_h <= h
+         && font_driver_get_message_width(font, word, strlen(word), 1.0f)
+            > max_w)
+   {
+      const char *p;
+      size_t n = 0;
+      for (p = strchr(word, ' '); p; p = strchr(p + 1, ' '))
+      {
+         if (font_driver_get_message_width(font, word, (size_t)(p - word),
+                  1.0f) > max_w)
+            break;
+         n = (size_t)(p - word);
+      }
+      if (n > 0 && n < sizeof(fitted))
+      {
+         memcpy(fitted, word, n);
+         fitted[n] = '\0';
+         simple_text(sm, fi, fitted, x, centre - line_h * 0.5f, dims,
+               color, TEXT_ALIGN_LEFT);
+         word   += n + 1;
+         centre += line_h * 0.5f;
+      }
+   }
+   simple_fit(sm, fi, word, max_w, fitted, sizeof(fitted));
+   simple_text(sm, fi, fitted, x, centre, dims, color, TEXT_ALIGN_LEFT);
+}
+
 static void simple_draw_rows(simple_handle_t *sm, gfx_display_t *p_disp,
       void *userdata, unsigned dims, file_list_t *list, size_t selection)
 {
@@ -1498,13 +1655,39 @@ static void simple_draw_rows(simple_handle_t *sm, gfx_display_t *p_disp,
 
       {
          char fitted[NAME_MAX_LENGTH];
-         enum simple_font font    = more ? SIMPLE_FONT_FULL : word_font;
          rarch_setting_t *setting = sm->is_home ? NULL
             : simple_row_setting(list, i);
-         float note_w = simple_note_width(sm, note);
-         bool choice  = note[0] && simple_is_choice(setting, entry->value);
+         float max_note = (w - 2.0f * x) * 0.5f;
+         float note_w;
+         bool choice    = note[0] && simple_is_choice(setting, entry->value);
+         bool text      = setting && setting->type == ST_STRING;
 
-         if (choice)
+         if (sm->opts && (entry->flags & MENU_ENTRY_FLAG_CHECKED))
+            strlcpy(note, "CURRENT", sizeof(note));
+         else if (text && !entry->value[0])
+            strlcpy(note, "NOT SET", sizeof(note));
+         note_w = simple_note_width(sm, note);
+         if (!sm->is_home && note_w > max_note)
+         {
+            if (text)
+               strlcpy(note, "SET", sizeof(note));
+            else
+            {
+               simple_fit_note(sm, note, max_note, fitted, sizeof(fitted));
+               strlcpy(note, fitted, sizeof(note));
+            }
+            note_w = simple_note_width(sm, note);
+         }
+
+         /* Values a tap changes are bright; open-ended ones have arrows */
+         if (     (choice && simple_options(setting))
+               || (note[0] && setting && setting->type == ST_BOOL))
+         {
+            simple_note(sm, note, w - x, centre, dims, SIMPLE_COL_FG,
+                  TEXT_ALIGN_RIGHT);
+            note[0] = '\0';
+         }
+         else if (choice)
          {
             float lc, rc, vr;
             simple_arrows(sm, dims, note_w, &lc, &rc, &vr);
@@ -1517,11 +1700,10 @@ static void simple_draw_rows(simple_handle_t *sm, gfx_display_t *p_disp,
             note_w = (w - x) - (lc - 24.0f * s);
             note[0] = '\0';
          }
-         simple_fit(sm, font, word,
+         simple_draw_word(sm, more ? SIMPLE_FONT_FULL : word_font, word,
+               x, centre, h,
                w - 2.0f * x - (note_w > 0.0f ? note_w + 16.0f * s : 0.0f),
-               fitted, sizeof(fitted));
-         simple_text(sm, font, fitted, x, centre, dims,
-               more ? SIMPLE_COL_MUTED : SIMPLE_COL_FG, TEXT_ALIGN_LEFT);
+               dims, more ? SIMPLE_COL_MUTED : SIMPLE_COL_FG);
 
          if (i == sm->open_idx && simple_is_number(setting, entry->value))
          {
@@ -1689,6 +1871,7 @@ static void simple_frame(void *data, video_frame_info_t *video_info)
                box_b - rows_b, SIMPLE_COL_BG);
    }
    simple_draw_header(sm, dims);
+   simple_draw_desc(sm, dims);
    if (sm->gamepad)
       simple_draw_hints(sm, p_disp, userdata, dims);
    for (i = 0; i < SIMPLE_FONT_LAST; i++)
@@ -1707,6 +1890,12 @@ static void simple_frame(void *data, video_frame_info_t *video_info)
 
    if (video_st->current_video && video_st->current_video->set_viewport)
       video_st->current_video->set_viewport(video_st->data, dims, false, true);
+}
+
+/* Left edge of the part of a row that changes its value */
+static float simple_value_left(const simple_handle_t *sm)
+{
+   return (float)VIDEO_SCALE_W(sm->dims) * 0.6f;
 }
 
 static int simple_pointer_up(void *data,
@@ -1737,9 +1926,11 @@ static int simple_pointer_up(void *data,
       return 0;
 
    /* The breadcrumb line is the back button */
-   if (!sm->is_home && fy < simple_view_top(sm))
+   if (!sm->is_home && fy < simple_view_top(sm) - sm->desc_h)
       return simple_entry_action(sm, entry, menu_st->selection_ptr,
             MENU_ACTION_CANCEL);
+   if (!sm->is_home && fy < simple_view_top(sm))
+      return 0;
 
    /* The open number's slider row: - and + step, the track sets */
    if (     simple_slider_rect(sm, sm->dims, &st, &x0, &x1)
@@ -1776,11 +1967,28 @@ static int simple_pointer_up(void *data,
       return 0;
    }
 
-   /* A choice steps from its arrows, 48dp targets around each */
+   /* An on/off row or a choice: the right side changes it, or opens the
+    * list of a long one; the word opens its options */
+   if (setting && setting->type == ST_BOOL)
+   {
+      if (     fx >= simple_value_left(sm)
+            || menu_setting_find_enum(setting->enum_idx) != setting)
+         return simple_entry_action(sm, &sm->hit_entry, ptr,
+               MENU_ACTION_SELECT);
+      simple_keep_options(sm, ptr);
+      return generic_action_ok_displaylist_push(sm->opt_path, NULL, NULL,
+            0, ptr, 0, ACTION_OK_DL_DROPDOWN_BOX_LIST);
+   }
    if (simple_is_choice(setting, sm->hit_entry.value) && sm->hit_entry.value[0])
    {
       char note[NAME_MAX_LENGTH];
       float lc, rc, vr;
+      unsigned options = simple_options(setting);
+      if (options)
+         return simple_entry_action(sm, &sm->hit_entry, ptr,
+               (options <= SIMPLE_OPTIONS_STEP
+                && fx >= simple_value_left(sm))
+               ? MENU_ACTION_RIGHT : MENU_ACTION_SELECT);
       simple_upper(note, sm->hit_entry.value, sizeof(note));
       simple_arrows(sm, sm->dims, simple_note_width(sm, note),
             &lc, &rc, &vr);
@@ -1790,6 +1998,7 @@ static int simple_pointer_up(void *data,
       if (fx >= lc - 24.0f * s && fx <= lc + 24.0f * s)
          return simple_entry_action(sm, &sm->hit_entry, ptr,
                MENU_ACTION_LEFT);
+      return 0;
    }
    return simple_entry_action(sm, &sm->hit_entry, ptr,
          MENU_ACTION_SELECT);

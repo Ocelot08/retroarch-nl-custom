@@ -88,6 +88,7 @@ row_y() {
       END { if (found != "") print int(found) }'
 }
 
+# A second argument, "value", taps the right side, which changes the row
 tap_row() {
    if refused "$1"; then
       echo "REFUSED: $1"; exit 2
@@ -99,7 +100,10 @@ tap_row() {
       FAILS=$((FAILS + 1))
       return 1
    fi
-   tap_at $((SCREEN_W / 4)) $((y + $(offset_y)))
+   case "${2:-}" in
+      value) tap_at $((SCREEN_W * 9 / 10)) $((y + $(offset_y))) ;;
+      *)     tap_at $((SCREEN_W / 4)) $((y + $(offset_y))) ;;
+   esac
 }
 
 # A tap the app did not log (lost while a page settles) is tried once more
@@ -269,7 +273,7 @@ n=$(log_count); tap_row Interface && wait_for "$n" '^page "Interface"'
 check $? "Settings > Interface opens"
 shot interface
 
-n=$(log_count); tap_row "Gamepad Mode" && wait_for "$n" 'mode=gamepad'
+n=$(log_count); tap_row "Gamepad Mode" value && wait_for "$n" 'mode=gamepad'
 check $? "Gamepad Mode on"
 # The touch gamepad reloads in the background; a press before it is
 # up is lost

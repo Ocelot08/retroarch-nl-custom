@@ -8450,6 +8450,11 @@ static int generic_action_ok_dropdown_setting(const char *path, const char *labe
 
    switch (setting->type)
    {
+      case ST_BOOL:
+         /* The row's own switch, so its handlers run */
+         if (*setting->value.target.boolean != (entry_idx != 0))
+            menu_action_handle_setting(setting, 0, MENU_ACTION_RIGHT, false);
+         return action_cancel_pop_default(NULL, NULL, 0, 0);
       /* Int lists are built from the minimum (0 unless the range
        * enforces one) in whole steps, so entry @idx is that value;
        * the value is taken back the same way, not from offset_by,
