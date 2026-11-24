@@ -34,6 +34,7 @@
 
 #include "../menu_driver.h"
 #include "../menu_cbs.h"
+#include "../menu_displaylist.h"
 #include "../../gfx/gfx_display.h"
 #include "../../gfx/font_driver.h"
 #include "../../configuration.h"
@@ -68,6 +69,8 @@ void android_app_update_viewport_inset(void);
 #define SIMPLE_CRUMB_PART     48
 #define SIMPLE_DESIGN_WIDTH   360.0f
 #define SIMPLE_GUTTER         22.0f
+#define SIMPLE_HEADS          8
+#define SIMPLE_SUB_INDENT     14.0f
 #define SIMPLE_MORE_GAP       16.0f
 /* Edge bounce, as Material UI's: drag resistance past an end, the
  * furthest it may go as a share of the view, and the spring back */
@@ -145,6 +148,13 @@ typedef struct simple_handle
    const file_list_t *last_list;
    size_t first;
    size_t more_idx;
+   /* Rows opened in place under More, or the list's size */
+   size_t sub_from;
+   /* Rows with a heading above them */
+   size_t head_row[SIMPLE_HEADS];
+   enum msg_hash_enums head_name[SIMPLE_HEADS];
+   unsigned heads;
+   float head_h;
    size_t last_selection;
    /* A number row opened to its slider, or (size_t)-1 */
    size_t open_idx;
@@ -168,6 +178,7 @@ typedef struct simple_handle
    bool sliding;
    bool was_pressed;
    bool opts;               /* the option list opt_path names */
+   bool downloads;          /* the Downloads page */
    char core_note[64];
    char msgbox[1024];
    /* Of the setting whose option list was last opened */
@@ -744,6 +755,11 @@ static void simple_entry_rect(const simple_handle_t *sm, size_t i,
    *top = (m->list_top + (float)i * m->list_row) * s - sm->scroll_y
       + sm->desc_h;
    *h   = m->list_row * s;
+   {
+      unsigned k;
+      for (k = 0; k < sm->heads && sm->head_row[k] <= i; k++)
+         *top += sm->head_h;
+   }
    if (i >= sm->more_idx)
       *top += SIMPLE_MORE_GAP * s;
    if (i > sm->open_idx)
@@ -762,7 +778,8 @@ static void simple_scroll(simple_handle_t *sm, const file_list_t *list,
    size_t size  = list ? list->size : 0;
    float extent = (float)size * sm->m->list_row * s
       + (sm->more_idx < size ? SIMPLE_MORE_GAP * s : 0.0f)
-      + (sm->open_idx < size ? sm->m->list_row * s : 0.0f);
+      + (sm->open_idx < size ? sm->m->list_row * s : 0.0f)
+      + (float)sm->heads * sm->head_h;
 
    max = extent - (bottom - view_t);
    if (max < 0.0f)
@@ -863,6 +880,14 @@ static void simple_scroll(simple_handle_t *sm, const file_list_t *list,
    }
    sm->first = sm->scroll_y > 0.0f
       ? (size_t)(sm->scroll_y / (sm->m->list_row * s)) : 0;
+   /* Gaps, headings and an open slider put rows lower than that */
+   while (sm->first > 0)
+   {
+      simple_entry_rect(sm, sm->first - 1, &top, &h);
+      if (top + h <= view_t)
+         break;
+      sm->first--;
+   }
 }
 
 /* Top of the scrolling rows; above it is the header */
@@ -1270,7 +1295,9 @@ static void simple_set_page(simple_handle_t *sm, bool simple_layout)
             MENU_ENUM_LABEL_DEFERRED_DROPDOWN_BOX_LIST_STR);
    sm->is_home = simple_layout && string_is_equal(label,
          msg_hash_to_str(MENU_ENUM_LABEL_MAIN_MENU));
-   sm->full    = !sm->is_home;
+   sm->full      = !sm->is_home;
+   sm->downloads = simple_layout && string_is_equal(label, msg_hash_to_str(
+            MENU_ENUM_LABEL_DEFERRED_SIMPLE_DOWNLOADS_LIST));
    if (!simple_layout || sm->is_home)
       return;
    for (i = 0; i < ARRAY_SIZE(lists); i++)
@@ -1332,6 +1359,59 @@ static void simple_log_state(simple_handle_t *sm, menu_list_t *menu_list,
       sm->log_rows   = true;
       simple_log("scroll %d", (int)sm->scroll_y);
    }
+}
+
+/* Headings for groups of rows. A row named here starts its group, if it
+ * is not in it already; any page can have them. */
+static void simple_find_heads(simple_handle_t *sm, const file_list_t *list)
+{
+   size_t i, j;
+   enum msg_hash_enums last = MSG_UNKNOWN;
+   static const enum msg_hash_enums rows[][2] = {
+      { MENU_ENUM_LABEL_UPDATE_INSTALLED_CORES,
+         MENU_ENUM_LABEL_VALUE_SIMPLE_NAME_EMULATORS },
+      { MENU_ENUM_LABEL_CORE_UPDATER_LIST,
+         MENU_ENUM_LABEL_VALUE_SIMPLE_NAME_EMULATORS },
+      { MENU_ENUM_LABEL_DOWNLOAD_CORE_SYSTEM_FILES,
+         MENU_ENUM_LABEL_VALUE_SIMPLE_HEAD_FILES_ART },
+      { MENU_ENUM_LABEL_SIMPLE_BOX_ART,
+         MENU_ENUM_LABEL_VALUE_SIMPLE_HEAD_FILES_ART },
+      { MENU_ENUM_LABEL_UPDATE_CORE_INFO_FILES,
+         MENU_ENUM_LABEL_VALUE_SIMPLE_HEAD_UPDATE_FILES },
+      { MENU_ENUM_LABEL_UPDATE_ASSETS,
+         MENU_ENUM_LABEL_VALUE_SIMPLE_HEAD_UPDATE_FILES },
+      { MENU_ENUM_LABEL_UPDATE_AUTOCONFIG_PROFILES,
+         MENU_ENUM_LABEL_VALUE_SIMPLE_HEAD_UPDATE_FILES },
+      { MENU_ENUM_LABEL_UPDATER_SETTINGS,
+         MENU_ENUM_LABEL_VALUE_SIMPLE_SETTINGS }
+   };
+
+   sm->heads  = 0;
+   sm->head_h = sm->m->list_row * 0.72f * sm->scale;
+   if (!sm->downloads || !list)
+      return;
+   for (i = 0; i < list->size && sm->heads < SIMPLE_HEADS; i++)
+      for (j = 0; j < ARRAY_SIZE(rows); j++)
+      {
+         if (     rows[j][1] == last
+               || !string_is_equal(list->list[i].label,
+                  msg_hash_to_str(rows[j][0])))
+            continue;
+         last                        = rows[j][1];
+         sm->head_row[sm->heads]     = i;
+         sm->head_name[sm->heads++]  = last;
+         break;
+      }
+}
+
+/* The heading above row @i, or NULL */
+static const char *simple_heading(const simple_handle_t *sm, size_t i)
+{
+   unsigned k;
+   for (k = 0; k < sm->heads; k++)
+      if (sm->head_row[k] == i)
+         return msg_hash_to_str(sm->head_name[k]);
+   return NULL;
 }
 
 /* Closes an open slider when its page is left (pages share one list) or
@@ -1402,7 +1482,10 @@ static void simple_render(void *data, unsigned dims, bool is_idle)
    simple_check_open(sm, menu_list, list);
    simple_desc_layout(sm, dims);
    if (sm->is_home && !was_home)
+   {
       simple_home_counts(sm);
+      menu_displaylist_simple_downloads_set(false);
+   }
 
    sm->has_continue = sm->is_home && size > 0
       && string_is_equal(list->list[0].label,
@@ -1414,6 +1497,10 @@ static void simple_render(void *data, unsigned dims, bool is_idle)
          sm->more_idx = i;
          break;
       }
+
+   sm->sub_from = (sm->downloads && sm->more_idx < size)
+      ? sm->more_idx + 1 : size;
+   simple_find_heads(sm, list);
 
    bottom = simple_rows_bottom(sm, dims);
    if (     settings->bools.menu_mouse_enable
@@ -1790,15 +1877,20 @@ static void simple_draw_rows(simple_handle_t *sm, gfx_display_t *p_disp,
    for (i = sm->first; i < list->size; i++)
    {
       const char *word;
-      float top, h, centre;
+      const char *head;
+      float top, h, centre, rx;
       menu_entry_t *entry = &sm->entry;
       bool selected       = (i == selection);
       bool more           = !sm->is_home && i == sm->more_idx;
 
       simple_entry_rect(sm, i, &top, &h);
+      head  = simple_heading(sm, i);
+      rx    = x + (i >= sm->sub_from && !sm->is_home
+            ? SIMPLE_SUB_INDENT * s : 0.0f);
       if (top + h <= view_t)
          continue;
-      if (top >= bottom || (sm->is_home && top + h > bottom))
+      if (     top - (head ? sm->head_h : 0.0f) >= bottom
+            || (sm->is_home && top + h > bottom))
          break;
       centre = top + h * 0.5f;
 
@@ -1833,8 +1925,15 @@ static void simple_draw_rows(simple_handle_t *sm, gfx_display_t *p_disp,
       }
 
       if (!more && (i > 0 || !sm->is_home || sm->has_continue))
-         simple_quad(p_disp, userdata, dims, x, top, w - 2.0f * x, line,
+         simple_quad(p_disp, userdata, dims, x,
+               top - (head ? sm->head_h : 0.0f), w - 2.0f * x, line,
                SIMPLE_COL_LINE);
+      if (head)
+      {
+         simple_upper(note, head, sizeof(note));
+         simple_note(sm, note, rx, top - sm->head_h * 0.35f, dims,
+               SIMPLE_COL_MUTED, TEXT_ALIGN_LEFT);
+      }
 
       if (sm->is_home)
          simple_home_note(sm, list->list[i].label, note, sizeof(note));
@@ -1852,7 +1951,10 @@ static void simple_draw_rows(simple_handle_t *sm, gfx_display_t *p_disp,
          bool choice    = note[0] && simple_is_choice(setting, entry->value);
          bool text      = setting && setting->type == ST_STRING;
 
-         if (sm->opts && (entry->flags & MENU_ENTRY_FLAG_CHECKED))
+         if (more && sm->downloads)
+            strlcpy(note, menu_displaylist_simple_downloads_open()
+                  ? "\xE2\x88\x92" : "+", sizeof(note));
+         else if (sm->opts && (entry->flags & MENU_ENTRY_FLAG_CHECKED))
             strlcpy(note, "CURRENT", sizeof(note));
          else if (text && !entry->value[0])
             strlcpy(note, "NOT SET", sizeof(note));
@@ -1893,9 +1995,10 @@ static void simple_draw_rows(simple_handle_t *sm, gfx_display_t *p_disp,
             note_w = (w - x) - (lc - 24.0f * s);
             note[0] = '\0';
          }
-         simple_draw_word(sm, more ? SIMPLE_FONT_FULL : word_font, word,
-               x, centre, h,
-               w - 2.0f * x - (note_w > 0.0f ? note_w + 16.0f * s : 0.0f),
+         simple_draw_word(sm, (more || (i >= sm->sub_from && !sm->is_home))
+               ? SIMPLE_FONT_FULL : word_font, word,
+               rx, centre, h,
+               w - x - rx - (note_w > 0.0f ? note_w + 16.0f * s : 0.0f),
                dims, more ? SIMPLE_COL_MUTED : SIMPLE_COL_FG);
 
          if (i == sm->open_idx && simple_is_number(setting, entry->value))

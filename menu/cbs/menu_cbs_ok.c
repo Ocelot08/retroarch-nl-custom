@@ -9376,6 +9376,24 @@ static int action_ok_simple_home(const char *path,
 void android_app_update_viewport_inset(void);
 #endif
 
+/* Opens More Downloads in place in the simple driver, which can draw
+ * it; the Online Updater in the others */
+static int action_ok_simple_downloads_more(const char *path,
+      const char *label, unsigned type, size_t idx, size_t entry_idx)
+{
+#if defined(HAVE_NETWORKING) && !defined(HAVE_LAKKA)
+   if (string_is_equal(menu_driver_ident(), "simple"))
+   {
+      menu_displaylist_simple_downloads_set(
+            !menu_displaylist_simple_downloads_open());
+      menu_state_get_ptr()->flags |= MENU_ST_FLAG_PREVENT_POPULATE
+                                   | MENU_ST_FLAG_ENTRIES_NEED_REFRESH;
+      return 0;
+   }
+#endif
+   return action_ok_simple_alias(path, label, type, idx, entry_idx);
+}
+
 static int action_ok_simple_classic(const char *path,
       const char *label, unsigned type, size_t idx, size_t entry_idx)
 {
@@ -10906,7 +10924,7 @@ static int menu_cbs_init_bind_ok_compare_label(menu_file_list_cbs_t *cbs,
          {MENU_ENUM_LABEL_DISK_OPTIONS,                        action_ok_push_default},
          {MENU_ENUM_LABEL_SETTINGS,                            action_ok_push_default},
          {MENU_ENUM_LABEL_SIMPLE_CONTINUE,                     action_ok_simple_continue},
-         {MENU_ENUM_LABEL_SIMPLE_DOWNLOADS_MORE, action_ok_simple_alias},
+         {MENU_ENUM_LABEL_SIMPLE_DOWNLOADS_MORE, action_ok_simple_downloads_more},
          {MENU_ENUM_LABEL_SIMPLE_ADD_GAMES, action_ok_simple_alias},
          {MENU_ENUM_LABEL_SIMPLE_BROWSE_FILES, action_ok_simple_alias},
          {MENU_ENUM_LABEL_SIMPLE_PLAY_ONLINE, action_ok_simple_alias},

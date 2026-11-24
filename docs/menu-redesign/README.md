@@ -104,7 +104,10 @@ Saving, Library, Accounts, Accessibility, Interface), Downloads and the
 Game menu's Controls and Screen are short lists of the common settings under plain
 names, each ending in a More row that opens the classic list. RetroArch's
 own lists, and the More rows, are drawn in smaller type. Games has Game
-Lists, RetroArch's playlists, ending in Edit Game Lists. The breadcrumb shows the whole path,
+Lists, RetroArch's playlists, ending in Edit Game Lists. Downloads has
+headings over its groups, and its More row opens in place, as a trial:
+the rest of the Online Updater, without what is already above. The
+breadcrumb shows the whole path,
 the middle levels as an ellipsis when it is too long. Help has Switch to
 Classic Menu; in the Classic layout the Main Menu lists Settings, so the
 way back is Settings › User Interface › Menu Layout.

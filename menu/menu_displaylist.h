@@ -421,6 +421,10 @@ void menu_displaylist_info_free(menu_displaylist_info_t *info);
 void menu_displaylist_validation_dump(rarch_setting_t *list_settings);
 #endif
 
+/* Whether the Simple layout's More Downloads is open on its page */
+bool menu_displaylist_simple_downloads_open(void);
+void menu_displaylist_simple_downloads_set(bool open);
+
 unsigned menu_displaylist_build_list(
       file_list_t *list,
       settings_t *settings,

@@ -9731,6 +9731,108 @@ static unsigned menu_displaylist_parse_simple_home(
    return count;
 }
 
+static bool simple_downloads_open = false;
+
+bool menu_displaylist_simple_downloads_open(void)
+{
+   return simple_downloads_open;
+}
+
+void menu_displaylist_simple_downloads_set(bool open)
+{
+   simple_downloads_open = open;
+}
+
+#if defined(HAVE_NETWORKING) && !defined(HAVE_LAKKA)
+/* What the Online Updater has that Downloads does not, with its own
+ * conditions, files to update under short names and settings last */
+static unsigned menu_displaylist_parse_simple_downloads_more(
+      file_list_t *list, settings_t *settings)
+{
+   unsigned count = 0;
+#if defined(HAVE_CG) || defined(HAVE_GLSL) || defined(HAVE_SLANG) || defined(HAVE_HLSL)
+   gfx_ctx_flags_t flags;
+   flags.flags = 0;
+   video_context_driver_get_flags(&flags);
+#endif
+
+   if (menu_entries_append(list,
+            msg_hash_to_str(MENU_ENUM_LABEL_VALUE_DOWNLOAD_CORE_CONTENT),
+            MENU_ENUM_LABEL_DOWNLOAD_CORE_CONTENT_DIRS_STR, MENU_ENUM_LABEL_DOWNLOAD_CORE_CONTENT_DIRS,
+            MENU_SETTING_ACTION, 0, 0, NULL))
+      count++;
+#ifdef HAVE_COMPRESSION
+#ifdef HAVE_UPDATE_CORE_INFO
+   if (     settings->bools.menu_show_core_updater
+         && menu_entries_append(list,
+            msg_hash_to_str(MENU_ENUM_LABEL_VALUE_SIMPLE_UPDATE_CORE_INFO),
+            MENU_ENUM_LABEL_UPDATE_CORE_INFO_FILES_STR, MENU_ENUM_LABEL_UPDATE_CORE_INFO_FILES,
+            MENU_SETTING_ACTION, 0, 0, NULL))
+      count++;
+#endif
+#ifdef HAVE_UPDATE_ASSETS
+   if (menu_entries_append(list,
+            msg_hash_to_str(MENU_ENUM_LABEL_VALUE_SIMPLE_UPDATE_ASSETS),
+            MENU_ENUM_LABEL_UPDATE_ASSETS_STR, MENU_ENUM_LABEL_UPDATE_ASSETS,
+            MENU_SETTING_ACTION, 0, 0, NULL))
+      count++;
+#endif
+#if !defined(_3DS)
+   if (menu_entries_append(list,
+            msg_hash_to_str(MENU_ENUM_LABEL_VALUE_SIMPLE_UPDATE_PROFILES),
+            MENU_ENUM_LABEL_UPDATE_AUTOCONFIG_PROFILES_STR, MENU_ENUM_LABEL_UPDATE_AUTOCONFIG_PROFILES,
+            MENU_SETTING_ACTION, 0, 0, NULL))
+      count++;
+   if (menu_entries_append(list,
+            msg_hash_to_str(MENU_ENUM_LABEL_VALUE_SIMPLE_UPDATE_CHEATS),
+            MENU_ENUM_LABEL_UPDATE_CHEATS_STR, MENU_ENUM_LABEL_UPDATE_CHEATS,
+            MENU_SETTING_ACTION, 0, 0, NULL))
+      count++;
+#endif
+#if defined(HAVE_LIBRETRODB) && !defined(VITA)
+   if (menu_entries_append(list,
+            msg_hash_to_str(MENU_ENUM_LABEL_VALUE_SIMPLE_UPDATE_DATABASES),
+            MENU_ENUM_LABEL_UPDATE_DATABASES_STR, MENU_ENUM_LABEL_UPDATE_DATABASES,
+            MENU_SETTING_ACTION, 0, 0, NULL))
+      count++;
+#endif
+#if !defined(_3DS)
+   if (menu_entries_append(list,
+            msg_hash_to_str(MENU_ENUM_LABEL_VALUE_SIMPLE_UPDATE_OVERLAYS),
+            MENU_ENUM_LABEL_UPDATE_OVERLAYS_STR, MENU_ENUM_LABEL_UPDATE_OVERLAYS,
+            MENU_SETTING_ACTION, 0, 0, NULL))
+      count++;
+#if defined(HAVE_CG) || defined(HAVE_GLSL) || defined(HAVE_SLANG) || defined(HAVE_HLSL)
+   if (     BIT32_GET(flags.flags, GFX_CTX_FLAGS_SHADERS_CG)
+         && menu_entries_append(list,
+            msg_hash_to_str(MENU_ENUM_LABEL_VALUE_SIMPLE_UPDATE_CG),
+            MENU_ENUM_LABEL_UPDATE_CG_SHADERS_STR, MENU_ENUM_LABEL_UPDATE_CG_SHADERS,
+            MENU_SETTING_ACTION, 0, 0, NULL))
+      count++;
+   if (     BIT32_GET(flags.flags, GFX_CTX_FLAGS_SHADERS_GLSL)
+         && menu_entries_append(list,
+            msg_hash_to_str(MENU_ENUM_LABEL_VALUE_SIMPLE_UPDATE_GLSL),
+            MENU_ENUM_LABEL_UPDATE_GLSL_SHADERS_STR, MENU_ENUM_LABEL_UPDATE_GLSL_SHADERS,
+            MENU_SETTING_ACTION, 0, 0, NULL))
+      count++;
+   if (     BIT32_GET(flags.flags, GFX_CTX_FLAGS_SHADERS_SLANG)
+         && menu_entries_append(list,
+            msg_hash_to_str(MENU_ENUM_LABEL_VALUE_SIMPLE_UPDATE_SLANG),
+            MENU_ENUM_LABEL_UPDATE_SLANG_SHADERS_STR, MENU_ENUM_LABEL_UPDATE_SLANG_SHADERS,
+            MENU_SETTING_ACTION, 0, 0, NULL))
+      count++;
+#endif
+#endif
+#endif
+#ifdef HAVE_ONLINE_UPDATER
+   if (MENU_DISPLAYLIST_PARSE_SETTINGS_ENUM(list,
+            MENU_ENUM_LABEL_UPDATER_SETTINGS, PARSE_ACTION, false) == 0)
+      count++;
+#endif
+   return count;
+}
+#endif
+
 unsigned menu_displaylist_build_list(
       file_list_t *list,
       settings_t *settings,
@@ -10081,6 +10183,14 @@ unsigned menu_displaylist_build_list(
                      msg_hash_to_str(more[m][1]),
                      more[m][1], MENU_SETTING_ACTION, 0, 0, NULL))
                count++;
+#if defined(HAVE_NETWORKING) && !defined(HAVE_LAKKA)
+            /* The simple driver opens it in place */
+            if (     type == DISPLAYLIST_SIMPLE_DOWNLOADS_LIST
+                  && simple_downloads_open
+                  && string_is_equal(menu_driver_ident(), "simple"))
+               count += menu_displaylist_parse_simple_downloads_more(
+                     list, settings);
+#endif
          }
          break;
       case DISPLAYLIST_SIMPLE_SETTINGS_LIST:
