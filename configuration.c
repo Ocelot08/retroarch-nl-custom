@@ -8447,6 +8447,16 @@ bool config_load_override(void *data)
    /* Re-load the configuration with any overrides
     * that might have been found */
 
+   /* Simple's menus have no Save: what they changed goes into the file
+    * before it is read again. Not while it holds another game's own
+    * settings, or a core's choice of video driver. */
+   if (     settings->uints.menu_layout == MENU_LAYOUT_SIMPLE
+         && settings->bools.config_save_on_exit
+         && !(runloop_get_flags() & RUNLOOP_FLAG_OVERRIDES_ACTIVE)
+         && !video_driver_get_configured_ident()
+         && !path_is_empty(RARCH_PATH_CONFIG))
+      config_save_file(path_get(RARCH_PATH_CONFIG));
+
    /* Toggle has_save_path to false so it resets */
    retroarch_override_setting_unset(RARCH_OVERRIDE_SETTING_STATE_PATH, NULL);
    retroarch_override_setting_unset(RARCH_OVERRIDE_SETTING_SAVE_PATH, NULL);
