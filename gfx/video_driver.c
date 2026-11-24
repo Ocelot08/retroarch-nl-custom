@@ -5820,9 +5820,16 @@ unsigned video_driver_get_rotation_snapshot(void)
    return ps.rotation;
 }
 
+void video_driver_set_viewport_inset(unsigned top)
+{
+   retro_atomic_store_release_int(&video_driver_st.vp_inset_top, (int)top);
+}
+
 void video_driver_update_viewport(
       struct video_viewport* vp, bool force_full, bool keep_aspect, bool y_down)
 {
+   unsigned area;
+   int inset                       = 0;
    struct video_vp_param_snap ps;
    bool video_scale_integer;
    unsigned int rotation;
@@ -5836,8 +5843,19 @@ void video_driver_update_viewport(
    rotation                        = ps.rotation;
    video_driver_aspect_ratio       = ps.aspect;
 
+   /* The main window's game picture only, not another screen's */
+   if (     !force_full
+         && vp->full_dims == VIDEO_DRIVER_OUTPUT_DIMS(video_st))
+      inset                        = retro_atomic_load_acquire_int(
+            &video_st->vp_inset_top);
+   if (inset >= (int)VIDEO_SCALE_H(vp->full_dims) / 2)
+      inset                        = 0;
+   area                            = VIDEO_SCALE_PACK(
+         VIDEO_SCALE_W(vp->full_dims),
+         VIDEO_SCALE_H(vp->full_dims) - (unsigned)inset);
+
    vp->pos                         = VIDEO_POS_PACK(0, 0);
-   vp->dims                        = vp->full_dims;
+   vp->dims                        = area;
 
 #ifdef HAVE_OVERLAY
    /* The active overlay's viewport override, if it has one: from the
@@ -5878,6 +5896,12 @@ void video_driver_update_viewport(
          int ol_y      = (int)(ol_vp[1] * VIDEO_SCALE_H(vp->full_dims));
          unsigned ol_w = (unsigned)(ol_vp[2] * VIDEO_SCALE_W(vp->full_dims));
          unsigned ol_h = (unsigned)(ol_vp[3] * VIDEO_SCALE_H(vp->full_dims));
+
+         if (ol_y < inset && ol_y + (int)ol_h > inset)
+         {
+            ol_h      -= (unsigned)(inset - ol_y);
+            ol_y       = inset;
+         }
 
          if (flags & OVERLAY_VIEWPORT_FILL)
          {
@@ -5922,19 +5946,23 @@ void video_driver_update_viewport(
       video_viewport_get_scaled_integer(video_st,
             &ps,
             vp,
-            vp->full_dims,
+            area,
             video_driver_aspect_ratio, keep_aspect, y_down, rotation);
    else if (keep_aspect && !force_full)
    {
       /* Calculate device_aspect, using translate_aspect if available
        * (e.g. for SD TV detection on Raspberry Pi) */
-      float device_aspect = (float)VIDEO_SCALE_W(vp->full_dims) / VIDEO_SCALE_H(vp->full_dims);
+      float device_aspect = (float)VIDEO_SCALE_W(area) / VIDEO_SCALE_H(area);
       if (ctx->translate_aspect)
          device_aspect = ctx->translate_aspect(ctx_data,
-            VIDEO_SCALE_W(vp->full_dims), VIDEO_SCALE_H(vp->full_dims));
-      video_viewport_get_scaled_aspect2(vp, vp->full_dims,
+            VIDEO_SCALE_W(area), VIDEO_SCALE_H(area));
+      video_viewport_get_scaled_aspect2(vp, area,
             y_down, device_aspect, video_driver_aspect_ratio);
    }
+
+   /* Placed in the area; GL's viewport is from the bottom already */
+   if (inset && y_down)
+      VIDEO_POS_PUT_Y(vp->pos, VIDEO_POS_Y(vp->pos) + inset);
 }
 
 void video_driver_restore_cached(void *settings_data)

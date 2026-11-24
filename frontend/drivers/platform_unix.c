@@ -4038,6 +4038,8 @@ static void frontend_unix_init(void *data)
          "setSustainedPerformanceMode", "(Z)V");
    GET_METHOD_ID(env, android_app->setWindowSettings, class,
          "setWindowSettings", "(ZZ)V");
+   GET_METHOD_ID(env, android_app->getCutoutTop, class,
+         "getCutoutTop", "()I");
    GET_METHOD_ID(env, android_app->setScreenOrientation, class,
          "setScreenOrientation", "(I)V");
    GET_METHOD_ID(env, android_app->doVibrate, class,
@@ -4722,8 +4724,29 @@ void android_app_set_window_settings(bool notch_write_over,
       CALL_VOID_METHOD_PARAM(env, g_android->activity->clazz,
             g_android->setWindowSettings,
             (jboolean)notch_write_over, (jboolean)auto_mouse_grab);
+   android_app_update_viewport_inset();
 #endif
 }
+
+#ifdef ANDROID
+unsigned android_app_get_cutout_top(void)
+{
+   jint top    = 0;
+   JNIEnv *env = jni_thread_getenv();
+
+   if (env && g_android && g_android->getCutoutTop)
+      CALL_INT_METHOD(env, top,
+            g_android->activity->clazz, g_android->getCutoutTop);
+   return top > 0 ? (unsigned)top : 0;
+}
+
+void android_app_update_viewport_inset(void)
+{
+   video_driver_set_viewport_inset(
+         config_get_ptr()->uints.menu_layout == MENU_LAYOUT_SIMPLE
+         ? android_app_get_cutout_top() : 0);
+}
+#endif
 
 static void frontend_unix_set_sustained_performance_mode(bool on)
 {

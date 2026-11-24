@@ -173,6 +173,18 @@ public final class RetroActivityFuture extends RetroActivityCamera {
     });
   }
 
+  @Override
+  @SuppressWarnings("deprecation")
+  public int getCutoutTop() {
+    /* Display.getCutout() is API 29 */
+    if (!notchWriteOver || Build.VERSION.SDK_INT < Build.VERSION_CODES.Q)
+      return 0;
+
+    DisplayCutout cutout =
+        getWindowManager().getDefaultDisplay().getCutout();
+    return (cutout != null) ? cutout.getSafeInsetTop() : 0;
+  }
+
   private void updateDisplayCutoutMode() {
     if (Build.VERSION.SDK_INT < Build.VERSION_CODES.P)
       return;

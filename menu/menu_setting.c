@@ -11895,6 +11895,12 @@ static void general_write_handler(rarch_setting_t *setting)
          break;
 #endif
 #ifdef ANDROID
+      case MENU_ENUM_LABEL_MENU_LAYOUT:
+         /* Simple draws behind the camera unless told not to */
+         if (settings->uints.menu_layout == MENU_LAYOUT_SIMPLE)
+            configuration_set_bool(settings,
+                  settings->bools.video_notch_write_over_enable, true);
+         /* fall-through */
       case MENU_ENUM_LABEL_VIDEO_NOTCH_WRITE_OVER:
       case MENU_ENUM_LABEL_INPUT_AUTO_MOUSE_GRAB:
          android_app_set_window_settings(

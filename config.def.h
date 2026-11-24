@@ -638,7 +638,11 @@
 
 /* Only applies to Android 9.0 (API 28) and up */
 /* Choose if the screen will be able to write around the notch or not */
+#ifdef SIMPLE_MENU_TEST
+#define DEFAULT_NOTCH_WRITE_OVER_ENABLE true
+#else
 #define DEFAULT_NOTCH_WRITE_OVER_ENABLE false
+#endif
 
 /* Enable use of shaders */
 #define DEFAULT_SHADER_ENABLE true

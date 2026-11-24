@@ -9341,6 +9341,11 @@ static int action_ok_simple_home(const char *path,
 }
 
 /* As changing Menu Layout does, from the top of the menu */
+#ifdef ANDROID
+/* As in menu_setting.c: platform_unix.h brings in JNI */
+void android_app_update_viewport_inset(void);
+#endif
+
 static int action_ok_simple_classic(const char *path,
       const char *label, unsigned type, size_t idx, size_t entry_idx)
 {
@@ -9349,6 +9354,9 @@ static int action_ok_simple_classic(const char *path,
 
    configuration_set_uint(settings, settings->uints.menu_layout,
          MENU_LAYOUT_CLASSIC);
+#ifdef ANDROID
+   android_app_update_viewport_inset();
+#endif
    menu_entries_flush_stack(MENU_ENUM_LABEL_MAIN_MENU_STR, 0);
    menu_st->flags |= MENU_ST_FLAG_PREVENT_POPULATE
                    | MENU_ST_FLAG_ENTRIES_NEED_REFRESH;

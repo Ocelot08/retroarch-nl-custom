@@ -327,6 +327,7 @@ struct android_app
    jmethodID getBatteryLevel;
    jmethodID setSustainedPerformanceMode;
    jmethodID setWindowSettings;
+   jmethodID getCutoutTop;
    jmethodID setScreenOrientation;
    jmethodID getUserLanguageString;
    jmethodID doVibrate;
@@ -595,6 +596,14 @@ bool is_screen_reader_enabled(void);
  * activity, so the Java side never reads them from the config file. */
 void android_app_set_window_settings(bool notch_write_over,
       bool auto_mouse_grab);
+
+/* Pixels at the top of the window behind a display cutout, 0 when the
+ * window keeps clear of it. */
+unsigned android_app_get_cutout_top(void);
+
+/* Keeps the game's picture below a cutout the Simple layout's menu
+ * draws behind. */
+void android_app_update_viewport_inset(void);
 
 #ifdef HAVE_SAF
 struct retro_vfs_authorized_locations;

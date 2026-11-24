@@ -47,6 +47,12 @@
 #include "../../setting_list.h"
 #include "../../msg_hash_lbl_str.h"
 
+#ifdef ANDROID
+/* As in menu_setting.c: platform_unix.h brings in JNI */
+unsigned android_app_get_cutout_top(void);
+void android_app_update_viewport_inset(void);
+#endif
+
 /* Test builds log pages, taps and actions to logcat for scripted runs */
 #if defined(SIMPLE_MENU_TEST) && defined(ANDROID)
 #include <stdarg.h>
@@ -132,6 +138,7 @@ typedef struct simple_handle
    menu_entry_t hit_entry;
    menu_entry_t log_entry;          /* descriptions, the action log */
    const simple_metrics_t *m;
+   simple_metrics_t metrics;        /* m, moved clear of a camera cutout */
    const file_list_t *last_list;
    size_t first;
    size_t more_idx;
@@ -141,6 +148,7 @@ typedef struct simple_handle
    size_t open_depth;               /* stack depth it was opened at */
    float scroll_y;
    float desc_h;                    /* height of the description */
+   float shift;                     /* dp the cutout moves the page */
    float drag_start_y;
    float drag_start_scroll;
    float spring_v;
@@ -215,9 +223,36 @@ static float simple_box_bottom(const simple_handle_t *sm, unsigned dims)
 {
    float w = (float)VIDEO_SCALE_W(dims);
    float h = (float)VIDEO_SCALE_H(dims);
-   if (sm->gamepad && w * 0.75f < h)
-      return w * 0.75f;
+   if (sm->gamepad && w * 0.75f + sm->shift * sm->scale < h)
+      return w * 0.75f + sm->shift * sm->scale;
    return h;
+}
+
+#define SIMPLE_CUTOUT_GAP 12.0f
+
+/* The mode's metrics, moved down so the header is below a cutout the
+ * window reaches behind */
+static void simple_set_metrics(simple_handle_t *sm)
+{
+   float inset = 0.0f;
+   simple_metrics_t *m = &sm->metrics;
+
+   *m = sm->gamepad ? simple_gamepad : simple_touch;
+#ifdef ANDROID
+   inset = (float)android_app_get_cutout_top() / sm->scale;
+   android_app_update_viewport_inset();
+#endif
+   sm->shift = inset > 0.0f ? inset + SIMPLE_CUTOUT_GAP - m->header_y : 0.0f;
+   if (sm->shift < 0.0f)
+      sm->shift = 0.0f;
+   m->header_y     += sm->shift;
+   m->list_top     += sm->shift;
+   m->home_top     += sm->shift;
+   m->band_h       += sm->shift;
+   m->cont_label_y += sm->shift;
+   m->cont_title_y += sm->shift;
+   m->cont_bottom  += sm->shift;
+   sm->m            = m;
 }
 
 static void simple_fonts_free(simple_handle_t *sm)
@@ -899,10 +934,10 @@ static void *simple_init(void **userdata, bool video_is_threaded)
       return NULL;
    }
    sm->gamepad  = settings->bools.menu_simple_gamepad_mode;
-   sm->m        = sm->gamepad ? &simple_gamepad : &simple_touch;
    sm->open_idx = (size_t)-1;
    sm->dims     = video_driver_get_output_dims();
    sm->scale   = simple_scale_for(sm->dims);
+   simple_set_metrics(sm);
    *userdata   = sm;
    return menu;
 }
@@ -1208,7 +1243,6 @@ static void simple_render(void *data, unsigned dims, bool is_idle)
       if (gamepad != sm->gamepad)
       {
          sm->gamepad = gamepad;
-         sm->m       = gamepad ? &simple_gamepad : &simple_touch;
 #ifdef HAVE_OVERLAY
          command_event(CMD_EVENT_OVERLAY_UNLOAD, NULL);
          if (!menu_driver_overlay_hidden(settings))
@@ -1217,6 +1251,7 @@ static void simple_render(void *data, unsigned dims, bool is_idle)
       }
       sm->dims  = dims;
       sm->scale = simple_scale_for(dims);
+      simple_set_metrics(sm);
       simple_fonts_load(sm, video_driver_is_threaded());
    }
 

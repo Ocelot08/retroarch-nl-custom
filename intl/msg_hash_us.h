@@ -33462,6 +33462,10 @@ MSG_HASH(
    "Screen Shape"
    )
 MSG_HASH(
+   MENU_ENUM_LABEL_VALUE_SIMPLE_NAME_CAMERA_AREA,
+   "Use Camera Area"
+   )
+MSG_HASH(
    MENU_ENUM_LABEL_VALUE_SIMPLE_NAME_ORIENTATION,
    "Orientation"
    )

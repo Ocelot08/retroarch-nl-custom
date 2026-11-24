@@ -1104,6 +1104,7 @@ static void android_input_poll_main_cmd(void)
       }
 
       case APP_CMD_CONFIG_CHANGED:
+         android_app_update_viewport_inset();
          AConfiguration_fromAssetManager(android_app->config,
                android_app->activity->assetManager);
          break;

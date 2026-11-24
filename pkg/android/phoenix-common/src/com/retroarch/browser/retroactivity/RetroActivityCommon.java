@@ -1290,6 +1290,13 @@ public class RetroActivityCommon extends NativeActivity
   {
   }
 
+  /* Pixels of the window behind a display cutout at its top edge;
+   * called over JNI. */
+  public int getCutoutTop()
+  {
+    return 0;
+  }
+
   @TargetApi(24)
   public void setSustainedPerformanceMode(boolean on)
   {

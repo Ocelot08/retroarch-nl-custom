@@ -1919,6 +1919,9 @@ typedef struct
    /* Where the statistics overlay's text is built, for the frame
     * descriptor to point at (video_frame_info_t::stat_text) */
    char stat_text[VIDEO_STAT_TEXT_SIZE];
+   /* Pixels at the top of the window the game's picture keeps out of */
+   retro_atomic_int_t vp_inset_top;
+
 #ifdef HAVE_OVERLAY
    /* The active overlay's viewport override, published by the main
     * thread whenever the active overlay changes
@@ -2248,6 +2251,10 @@ void video_driver_publish_vp_params(void);
 /* Composed rotation from the seqlock'd snapshot; safe on the video
  * thread, unlike retroarch_get_rotation(). */
 unsigned video_driver_get_rotation_snapshot(void);
+
+/* Keeps the game's picture out of the window's top @top pixels, a
+ * camera cutout the menu draws behind. Main thread. */
+void video_driver_set_viewport_inset(unsigned top);
 
 void video_driver_update_viewport(struct video_viewport* vp,
       bool force_full, bool keep_aspect, bool y_down);
