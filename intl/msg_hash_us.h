@@ -33770,6 +33770,10 @@ MSG_HASH(
    "The changes could not be saved."
    )
 MSG_HASH(
+   MENU_ENUM_LABEL_VALUE_SIMPLE_HOME_OWN,
+   "Saved. This game has its own setting and will go back to it."
+   )
+MSG_HASH(
    MENU_ENUM_LABEL_VALUE_SIMPLE_CHANGE_DISC,
    "Change Disc"
    )

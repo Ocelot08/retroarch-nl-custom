@@ -1779,6 +1779,21 @@ unsigned config_keep_changes(void);
 bool config_keep_save(enum override_type type);
 void config_keep_end(bool keep);
 
+/* What config_home_save() did */
+#define CONFIG_HOME_SAVED  (1 << 0)
+#define CONFIG_HOME_FAILED (1 << 1)
+/* The running game's overrides have one of the settings */
+#define CONFIG_HOME_OWN    (1 << 2)
+
+/* Settings changed from Home while a game with overrides is open, which
+ * keep retroarch.cfg from being written. begin() takes a copy to compare
+ * with; save() puts what has changed since, and nothing else, into
+ * retroarch.cfg, and takes the copy again. */
+void config_home_begin(void);
+bool config_home_active(void);
+unsigned config_home_save(void);
+void config_home_end(void);
+
 /* Replaces currently loaded configuration file with
  * another one. Will load a dummy core to flush state
  * properly. */

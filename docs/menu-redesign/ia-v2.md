@@ -170,9 +170,9 @@ Help
   - **For this game:** Save Game Overrides, plus the game's remap and options.
   - **For all ‹System› games:** the same at core level.
   - **Just for now:** reverted when the game closes. Backing out of the prompt counts as this.
-- **No "For all games":** global changes are made from Home › Settings with no game running.
+- **No "For all games" (changed 25 Nov 2026):** global changes are made from Home › Settings, also with a game open. A game's own value still wins in that game, and the menu says so.
 - **Just for now uses the existing override reload.** `retroarch.cfg` is saved when the game starts. The session is then marked so that closing the game reloads it, as closing a game with its own settings already does (`config_unload_override`).
-- **The banner** on the Game menu's settings pages, and on Settings opened from Home during a game, names the most specific settings in use:
+- **The banner** on the Game menu's settings pages names the most specific settings in use:
 
 | Loaded for the game | Banner |
 |---|---|

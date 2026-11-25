@@ -8548,6 +8548,10 @@ bool config_unload_override(void)
    runloop_state_t *runloop_st = runloop_state_get_ptr();
    bool fullscreen_prev        = settings->bools.video_fullscreen;
 
+   /* Before the file is read again */
+   config_home_save();
+   config_home_end();
+
    runloop_st->flags &= ~RUNLOOP_FLAG_OVERRIDES_ACTIVE;
    path_clear(RARCH_PATH_CONFIG_OVERRIDE);
 
@@ -11132,16 +11136,78 @@ int8_t config_save_overrides(enum override_type type,
    return ret;
 }
 
-static settings_t *config_keep_settings;
-static input_config_binds_copy_t *config_keep_binds;
+/* Settings kept outside settings_t, as Mute is, have one row and pointer
+ * for every copy; their values are copied in the order of the rows */
+#define CONFIG_COPY_OUTSIDE 8
+
+typedef struct
+{
+   settings_t *settings;
+   input_config_binds_copy_t *binds;
+   unsigned uints[CONFIG_COPY_OUTSIDE];
+   bool bools[CONFIG_COPY_OUTSIDE];
+} config_copy_t;
+
+static config_copy_t config_keep;
+static config_copy_t config_home;
 static bool config_keep_marked;
+
+static void config_copy_free(config_copy_t *copy)
+{
+   free(copy->settings);
+   if (copy->binds)
+      input_config_binds_copy_free(copy->binds);
+   copy->settings = NULL;
+   copy->binds    = NULL;
+}
+
+static bool config_copy_take(config_copy_t *copy)
+{
+   int i, size, tmp;
+   int n                          = 0;
+   struct config_bool_setting *b0 = NULL;
+   struct config_bool_setting *b1 = NULL;
+   struct config_uint_setting *u0 = NULL;
+   struct config_uint_setting *u1 = NULL;
+
+   if (!copy->settings)
+      copy->settings = (settings_t*)malloc(sizeof(*copy->settings));
+   if (!copy->binds)
+      copy->binds    = input_config_binds_copy_new();
+   if (!copy->settings || !copy->binds)
+   {
+      config_copy_free(copy);
+      return false;
+   }
+   memcpy(copy->settings, config_st, sizeof(*copy->settings));
+   input_config_binds_copy_take(copy->binds);
+
+   size = tmp = SETTINGS_BOOL_COUNT_MAX;
+   b0   = populate_settings_bool(copy->settings, &size);
+   b1   = populate_settings_bool(config_st, &tmp);
+   for (i = 0; b0 && b1 && i < size; i++)
+      if (b0[i].ptr == b1[i].ptr && n < CONFIG_COPY_OUTSIDE)
+         copy->bools[n++] = *b1[i].ptr;
+   n    = 0;
+   size = tmp = SETTINGS_UINT_COUNT_MAX;
+   u0   = populate_settings_uint(copy->settings, &size);
+   u1   = populate_settings_uint(config_st, &tmp);
+   for (i = 0; u0 && u1 && i < size; i++)
+      if (u0[i].ptr == u1[i].ptr && n < CONFIG_COPY_OUTSIDE)
+         copy->uints[n++] = cfg_uint_get(&u1[i]);
+   free(b0);
+   free(b1);
+   free(u0);
+   free(u1);
+   return true;
+}
 
 void config_keep_begin(void)
 {
    runloop_state_t *runloop_st = runloop_state_get_ptr();
    settings_t *settings        = config_st;
 
-   if (config_keep_settings)
+   if (config_keep.settings)
       return;
    if (!(runloop_st->flags & RUNLOOP_FLAG_OVERRIDES_ACTIVE))
    {
@@ -11152,17 +11218,13 @@ void config_keep_begin(void)
       runloop_st->flags |= RUNLOOP_FLAG_OVERRIDES_ACTIVE;
       config_keep_marked = true;
    }
-   if ((config_keep_settings = (settings_t*)malloc(sizeof(*settings))))
-      memcpy(config_keep_settings, settings, sizeof(*settings));
-   if ((config_keep_binds = input_config_binds_copy_new()))
-      input_config_binds_copy_take(config_keep_binds);
-   if (!config_keep_settings || !config_keep_binds)
+   if (!config_copy_take(&config_keep))
       config_keep_end(false);
 }
 
 bool config_keep_active(void)
 {
-   return config_keep_settings != NULL;
+   return config_keep.settings != NULL;
 }
 
 void config_keep_end(bool keep)
@@ -11170,11 +11232,7 @@ void config_keep_end(bool keep)
    if (config_keep_marked && !keep)
       runloop_state_get_ptr()->flags &= ~RUNLOOP_FLAG_OVERRIDES_ACTIVE;
    config_keep_marked = false;
-   free(config_keep_settings);
-   config_keep_settings = NULL;
-   if (config_keep_binds)
-      input_config_binds_copy_free(config_keep_binds);
-   config_keep_binds = NULL;
+   config_copy_free(&config_keep);
 }
 
 /* A file's own change, or none if it has no such key and only those it
@@ -11184,21 +11242,26 @@ static bool config_keep_key(config_file_t *conf, bool own, const char *key)
    return conf && (!own || config_get_entry(conf, key));
 }
 
-/* A remap has these, an override does not */
+/* A remap has these, an override does not; a core's choice of video
+ * driver and the asset extraction's own record are not the user's */
 static bool config_keep_skip(const char *ident)
 {
    return string_starts_with(ident, "input_turbo")
-       || string_starts_with(ident, "state_slot");
+       || string_starts_with(ident, "state_slot")
+       || string_starts_with(ident, "bundle_assets")
+       || (     string_is_equal(ident, "video_driver")
+             && video_driver_get_configured_ident());
 }
 
-/* How many settings have changed. They are put into @conf, unless it is
- * NULL: with @own, only those it already has. */
-static unsigned config_keep_write(config_file_t *conf, bool own)
+/* How many settings have changed since @copy. They are put into @conf,
+ * unless it is NULL: with @own, only those it already has. */
+static unsigned config_keep_write(const config_copy_t *copy,
+      config_file_t *conf, bool own)
 {
    int i, j;
    int size, tmp;
    unsigned n                         = 0;
-   settings_t *was                    = config_keep_settings;
+   settings_t *was                    = copy->settings;
    settings_t *now                    = config_st;
    struct config_bool_setting *b0     = NULL;
    struct config_bool_setting *b1     = NULL;
@@ -11218,8 +11281,12 @@ static unsigned config_keep_write(config_file_t *conf, bool own)
    size = tmp = SETTINGS_BOOL_COUNT_MAX;
    b0   = populate_settings_bool(was, &size);
    b1   = populate_settings_bool(now, &tmp);
-   for (i = 0; b0 && b1 && i < size; i++)
-      if (     *b0[i].ptr != *b1[i].ptr
+   for (i = j = 0; b0 && b1 && i < size; i++)
+   {
+      bool was_on = *b0[i].ptr;
+      if (b0[i].ptr == b1[i].ptr && j < CONFIG_COPY_OUTSIDE)
+         was_on = copy->bools[j++];
+      if (     was_on != *b1[i].ptr
             && !config_keep_skip(b1[i].ident))
       {
          n++;
@@ -11227,6 +11294,7 @@ static unsigned config_keep_write(config_file_t *conf, bool own)
             config_set_string(conf, b1[i].ident,
                   *b1[i].ptr ? "true" : "false");
       }
+   }
 
    size = tmp = SETTINGS_INT_COUNT_MAX;
    i0   = populate_settings_int(was, &size);
@@ -11243,14 +11311,19 @@ static unsigned config_keep_write(config_file_t *conf, bool own)
    size = tmp = SETTINGS_UINT_COUNT_MAX;
    u0   = populate_settings_uint(was, &size);
    u1   = populate_settings_uint(now, &tmp);
-   for (i = 0; u0 && u1 && i < size; i++)
-      if (     cfg_uint_get(&u0[i]) != cfg_uint_get(&u1[i])
+   for (i = j = 0; u0 && u1 && i < size; i++)
+   {
+      unsigned was_val = cfg_uint_get(&u0[i]);
+      if (u0[i].ptr == u1[i].ptr && j < CONFIG_COPY_OUTSIDE)
+         was_val = copy->uints[j++];
+      if (     was_val != cfg_uint_get(&u1[i])
             && !config_keep_skip(u1[i].ident))
       {
          n++;
          if (config_keep_key(conf, own, u1[i].ident))
             config_set_int(conf, u1[i].ident, cfg_uint_get(&u1[i]));
       }
+   }
 
    size = tmp = SETTINGS_SIZE_COUNT_MAX;
    s0   = populate_settings_size(was, &size);
@@ -11279,7 +11352,8 @@ static unsigned config_keep_write(config_file_t *conf, bool own)
    a1   = populate_settings_array(now, &tmp);
    for (i = 0; a0 && a1 && i < size; i++)
       if (     !(a1[i].flags & CFG_BOOL_FLG_SENSITIVE)
-            && !string_is_equal(a0[i].ptr, a1[i].ptr))
+            && !string_is_equal(a0[i].ptr, a1[i].ptr)
+            && !config_keep_skip(a1[i].ident))
       {
          n++;
          if (config_keep_key(conf, own, a1[i].ident))
@@ -11295,7 +11369,11 @@ static unsigned config_keep_write(config_file_t *conf, bool own)
       {
          n++;
          if (config_keep_key(conf, own, p1[i].ident))
-            config_set_path(conf, p1[i].ident, p1[i].ptr);
+            /* As retroarch.cfg has an empty one */
+            config_set_path(conf, p1[i].ident,
+                     copy == &config_home && !*p1[i].ptr
+                  && (p1[i].flags & CFG_BOOL_FLG_DEF_ENABLE)
+                  ? "default" : p1[i].ptr);
       }
 
    for (i = 0; i < MAX_USERS; i++)
@@ -11307,7 +11385,7 @@ static unsigned config_keep_write(config_file_t *conf, bool own)
          const struct input_bind_map *map = NULL;
          const struct retro_keybind *b    = input_config_bind(i, j);
          const struct retro_keybind *w    =
-            input_config_binds_copy_bind(config_keep_binds, i, j);
+            input_config_binds_copy_bind(copy->binds, i, j);
 
          if (     b->joykey  == w->joykey
                && b->joyaxis == w->joyaxis
@@ -11355,12 +11433,12 @@ static unsigned config_keep_write(config_file_t *conf, bool own)
 unsigned config_keep_changes(void)
 {
    unsigned ret          = 0;
-   const settings_t *was = config_keep_settings;
+   const settings_t *was = config_keep.settings;
    const settings_t *now = config_st;
 
    if (!was)
       return 0;
-   if (config_keep_write(NULL, false))
+   if (config_keep_write(&config_keep, NULL, false))
       ret |= CONFIG_KEEP_SETTINGS;
    if (     memcmp(was->uints.input_remap_ids, now->uints.input_remap_ids,
             sizeof(now->uints.input_remap_ids))
@@ -11387,38 +11465,59 @@ unsigned config_keep_changes(void)
    return ret;
 }
 
+/* The override @i of the running game: the core's, its folder's or its
+ * own. Empty with @own if that would be the core's again. */
+static size_t config_keep_path(int i, bool own, char *s, size_t len)
+{
+   char dir[DIR_MAX_LENGTH];
+   char name[NAME_MAX_LENGTH];
+   const char *core_name = runloop_state_get_ptr()->system.info.library_name;
+   const char *basename  = path_get(RARCH_PATH_BASENAME);
+
+   name[0] = '\0';
+   if (core_name && *core_name)
+   {
+      if (i == 0)
+         strlcpy(name, core_name, sizeof(name));
+      else if (basename && *basename)
+      {
+         if (i == 1)
+            fill_pathname_parent_dir_name(name, basename, sizeof(name));
+         else
+            strlcpy(name, path_basename_nocompression(basename),
+                  sizeof(name));
+      }
+   }
+   if (!*name || (own && string_is_equal(name, core_name)))
+      return 0;
+   fill_pathname_application_special(dir, sizeof(dir),
+         APPLICATION_SPECIAL_DIRECTORY_CONFIG);
+   return fill_pathname_join_special_ext(s, dir, core_name, name,
+         FILE_PATH_CONFIG_EXTENSION, len);
+}
+
 /* The core's override gets the changes; the folder's and the game's, which
  * are read after it, keep any of the same keys in step */
 bool config_keep_save(enum override_type type)
 {
    int i;
-   char dir[DIR_MAX_LENGTH];
-   char name[3][NAME_MAX_LENGTH];
    bool ret              = false;
    const char *core_name = runloop_state_get_ptr()->system.info.library_name;
    const char *basename  = path_get(RARCH_PATH_BASENAME);
    bool has_content      = basename && *basename;
 
-   if (     !config_keep_settings || !core_name || !*core_name
+   if (     !config_keep.settings || !core_name || !*core_name
          || (type == OVERRIDE_GAME && !has_content))
       return false;
 
-   fill_pathname_application_special(dir, sizeof(dir),
-         APPLICATION_SPECIAL_DIRECTORY_CONFIG);
    {
+      char dir[DIR_MAX_LENGTH];
       char core_dir[DIR_MAX_LENGTH];
+      fill_pathname_application_special(dir, sizeof(dir),
+            APPLICATION_SPECIAL_DIRECTORY_CONFIG);
       fill_pathname_join_special(core_dir, dir, core_name, sizeof(core_dir));
       if (!path_is_directory(core_dir) && !path_mkdir(core_dir))
          return false;
-   }
-
-   strlcpy(name[0], core_name, sizeof(name[0]));
-   name[1][0] = name[2][0] = '\0';
-   if (has_content)
-   {
-      fill_pathname_parent_dir_name(name[1], basename, sizeof(name[1]));
-      strlcpy(name[2], path_basename_nocompression(basename),
-            sizeof(name[2]));
    }
 
    for (i = (type == OVERRIDE_GAME) ? 2 : 0; i < 3; i++)
@@ -11427,17 +11526,15 @@ bool config_keep_save(enum override_type type)
       config_file_t *conf = NULL;
       bool own            = (type != OVERRIDE_GAME && i > 0);
 
-      if (!*name[i] || (own && string_is_equal(name[i], core_name)))
+      if (!config_keep_path(i, own, path, sizeof(path)))
          continue;
-      fill_pathname_join_special_ext(path, dir, core_name, name[i],
-            FILE_PATH_CONFIG_EXTENSION, sizeof(path));
       if (path_is_valid(path))
          conf = config_file_new_from_path_to_string(path);
       else if (own)
          continue;
       if (!conf && !(conf = config_file_new_alloc()))
          continue;
-      config_keep_write(conf, own);
+      config_keep_write(&config_keep, conf, own);
       if (conf->flags & CONF_FILE_FLG_MODIFIED)
       {
          if (config_file_write(conf, path, true))
@@ -11457,6 +11554,98 @@ bool config_keep_save(enum override_type type)
       config_file_free(conf);
    }
    return ret;
+}
+
+bool config_home_active(void)
+{
+   return config_home.settings != NULL;
+}
+
+void config_home_begin(void)
+{
+   if (     !config_home.settings
+         && !config_keep.settings
+         && config_st->bools.config_save_on_exit
+         && !path_is_empty(RARCH_PATH_CONFIG))
+      config_copy_take(&config_home);
+}
+
+/* Passwords changed since the copy, which go into their own file */
+static int config_home_save_credentials(void)
+{
+   int i;
+   int n                           = 0;
+   int tmp                         = SETTINGS_ARRAY_COUNT_MAX;
+   int size                        = SETTINGS_ARRAY_COUNT_MAX;
+   struct config_array_setting *a0 =
+      populate_settings_array(config_home.settings, &tmp);
+   struct config_array_setting *a1 =
+      populate_settings_array(config_st, &size);
+
+   for (i = 0; a0 && a1 && i < size; i++)
+      if (     (a1[i].flags & CFG_BOOL_FLG_SENSITIVE)
+            && !string_is_equal(a0[i].ptr, a1[i].ptr))
+         a1[n++] = a1[i];
+   if (n > 0 && !config_save_credentials(NULL, a1, n, NULL, 0))
+      n = -1;
+   free(a0);
+   free(a1);
+   return n;
+}
+
+unsigned config_home_save(void)
+{
+   int i;
+   unsigned ret        = 0;
+   config_file_t *conf = NULL;
+   const char *path    = path_get(RARCH_PATH_CONFIG);
+
+   if (!config_home.settings)
+      return 0;
+   if ((i = config_home_save_credentials()))
+      ret = (i > 0) ? CONFIG_HOME_SAVED : CONFIG_HOME_FAILED;
+
+   if (config_keep_write(&config_home, NULL, false))
+   {
+      if (     !(conf = config_file_new_from_path_to_string(path))
+            && !path_is_valid(path))
+         conf = config_file_new_alloc();
+      if (conf)
+         config_keep_write(&config_home, conf, false);
+      if (     conf
+            && (  !(conf->flags & CONF_FILE_FLG_MODIFIED)
+               || config_file_write(conf, path, true)))
+      {
+         ret |= CONFIG_HOME_SAVED;
+         RARCH_LOG("[Config] Changes from Home saved: \"%s\".\n", path);
+      }
+      else
+         ret |= CONFIG_HOME_FAILED;
+      if (conf)
+         config_file_free(conf);
+
+      /* Nothing is written to these */
+      for (i = 0; i < 3 && !(ret & CONFIG_HOME_OWN); i++)
+      {
+         char own[PATH_MAX_LENGTH];
+         if (     !config_keep_path(i, i > 0, own, sizeof(own))
+               || !path_is_valid(own)
+               || !(conf = config_file_new_from_path_to_string(own)))
+            continue;
+         config_keep_write(&config_home, conf, true);
+         if (conf->flags & CONF_FILE_FLG_MODIFIED)
+            ret |= CONFIG_HOME_OWN;
+         config_file_free(conf);
+      }
+   }
+   if (ret && !(ret & CONFIG_HOME_FAILED))
+      config_copy_take(&config_home);
+   return ret;
+}
+
+void config_home_end(void)
+{
+   config_copy_free(&config_home);
 }
 
 /* Replaces currently loaded configuration file with
@@ -11484,6 +11673,8 @@ bool config_replace(bool config_replace_save_on_exit, char *path)
 
    if (config_replace_save_on_exit && !path_is_empty(RARCH_PATH_CONFIG))
       config_save_file(rarch_path_config);
+   config_home_save();
+   config_home_end();
 
    path_set(RARCH_PATH_CONFIG, path);
 

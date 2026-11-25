@@ -7235,6 +7235,14 @@ void command_event_save_current_config(enum override_type type)
             }
             else
             {
+#ifdef HAVE_CONFIGFILE
+               /* Home's changes only, as they are made */
+               if (config_home_active())
+               {
+                  config_home_save();
+                  break;
+               }
+#endif
                if (runloop_st->flags & RUNLOOP_FLAG_OVERRIDES_ACTIVE)
                {
                   msg_cat = MESSAGE_QUEUE_CATEGORY_ERROR;

@@ -27,7 +27,7 @@ grey (`simple_art_draw`, `simple_band_fade`). Still to do:
 
 | Feature | Notes |
 |---|---|
-| The rest of "Keeping changes" in `ia-v2.md` | The question on Game Options, the banner, Ask Before Keeping Changes. Settings changed from Home during a game are still dropped when it has settings of its own. Shaders and which controller a player uses are not asked about |
+| The rest of "Keeping changes" in `ia-v2.md` | The question on Game Options, the banner, Ask Before Keeping Changes. Shaders and which controller a player uses are not asked about |
 | Box art beyond Home, page animation, Quick Setup | See `plan.md` |
 
 ## Small fixes

@@ -210,6 +210,7 @@ typedef struct simple_handle
    bool more_open;
    bool settings_page;
    bool keep_asked;
+   size_t home_depth;
    bool keys;               /* moved by buttons since the last touch */
    double cycle_ms;         /* for which names have changed */
    float cycle_wait;        /* until they do again */
@@ -920,6 +921,51 @@ static bool simple_keep(simple_handle_t *sm)
          menu_st->selection_ptr, 0, ACTION_OK_DL_SIMPLE_KEEP_LIST);
    return true;
 }
+
+static void simple_home_save(void)
+{
+   const char *msg;
+   unsigned ret = config_home_save();
+   if (!(ret & (CONFIG_HOME_FAILED | CONFIG_HOME_OWN)))
+      return;
+   msg = msg_hash_to_str((ret & CONFIG_HOME_FAILED)
+         ? MENU_ENUM_LABEL_VALUE_SIMPLE_KEEP_FAILED
+         : MENU_ENUM_LABEL_VALUE_SIMPLE_HOME_OWN);
+   runloop_msg_queue_push(msg, strlen(msg), 1, 180, true, NULL,
+         MESSAGE_QUEUE_ICON_DEFAULT, (ret & CONFIG_HOME_FAILED)
+         ? MESSAGE_QUEUE_CATEGORY_ERROR : MESSAGE_QUEUE_CATEGORY_INFO);
+}
+
+/* Changes made outside the Game menu are for every game. With settings of
+ * the game's own in use, they are saved one page at a time. */
+static void simple_home(simple_handle_t *sm)
+{
+   struct menu_state *menu_st = menu_state_get_ptr();
+   const file_list_t *stack   = menu_st->entries.list
+      ? MENU_LIST_GET(menu_st->entries.list, 0) : NULL;
+   size_t depth               = stack ? stack->size : 0;
+   bool own                   =
+         (runloop_get_flags() & RUNLOOP_FLAG_OVERRIDES_ACTIVE) != 0;
+   bool home                  = own && depth > 0 && !config_keep_active()
+      && config_get_ptr()->uints.menu_layout == MENU_LAYOUT_SIMPLE
+      && !simple_on_stack(stack, MENU_ENUM_LABEL_CONTENT_SETTINGS,
+            MENU_ENUM_LABEL_DEFERRED_SIMPLE_KEEP_LIST);
+
+   if (!config_home_active())
+   {
+      if (home)
+         config_home_begin();
+   }
+   else if (!own)
+      config_home_end();
+   else if (!home || depth != sm->home_depth)
+   {
+      simple_home_save();
+      if (!home)
+         config_home_end();
+   }
+   sm->home_depth = depth;
+}
 #endif
 
 static int simple_entry_action(void *userdata, menu_entry_t *entry,
@@ -928,8 +974,12 @@ static int simple_entry_action(void *userdata, menu_entry_t *entry,
    simple_handle_t *sm = (simple_handle_t*)userdata;
 
 #ifdef HAVE_CONFIGFILE
-   if (sm && action == MENU_ACTION_NOOP && simple_keep(sm))
-      return 0;
+   if (sm && action == MENU_ACTION_NOOP)
+   {
+      simple_home(sm);
+      if (simple_keep(sm))
+         return 0;
+   }
 #endif
    /* Taps never move the selection so */
    if (sm && (action == MENU_ACTION_UP || action == MENU_ACTION_DOWN))
@@ -1364,10 +1414,25 @@ static void simple_free(void *data)
    int i;
    if (!sm)
       return;
+#ifdef HAVE_CONFIGFILE
+   config_home_save();
+   config_home_end();
+#endif
    gfx_thumbnail_cancel_pending_requests();
    gfx_thumbnail_reset(&sm->art);
    for (i = 0; i < SIMPLE_FONT_LAST; i++)
       video_coord_array_free(&sm->fonts[i].raster_block.carr);
+}
+
+static void simple_toggle(void *data, bool menu_on)
+{
+#ifdef HAVE_CONFIGFILE
+   if (!menu_on && config_home_active())
+   {
+      simple_home_save();
+      config_home_end();
+   }
+#endif
 }
 
 static void simple_context_reset(void *data, bool is_threaded)
@@ -2949,7 +3014,7 @@ menu_ctx_driver_t menu_ctx_simple = {
    simple_context_reset,
    simple_context_destroy,
    NULL,                         /* populate_entries */
-   NULL,                         /* toggle */
+   simple_toggle,
    simple_navigation_clear,
    NULL,                         /* navigation_decrement */
    NULL,                         /* navigation_increment */

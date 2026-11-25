@@ -157,7 +157,11 @@ core has settings of its own. Leaving the Game menu's Controls or Screen
 with settings changed opens Keep Changes?: For this game, For all ‹System›
 games or Just for now, which any other way out also is. Only what was
 changed goes into the override (`config_keep_*`); remaps go into their own
-files. While these pages are open `retroarch.cfg` is not written. A game that cannot be opened says why,
+files. While these pages are open `retroarch.cfg` is not written. What is
+changed from Home while a game has settings of its own is for every game: a
+page at a time, it alone is put into `retroarch.cfg` (`config_home_*`), if
+`config_save_on_exit` is on, and a message says so if the game's own settings have
+one of them too. Which controller a player uses is still dropped. A game that cannot be opened says why,
 and offers to choose its folder.
 
 Gamepad Mode (Help, or Settings › Interface) draws the menu in a 4:3
