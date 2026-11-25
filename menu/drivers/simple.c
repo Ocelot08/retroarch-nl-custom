@@ -758,6 +758,15 @@ static void simple_number_set(rarch_setting_t *setting, unsigned type,
 }
 
 /* Top and height of entry @i, in pixels */
+/* The More row that opens in place is a section's label, as far from the
+ * row above as the others; its row is taller than theirs, to be tapped */
+static float simple_more_gap(const simple_handle_t *sm)
+{
+   if (sm->downloads)
+      return sm->head_gap + sm->head_h - sm->m->list_row * sm->scale;
+   return SIMPLE_MORE_GAP * sm->scale;
+}
+
 static void simple_entry_rect(const simple_handle_t *sm, size_t i,
       float *top, float *h)
 {
@@ -793,7 +802,7 @@ static void simple_entry_rect(const simple_handle_t *sm, size_t i,
          *top += sm->head_h + (sm->head_row[k] ? sm->head_gap : 0.0f);
    }
    if (i >= sm->more_idx)
-      *top += SIMPLE_MORE_GAP * s;
+      *top += simple_more_gap(sm);
    if (i > sm->open_idx)
       *top += m->list_row * s;
 }
@@ -809,7 +818,7 @@ static void simple_scroll(simple_handle_t *sm, const file_list_t *list,
    float view_t = sm->m->list_top * s + sm->desc_h;
    size_t size  = list ? list->size : 0;
    float extent = (float)size * sm->m->list_row * s
-      + (sm->more_idx < size ? SIMPLE_MORE_GAP * s : 0.0f)
+      + (sm->more_idx < size ? simple_more_gap(sm) : 0.0f)
       + (sm->open_idx < size ? sm->m->list_row * s : 0.0f)
       + (float)sm->heads * (sm->head_h + sm->head_gap)
       - ((sm->heads && !sm->head_row[0]) ? sm->head_gap : 0.0f);
@@ -1224,7 +1233,7 @@ static void simple_desc_layout(simple_handle_t *sm, unsigned dims)
       lines = sm->gamepad ? 2 : 6;
    sm->desc_lines = lines;
    sm->desc_h     = lines ? ((float)lines * sm->m->font[SIMPLE_FONT_FULL]
-         * SIMPLE_DESC_LINE + SIMPLE_DESC_GAP) * sm->scale : 0.0f;
+         * SIMPLE_DESC_LINE + 2.0f * SIMPLE_DESC_GAP) * sm->scale : 0.0f;
 }
 
 /* RetroArch's prompts ask for a second press; the card asks a question */
@@ -1766,7 +1775,7 @@ static void simple_draw_desc(simple_handle_t *sm, unsigned dims)
    const char *p = sm->desc_text;
    float line_h  = sm->m->font[SIMPLE_FONT_FULL] * SIMPLE_DESC_LINE
       * sm->scale;
-   float y       = sm->m->list_top * sm->scale;
+   float y       = (sm->m->list_top + SIMPLE_DESC_GAP) * sm->scale;
 
    for (r = 0; r < sm->desc_lines && *p; r++)
    {
@@ -1776,7 +1785,7 @@ static void simple_draw_desc(simple_handle_t *sm, unsigned dims)
          memcpy(line, p, n);
          line[n] = '\0';
          simple_text(sm, SIMPLE_FONT_FULL, line, SIMPLE_GUTTER * sm->scale,
-               y + ((float)r + 0.3f) * line_h, dims, SIMPLE_COL_MUTED,
+               y + ((float)r + 0.5f) * line_h, dims, SIMPLE_COL_MUTED,
                TEXT_ALIGN_LEFT);
       }
       p += n;
@@ -1942,6 +1951,7 @@ static void simple_draw_rows(simple_handle_t *sm, gfx_display_t *p_disp,
       menu_entry_t *entry = &sm->entry;
       bool selected       = (i == selection);
       bool more           = !sm->is_home && i == sm->more_idx;
+      bool section        = more && sm->downloads;
 
       simple_entry_rect(sm, i, &top, &h);
       head  = simple_heading(sm, i);
@@ -1951,7 +1961,7 @@ static void simple_draw_rows(simple_handle_t *sm, gfx_display_t *p_disp,
       if (     top - above >= bottom
             || (sm->is_home && top + h > bottom))
          break;
-      centre = top + h * 0.5f;
+      centre = section ? top + h - sm->head_h * 0.35f : top + h * 0.5f;
 
       MENU_ENTRY_INITIALIZE((*entry));
       entry->flags |= MENU_ENTRY_FLAG_RICH_LABEL_ENABLED
@@ -1984,9 +1994,12 @@ static void simple_draw_rows(simple_handle_t *sm, gfx_display_t *p_disp,
          continue;
       }
 
-      if (!more && (i > 0 || !sm->is_home || sm->has_continue))
-         simple_quad(p_disp, userdata, dims, x,
-               top - above, w - 2.0f * x, line,
+      /* A row's line is at its top, under the heading if it has one. The
+       * first row's is the header's or the description's, which stay, and
+       * any that stops too near that one would look double. */
+      if (     !more && (i > 0 || head)
+            && (sm->is_home || top > view_t + 4.0f * s))
+         simple_quad(p_disp, userdata, dims, x, top, w - 2.0f * x, line,
                SIMPLE_COL_LINE);
       if (head)
       {
@@ -2013,7 +2026,7 @@ static void simple_draw_rows(simple_handle_t *sm, gfx_display_t *p_disp,
          bool choice    = note[0] && simple_is_choice(setting, entry->value);
          bool text      = setting && setting->type == ST_STRING;
 
-         if (more && sm->downloads)
+         if (section)
             strlcpy(note, menu_displaylist_simple_downloads_open()
                   ? "\xE2\x88\x92" : "+", sizeof(note));
          else if (sm->opts && (entry->flags & MENU_ENTRY_FLAG_CHECKED))
@@ -2056,6 +2069,15 @@ static void simple_draw_rows(simple_handle_t *sm, gfx_display_t *p_disp,
                   TEXT_ALIGN_RIGHT);
             note_w = (w - x) - (lc - 24.0f * s);
             note[0] = '\0';
+         }
+         if (section)
+         {
+            simple_note(sm, note, w - x, centre, dims, SIMPLE_COL_HEAD,
+                  TEXT_ALIGN_RIGHT);
+            simple_upper(note, word, sizeof(note));
+            simple_note(sm, note, x, centre, dims, SIMPLE_COL_HEAD,
+                  TEXT_ALIGN_LEFT);
+            continue;
          }
          simple_draw_word(sm, (more || (i >= sm->sub_from && !sm->is_home))
                ? SIMPLE_FONT_FULL : word_font, word,
@@ -2287,8 +2309,9 @@ static void simple_frame(void *data, video_frame_info_t *video_info)
       float rows_b = simple_rows_bottom(sm, dims);
       simple_quad(p_disp, userdata, dims, 0.0f, 0.0f, w, view_t,
             SIMPLE_COL_BG);
-      /* The first row's line, held here while it is scrolled past */
-      if (sm->scroll_y > 0.0f || !list || !list->size)
+      simple_quad(p_disp, userdata, dims, x, sm->m->list_top * sm->scale,
+            w - 2.0f * x, line, SIMPLE_COL_LINE);
+      if (sm->desc_h > 0.0f)
          simple_quad(p_disp, userdata, dims, x, view_t, w - 2.0f * x, line,
                SIMPLE_COL_LINE);
       if (rows_b < box_b)

@@ -97,6 +97,11 @@ set end keep small arrows, and prompts show as a card with answer rows.
 Text is typed with the system's keyboard into a box at the top. It has no
 images or art yet.
 
+Lines: the top bar has one under it, which stays. A row's is at its top,
+so the last row of a list or section has none below it. Section labels
+have none above, but more space. The first row of a page has only the top
+bar's. More rows have a gap instead. On Home, Continue has none.
+
 A name too wide for its row takes the smaller type, then a second line.
 A text value too wide shows as SET, and passwords always do.
 
@@ -108,7 +113,7 @@ own lists, and the More rows, are drawn in smaller type. On the Settings
 page a category's note names in turn the settings on its page, a moment
 later from row to row, and holds still after a touch. Games has Game
 Lists, RetroArch's playlists, ending in Edit Game Lists. Downloads has
-violet headings over its groups, and its More row opens in place, as a trial:
+violet headings over its groups, and its More row, styled as one of them, opens in place, as a trial:
 the rest of the Online Updater, without what is already above. The
 breadcrumb shows the whole path,
 the middle levels as an ellipsis when it is too long. Help has Switch to

@@ -51,7 +51,10 @@ and solid at the bottom (`simple_band_fade`). Still to do:
 2. Is the right 40% of a row the right size for changing its value?
 3. Should Simple turn Use Camera Area on once only, rather than each time
    the layout changes from Classic?
-4. Should + and − on an opened row be bigger?
+4. Should + and − on an opened row be bigger? More Downloads looks like the
+   section labels, which cannot be tapped: only its + or − says it can.
+5. Should the labels inside More Downloads (Update Files, Settings) be grey,
+   so that they do not look equal to it?
 
 ## Not tested
 
