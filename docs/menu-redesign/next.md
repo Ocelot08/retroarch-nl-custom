@@ -50,8 +50,9 @@ grey (`simple_art_draw`, `simple_band_fade`). Still to do:
 
 - Keep Changes? in Gamepad Mode, after a resume from its page, and with
   changed binds.
-- A physical controller, landscape in touch mode, and the Vulkan video
-  driver. With a
+- With Vulkan, a game, text being typed and prompts: the menu's pages were
+  the same as with OpenGL (25 Nov 2026).
+- A physical controller. With a
   controller in touch mode, that the line at the left shows on up and down
   and goes at the next touch: arrow keys sent over USB do not reach the menu.
 - RetroArch's own keyboard in Simple, with the system's turned off.

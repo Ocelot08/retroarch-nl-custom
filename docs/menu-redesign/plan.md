@@ -9,7 +9,7 @@
   - It has no art, keyboard or page animation yet.
   - Short lists: all eight Settings categories, Downloads, Help, and the Game menu's Controls and Screen.
   - Options pages with descriptions, a text box, drawing behind the camera, and Back are in.
-  - Not seen on a phone yet: landscape, a physical controller, the Vulkan driver, RetroArch's own keyboard in Simple, and the reworded Close, Restart and gamepad prompts.
+  - Not seen on a phone yet: a physical controller, RetroArch's own keyboard in Simple, and the reworded Close, Restart and gamepad prompts.
 
 ## What is architectural
 
