@@ -42,6 +42,8 @@ def write_overlay(d):
     with open(path, "w") as f:
         f.write("\n".join([
             "overlays = 1",
+            # The pack's own image, not a button drawn in its place
+            "overlay_drawn_buttons = false",
             "overlay0_full_screen = true",
             "overlay0_normalized = true",
             "overlay0_descs = 1",
