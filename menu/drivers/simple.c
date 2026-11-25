@@ -1994,10 +1994,9 @@ static void simple_draw_rows(simple_handle_t *sm, gfx_display_t *p_disp,
          continue;
       }
 
-      /* A row's line is at its top, under the heading if it has one. The
-       * first row's is the header's or the description's, which stay, and
-       * any that stops too near that one would look double. */
-      if (     !more && (i > 0 || head)
+      /* Lines go between two rows of the same list or section. One that
+       * stops too near the header's, which stays, would look double. */
+      if (     !more && i > 0 && !head && i != sm->sub_from
             && (sm->is_home || top > view_t + 4.0f * s))
          simple_quad(p_disp, userdata, dims, x, top, w - 2.0f * x, line,
                SIMPLE_COL_LINE);

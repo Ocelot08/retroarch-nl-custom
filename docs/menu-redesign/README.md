@@ -97,10 +97,10 @@ set end keep small arrows, and prompts show as a card with answer rows.
 Text is typed with the system's keyboard into a box at the top. It has no
 images or art yet.
 
-Lines: the top bar has one under it, which stays. A row's is at its top,
-so the last row of a list or section has none below it. Section labels
-have none above, but more space. The first row of a page has only the top
-bar's. More rows have a gap instead. On Home, Continue has none.
+Lines go only between two rows of the same list or section. Section labels
+have more space above and no line; More rows have a gap. The top bar has a
+line under it, and an option page's description one above and below, which
+stay as the rows scroll. On Home, Continue counts as the first row.
 
 A name too wide for its row takes the smaller type, then a second line.
 A text value too wide shows as SET, and passwords always do.
