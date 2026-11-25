@@ -36,6 +36,7 @@
 #include "../menu_cbs.h"
 #include "../menu_displaylist.h"
 #include "../../gfx/gfx_display.h"
+#include "../../gfx/gfx_thumbnail.h"
 #include "../../gfx/font_driver.h"
 #include "../../configuration.h"
 #include "../../core_info.h"
@@ -144,7 +145,7 @@ static const uint32_t simple_accent[MENU_SIMPLE_COLOR_LAST] = {
    0xF08BC0FF, 0x74B3FFFF, 0x6FD08CFF, 0xEEF0F4FF
 };
 
-/* Art band colours, picked by the game's name until box art is drawn */
+/* Art band colours, picked by the game's name where there is no box art */
 static const uint32_t simple_band[][2] = {
    { 0x3B5BDBFF, 0x7048E8FF },
    { 0x0CA678FF, 0x1971C2FF },
@@ -157,6 +158,7 @@ static const uint32_t simple_band[][2] = {
 typedef struct simple_handle
 {
    menu_input_pointer_t pointer;    /* int64_t alignment */
+   gfx_thumbnail_t art;             /* the last game's, on Home */
    font_data_impl_t fonts[SIMPLE_FONT_LAST];
    menu_entry_t entry;
    /* Main thread's own, for taps; entry above is the drawing thread's */
@@ -215,6 +217,7 @@ typedef struct simple_handle
    unsigned cycle_at[SIMPLE_CYCLE_ROWS];
    char cycle_name[SIMPLE_CYCLE_ROWS][SIMPLE_CYCLE_NAMES][64];
    char core_note[64];
+   char art_path[PATH_MAX_LENGTH];
    char msgbox[1024];
    /* Of the setting whose option list was last opened */
    char opt_path[16];
@@ -555,8 +558,9 @@ static const enum msg_hash_enums simple_cycled[SIMPLE_CYCLE_ROWS] = {
 };
 
 /* Vertices run bottom-left, bottom-right, top-left, top-right */
-static void simple_grad_quad(const simple_handle_t *sm,
-      gfx_display_t *p_disp, void *userdata, unsigned dims, float y, float h,
+static void simple_grad_rect(const simple_handle_t *sm,
+      gfx_display_t *p_disp, void *userdata, unsigned dims,
+      float x, float y, float w, float h,
       uint32_t top_l, uint32_t top_r, uint32_t bot_l, uint32_t bot_r)
 {
    float c[16];
@@ -564,10 +568,18 @@ static void simple_grad_quad(const simple_handle_t *sm,
    simple_color(c, 1, bot_r);
    simple_color(c, 2, top_l);
    simple_color(c, 3, top_r);
-   gfx_display_draw_quad(p_disp, userdata, dims, (int)sm->left,
+   gfx_display_draw_quad(p_disp, userdata, dims, (int)(sm->left + x),
          (int)(y + 0.5f),
-         VIDEO_SCALE_PACK((unsigned)sm->box_w, (unsigned)(h + 0.5f)),
+         VIDEO_SCALE_PACK((unsigned)w, (unsigned)(h + 0.5f)),
          dims, c, NULL);
+}
+
+static void simple_grad_quad(const simple_handle_t *sm,
+      gfx_display_t *p_disp, void *userdata, unsigned dims, float y, float h,
+      uint32_t top_l, uint32_t top_r, uint32_t bot_l, uint32_t bot_r)
+{
+   simple_grad_rect(sm, p_disp, userdata, dims, 0.0f, y, sm->box_w, h,
+         top_l, top_r, bot_l, bot_r);
 }
 
 /* Behind the fade: the colours, until box art takes their place. Short
@@ -579,14 +591,108 @@ static void simple_band_back(const simple_handle_t *sm,
          left, right, left, right);
 }
 
+/* Whether Home has art to show, or on its way */
+static bool simple_art_on(simple_handle_t *sm)
+{
+   return *sm->art_path
+      && retro_atomic_load_acquire_int(&sm->art.status)
+         != GFX_THUMBNAIL_STATUS_MISSING;
+}
+
+/* Left edge of the art on Home: a band too wide for a cover has it at
+ * the right, and the text at the left on the page's grey */
+static float simple_art_left(const simple_handle_t *sm)
+{
+   float h = sm->m->band_h * sm->scale;
+   return sm->box_w > h * 1.8f ? (float)(int)(sm->box_w - h * 1.6f) : 0.0f;
+}
+
+/* Box art from @x to the box's right edge, @h high, filled and cropped:
+ * the sides alike, and less off the top, where a cover has its name */
+static void simple_art_draw(simple_handle_t *sm, gfx_display_t *p_disp,
+      void *userdata, unsigned dims, float x, float h)
+{
+   float w                           = sm->box_w - x;
+   int i;
+   gfx_display_ctx_draw_t draw;
+   struct video_coords coords;
+   math_matrix_4x4 mymat;
+   float color[16];
+   float uv[8];
+   static const float base[8]        = { 0, 1, 1, 1, 0, 0, 1, 0 };
+   gfx_display_ctx_driver_t *dispctx = p_disp->dispctx;
+   const float *def                  = NULL;
+   float tw                          = (float)VIDEO_SCALE_W(sm->art.dims);
+   float th                          = (float)VIDEO_SCALE_H(sm->art.dims);
+   float u                           = 1.0f;
+   float v                           = 1.0f;
+
+   if (     !dispctx || tw < 1.0f || th < 1.0f || h < 1.0f
+         || retro_atomic_load_acquire_int(&sm->art.status)
+            != GFX_THUMBNAIL_STATUS_AVAILABLE)
+      return;
+   if (dispctx->get_default_tex_coords)
+      def = dispctx->get_default_tex_coords();
+   if (!def)
+      def = base;
+   if (tw * h > th * w)
+      u = (w * th) / (h * tw);
+   else
+      v = (h * tw) / (w * th);
+   for (i = 0; i < 4; i++)
+   {
+      uv[i * 2]     = (1.0f - u) * 0.5f + def[i * 2] * u;
+      uv[i * 2 + 1] = (1.0f - v) * 0.3f + def[i * 2 + 1] * v;
+      simple_color(color, i, 0xFFFFFFFF);
+   }
+   gfx_display_set_alpha(color, sm->art.alpha);
+
+   coords.vertices      = 4;
+   coords.vertex        = NULL;
+   coords.tex_coord     = uv;
+   coords.lut_tex_coord = NULL;
+   coords.color         = color;
+   draw.pos             = VIDEO_POS_PACK((int)(sm->left + x),
+         (int)VIDEO_SCALE_H(dims) - (int)(h + 0.5f));
+   draw.dims            = VIDEO_SCALE_PACK((unsigned)(w + 0.5f),
+         (unsigned)(h + 0.5f));
+   draw.coords          = &coords;
+   draw.matrix_data     = &mymat;
+   draw.texture         = sm->art.texture;
+   draw.pipeline_id     = 0;
+   draw.scale_factor    = 1.0f;
+   draw.rotation        = 0.0f;
+
+   gfx_display_blend_begin(dispctx, userdata);
+   if (!dispctx->handles_transform)
+      gfx_display_rotate_z(p_disp, &mymat, 1.0f, 0.0f, userdata);
+   gfx_display_draw(dispctx, &draw, userdata, dims);
+   gfx_display_blend_end(dispctx, userdata);
+}
+
 /* The page's grey over whatever is behind, clear at the top and solid
- * at the bottom, so it has no edge */
-static void simple_band_fade(const simple_handle_t *sm,
+ * at the bottom, so it has no edge. Over art, dark enough that text is
+ * 4.5:1 on a white cover: from Continue down, and behind the top line.
+ * Art at the right of a wide band fades into the grey at its left. */
+static void simple_band_fade(simple_handle_t *sm,
       gfx_display_t *p_disp, void *userdata, unsigned dims, float h)
 {
-   float h1       = (float)(int)(h * 0.45f);
+   bool art       = simple_art_on(sm);
+   float x        = simple_art_left(sm);
+   float h1       = (float)(int)(art
+         ? (sm->m->cont_label_y - 12.0f) * sm->scale : h * 0.45f);
    uint32_t clear = SIMPLE_COL_BG & 0xFFFFFF00;
-   uint32_t most  = clear | 0xBF;
+   uint32_t most  = clear | ((art && x < 1.0f) ? 0xE6 : 0xBF);
+   if (art)
+   {
+      simple_grad_quad(sm, p_disp, userdata, dims, 0.0f,
+            sm->m->header_y * 3.0f * sm->scale,
+            clear | 0xCC, clear | 0xCC, clear, clear);
+      if (x >= 1.0f)
+         simple_grad_rect(sm, p_disp, userdata, dims, x, 0.0f,
+               (sm->box_w - x) * 0.6f, h,
+               SIMPLE_COL_BG, clear, SIMPLE_COL_BG, clear);
+   }
    simple_grad_quad(sm, p_disp, userdata, dims, 0.0f, h1,
          clear, clear, most, most);
    simple_grad_quad(sm, p_disp, userdata, dims, h1, h - h1, most, most,
@@ -1102,6 +1208,50 @@ static void simple_arrows(simple_handle_t *sm, unsigned dims,
    *left_c  = *value_r - value_w - SIMPLE_ARROW_GAP * s - aw * 0.5f;
 }
 
+/* The last game's box art, as Show Box Art says: where its list's name
+ * says, else where the systems of its core do, as a list can have any
+ * name */
+static void simple_art_find(simple_handle_t *sm)
+{
+   const struct playlist_entry *entry = NULL;
+   core_info_t *info                  = NULL;
+   const char *path                   = "";
+   gfx_thumbnail_path_data_t *data    = gfx_thumbnail_path_init();
+   playlist_t *history                = g_defaults.content_history;
+
+   if (!data)
+      return;
+   gfx_thumbnail_set_system(data, "history", history);
+   if (     history && playlist_size(history) > 0
+         && gfx_thumbnail_set_content_playlist(data, history, 0))
+   {
+      size_t i;
+      bool found = gfx_thumbnail_update_path(data, GFX_THUMBNAIL_RIGHT)
+         && path_is_valid(data->right_path);
+
+      playlist_get_index(history, 0, &entry);
+      if (     !found && entry && entry->core_path
+            && core_info_find(entry->core_path, &info)
+            && info && info->databases_list)
+         for (i = 0; i < info->databases_list->size && !found; i++)
+         {
+            strlcpy(data->content_db_name,
+                  info->databases_list->elems[i].data,
+                  sizeof(data->content_db_name));
+            found = gfx_thumbnail_update_path(data, GFX_THUMBNAIL_RIGHT)
+               && path_is_valid(data->right_path);
+         }
+      if (found)
+         path = data->right_path;
+   }
+   if (!string_is_equal(path, sm->art_path))
+   {
+      strlcpy(sm->art_path, path, sizeof(sm->art_path));
+      gfx_thumbnail_reset(&sm->art);
+   }
+   free(data);
+}
+
 static void simple_home_counts(simple_handle_t *sm)
 {
    settings_t *settings     = config_get_ptr();
@@ -1117,6 +1267,7 @@ static void simple_home_counts(simple_handle_t *sm)
    sm->n_cores   = core_info_get_list(&cores) && cores
       ? (unsigned)cores->count : 0;
 
+   simple_art_find(sm);
    sm->core_note[0] = '\0';
    if (     g_defaults.content_history
          && playlist_size(g_defaults.content_history) > 0)
@@ -1148,6 +1299,9 @@ static void *simple_init(void **userdata, bool video_is_threaded)
       free(menu);
       return NULL;
    }
+   gfx_thumbnail_init_blank(&sm->art);
+   gfx_thumbnail_set_fade_duration(-1.0f);
+   gfx_thumbnail_set_fade_missing(false);
    sm->gamepad  = settings->bools.menu_simple_gamepad_mode;
    sm->open_idx = (size_t)-1;
    simple_set_box(sm, video_driver_get_output_dims());
@@ -1162,6 +1316,8 @@ static void simple_free(void *data)
    int i;
    if (!sm)
       return;
+   gfx_thumbnail_cancel_pending_requests();
+   gfx_thumbnail_reset(&sm->art);
    for (i = 0; i < SIMPLE_FONT_LAST; i++)
       video_coord_array_free(&sm->fonts[i].raster_block.carr);
 }
@@ -1180,8 +1336,11 @@ static void simple_context_reset(void *data, bool is_threaded)
 static void simple_context_destroy(void *data)
 {
    simple_handle_t *sm = (simple_handle_t*)data;
-   if (sm)
-      simple_fonts_free(sm);
+   if (!sm)
+      return;
+   simple_fonts_free(sm);
+   gfx_thumbnail_cancel_pending_requests();
+   gfx_thumbnail_reset(&sm->art);
 }
 
 static void simple_render_messagebox(void *data, const char *msg)
@@ -1771,6 +1930,14 @@ static void simple_render(void *data, unsigned dims, bool is_idle)
    sm->has_continue = sm->is_home && size > 0
       && string_is_equal(list->list[0].label,
             MENU_ENUM_LABEL_SIMPLE_CONTINUE_STR);
+   if (sm->has_continue && *sm->art_path)
+   {
+      gfx_thumbnail_reset_if_orphaned(&sm->art);
+      if (retro_atomic_load_acquire_int(&sm->art.status)
+            == GFX_THUMBNAIL_STATUS_UNKNOWN)
+         gfx_thumbnail_request_file(sm->art_path, &sm->art,
+               settings->uints.gfx_thumbnail_upscale_threshold);
+   }
    sm->more_idx = size;
    for (i = 0; i < size; i++)
       if (simple_is_more(list->list[i].label))
@@ -2066,7 +2233,8 @@ static void simple_draw_continue(simple_handle_t *sm, unsigned dims,
             room - simple_note_width(sm, "CONTINUE") - 16.0f * s,
             note, sizeof(note));
       simple_note(sm, note, w - x, sm->m->cont_label_y * s,
-            dims, SIMPLE_COL_MUTED, TEXT_ALIGN_RIGHT);
+            dims, simple_art_on(sm) ? SIMPLE_COL_FG : SIMPLE_COL_MUTED,
+            TEXT_ALIGN_RIGHT);
    }
    /* Too long: the "(USA)" tags go before any of the name does */
    if (     font && (tags = strstr(title, " (")) && tags != title
@@ -2500,8 +2668,13 @@ static void simple_frame(void *data, video_frame_info_t *video_info)
       while (name && *name)
          hash = hash * 31 + (unsigned char)*name++;
       pick = hash % (sizeof(simple_band) / sizeof(simple_band[0]));
-      simple_band_back(sm, p_disp, userdata, dims, sm->m->band_h * sm->scale,
-            simple_band[pick][0], simple_band[pick][1]);
+      /* Art to one side has the page's grey beside it */
+      if (!simple_art_on(sm) || simple_art_left(sm) < 1.0f)
+         simple_band_back(sm, p_disp, userdata, dims,
+               sm->m->band_h * sm->scale,
+               simple_band[pick][0], simple_band[pick][1]);
+      simple_art_draw(sm, p_disp, userdata, dims, simple_art_left(sm),
+            sm->m->band_h * sm->scale - 2.0f);
       simple_band_fade(sm, p_disp, userdata, dims, sm->m->band_h * sm->scale);
    }
 

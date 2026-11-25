@@ -6,16 +6,15 @@ out of here when it is built.
 
 ## Design notes to apply
 
-The background is drawn in two layers on Home only: the colours at the back
-(`simple_band_back`), and the page's dark grey over them, clear at the top
-and solid at the bottom (`simple_band_fade`). Still to do:
+Home has the last game's box art behind Continue, under the page's dark
+grey (`simple_art_draw`, `simple_band_fade`). Still to do:
 
-- **Box art** takes the back layer's place once it is drawn. Then check that
-  HOME, RETROARCH, CONTINUE and the title stay readable over light covers;
-  the front may need some grey at the very top as well.
-- **Other pages** it could go on, from `ia-v2.md`: Games and its lists, a
-  game's detail page and the Game menu. Settings, Downloads and Help stay
-  plain.
+- **Other pages** it could go on, from `ia-v2.md`: Games and its lists, and a
+  game's detail page. The Game menu waits for its own redesign. Settings,
+  Downloads and Help stay plain.
+- **Downloading covers** asks the server for a list's own name, so a list
+  called GBA probably finds none: Home finds art already there by the core's
+  systems instead. Not tried.
 
 - **Settings page notes, animated:** each note names in turn the settings on
   its page (`simple_cycle`). When it starts, how long a name stays and the
@@ -29,7 +28,7 @@ and solid at the bottom (`simple_band_fade`). Still to do:
 | Feature | Notes |
 |---|---|
 | The rest of "Keeping changes" in `ia-v2.md` | The question on Game Options, the banner, Ask Before Keeping Changes. Settings changed from Home during a game are still dropped when it has settings of its own. Shaders and which controller a player uses are not asked about |
-| Box art, page animation, Quick Setup | See `plan.md` |
+| Box art beyond Home, page animation, Quick Setup | See `plan.md` |
 
 ## Small fixes
 

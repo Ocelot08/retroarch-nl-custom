@@ -101,8 +101,10 @@ menu buttons; the breadcrumb line and Android's Back go back. A setting's
 word opens its options under its description; the right side changes it,
 or opens the list of a long one. Numbers open a slider row, those with no
 set end keep small arrows, and prompts show as a card with answer rows.
-Text is typed with the system's keyboard into a box at the top. It has no
-images or art yet.
+Text is typed with the system's keyboard into a box at the top. On
+Home the last game's box art (Settings › Library › Show Box Art) is behind
+Continue, or colours where it has none; in a wide band, as in landscape, it
+is at the right.
 
 The Settings page, Controls, Screen, Saving and Interface have section
 labels; the shorter pages have none. A page's last row is drawn as a label
