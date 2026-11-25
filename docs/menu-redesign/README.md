@@ -97,12 +97,16 @@ set end keep small arrows, and prompts show as a card with answer rows.
 Text is typed with the system's keyboard into a box at the top. It has no
 images or art yet.
 
-Settings › Interface › Highlight Color picks one colour for section
-labels, Continue and the gamepad selection, and for the update notice in
+The Settings page, Controls, Screen, Saving and Interface have section
+labels; the shorter pages have none. More rows are drawn as labels too,
+with › for those that open a page and + or − for More Downloads.
+
+Settings › Interface › Highlight Color picks one colour (violet unless
+changed) for section labels, Continue and the gamepad selection, and for the update notice in
 `ia-v2.md` once it is built. The choices are in `simple_accent`.
 
 Lines go only between two rows of the same list or section. Section labels
-have more space above and no line; More rows have a gap. The top bar has a
+and More rows have more space above and no line. The top bar has a
 line under it, and an option page's description one above and below, which
 stay as the rows scroll. On Home, Continue counts as the first row.
 

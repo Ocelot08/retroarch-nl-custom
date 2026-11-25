@@ -78,7 +78,6 @@ void android_app_update_viewport_inset(void);
 #define SIMPLE_CYCLE_WAVE     100.0f
 #define SIMPLE_CYCLE_ROWS     8
 #define SIMPLE_CYCLE_NAMES    8
-#define SIMPLE_MORE_GAP       16.0f
 /* Edge bounce, as Material UI's: drag resistance past an end, the
  * furthest it may go as a share of the view, and the spring back */
 #define SIMPLE_OVER_RESIST    0.35f
@@ -133,8 +132,8 @@ static const simple_metrics_t simple_gamepad = {
 
 /* The highlight, 6:1 or more on the page, as enum menu_simple_color */
 static const uint32_t simple_accent[MENU_SIMPLE_COLOR_LAST] = {
-   0xF2D64BFF, 0xF5A04BFF, 0xFF7F76FF, 0xF08BC0FF,
-   0xAA9DEBFF, 0x74B3FFFF, 0x6FD08CFF, 0xEEF0F4FF
+   0x9A8FD0FF, 0xF2D64BFF, 0xF5A04BFF, 0xFF7F76FF,
+   0xF08BC0FF, 0x74B3FFFF, 0x6FD08CFF, 0xEEF0F4FF
 };
 
 /* Art band colours, picked by the game's name until box art is drawn */
@@ -194,6 +193,7 @@ typedef struct simple_handle
    bool opts;               /* the option list opt_path names */
    bool opts_color;         /* the highlight's */
    bool downloads;          /* the Downloads page */
+   bool headed;             /* a page with sections */
    bool settings_page;
    bool keys;               /* moved by buttons since the last touch */
    double cycle_ms;         /* for which names have changed */
@@ -764,13 +764,11 @@ static void simple_number_set(rarch_setting_t *setting, unsigned type,
 }
 
 /* Top and height of entry @i, in pixels */
-/* The More row that opens in place is a section's label, as far from the
- * row above as the others; its row is taller than theirs, to be tapped */
+/* A More row is drawn as a section's label, as far from the row above as
+ * the others; its row is taller than theirs, to be tapped */
 static float simple_more_gap(const simple_handle_t *sm)
 {
-   if (sm->downloads)
-      return sm->head_gap + sm->head_h - sm->m->list_row * sm->scale;
-   return SIMPLE_MORE_GAP * sm->scale;
+   return sm->head_gap + sm->head_h - sm->m->list_row * sm->scale;
 }
 
 static void simple_entry_rect(const simple_handle_t *sm, size_t i,
@@ -1350,12 +1348,17 @@ static void simple_set_page(simple_handle_t *sm, bool simple_layout)
          msg_hash_to_str(MENU_ENUM_LABEL_DEFERRED_SIMPLE_SETTINGS_LIST));
    sm->downloads = simple_layout && string_is_equal(label, msg_hash_to_str(
             MENU_ENUM_LABEL_DEFERRED_SIMPLE_DOWNLOADS_LIST));
+   sm->headed    = sm->downloads || sm->settings_page;
    if (!simple_layout || sm->is_home)
       return;
    for (i = 0; i < ARRAY_SIZE(lists); i++)
       if (string_is_equal(label, msg_hash_to_str(lists[i])))
       {
          sm->full = false;
+         /* Not the Game menu's: they have rows of these, and few */
+         if (     lists[i] >= MENU_ENUM_LABEL_DEFERRED_SIMPLE_CONTROLS_LIST
+               && lists[i] <= MENU_ENUM_LABEL_DEFERRED_SIMPLE_INTERFACE_LIST)
+            sm->headed = true;
          return;
       }
 }
@@ -1413,8 +1416,8 @@ static void simple_log_state(simple_handle_t *sm, menu_list_t *menu_list,
    }
 }
 
-/* Headings for groups of rows. A row named here starts its group, if it
- * is not in it already; any page can have them. */
+/* Headings for groups of rows, on Downloads and the Settings pages. A row
+ * named here starts its group, if it is not in it already. */
 static void simple_find_heads(simple_handle_t *sm, const file_list_t *list)
 {
    size_t i, j;
@@ -1435,13 +1438,77 @@ static void simple_find_heads(simple_handle_t *sm, const file_list_t *list)
       { MENU_ENUM_LABEL_UPDATE_AUTOCONFIG_PROFILES,
          MENU_ENUM_LABEL_VALUE_SIMPLE_HEAD_UPDATE_FILES },
       { MENU_ENUM_LABEL_UPDATER_SETTINGS,
-         MENU_ENUM_LABEL_VALUE_SIMPLE_SETTINGS }
+         MENU_ENUM_LABEL_VALUE_SIMPLE_SETTINGS },
+      { MENU_ENUM_LABEL_SIMPLE_CONTROLS,
+         MENU_ENUM_LABEL_VALUE_SIMPLE_HEAD_PLAYING },
+      { MENU_ENUM_LABEL_SIMPLE_SCREEN,
+         MENU_ENUM_LABEL_VALUE_SIMPLE_HEAD_PLAYING },
+      { MENU_ENUM_LABEL_SIMPLE_SOUND,
+         MENU_ENUM_LABEL_VALUE_SIMPLE_HEAD_PLAYING },
+      { MENU_ENUM_LABEL_SIMPLE_SAVING,
+         MENU_ENUM_LABEL_VALUE_SIMPLE_HEAD_PLAYING },
+      { MENU_ENUM_LABEL_SIMPLE_LIBRARY,
+         MENU_ENUM_LABEL_VALUE_SIMPLE_HEAD_GAMES_ACCOUNTS },
+      { MENU_ENUM_LABEL_SIMPLE_ACCOUNTS,
+         MENU_ENUM_LABEL_VALUE_SIMPLE_HEAD_GAMES_ACCOUNTS },
+      { MENU_ENUM_LABEL_SIMPLE_ACCESSIBILITY,
+         MENU_ENUM_LABEL_VALUE_SIMPLE_HEAD_MENU },
+      { MENU_ENUM_LABEL_SIMPLE_INTERFACE,
+         MENU_ENUM_LABEL_VALUE_SIMPLE_HEAD_MENU },
+      { MENU_ENUM_LABEL_INPUT_OVERLAY_ENABLE,
+         MENU_ENUM_LABEL_VALUE_SIMPLE_HEAD_TOUCH },
+      { MENU_ENUM_LABEL_OVERLAY_TOUCH_LAYOUT,
+         MENU_ENUM_LABEL_VALUE_SIMPLE_HEAD_TOUCH },
+      { MENU_ENUM_LABEL_ENABLE_DEVICE_VIBRATION,
+         MENU_ENUM_LABEL_VALUE_SIMPLE_HEAD_TOUCH },
+      { MENU_ENUM_LABEL_INPUT_RETROPAD_BINDS,
+         MENU_ENUM_LABEL_VALUE_SIMPLE_HEAD_CONTROLLER },
+      { MENU_ENUM_LABEL_INPUT_MENU_ENUM_TOGGLE_GAMEPAD_COMBO,
+         MENU_ENUM_LABEL_VALUE_SIMPLE_HEAD_CONTROLLER },
+      { MENU_ENUM_LABEL_MENU_INPUT_SWAP_OK_CANCEL,
+         MENU_ENUM_LABEL_VALUE_SIMPLE_HEAD_CONTROLLER },
+      { MENU_ENUM_LABEL_INPUT_HOTKEY_BINDS,
+         MENU_ENUM_LABEL_VALUE_SIMPLE_HEAD_CONTROLLER },
+      { MENU_ENUM_LABEL_VIDEO_SMOOTH,
+         MENU_ENUM_LABEL_VALUE_SIMPLE_HEAD_PICTURE },
+      { MENU_ENUM_LABEL_VIDEO_ASPECT_RATIO_INDEX,
+         MENU_ENUM_LABEL_VALUE_SIMPLE_HEAD_PICTURE },
+      { MENU_ENUM_LABEL_SCREEN_ORIENTATION,
+         MENU_ENUM_LABEL_VALUE_SIMPLE_HEAD_DISPLAY },
+      { MENU_ENUM_LABEL_VIDEO_NOTCH_WRITE_OVER,
+         MENU_ENUM_LABEL_VALUE_SIMPLE_HEAD_DISPLAY },
+      { MENU_ENUM_LABEL_FPS_SHOW,
+         MENU_ENUM_LABEL_VALUE_SIMPLE_HEAD_DISPLAY },
+      { MENU_ENUM_LABEL_SAVESTATE_AUTO_LOAD,
+         MENU_ENUM_LABEL_VALUE_SIMPLE_HEAD_SAVE_STATES },
+      { MENU_ENUM_LABEL_SAVESTATE_AUTO_SAVE,
+         MENU_ENUM_LABEL_VALUE_SIMPLE_HEAD_SAVE_STATES },
+      { MENU_ENUM_LABEL_SAVESTATE_AUTO_INDEX,
+         MENU_ENUM_LABEL_VALUE_SIMPLE_HEAD_SAVE_STATES },
+      { MENU_ENUM_LABEL_SAVESTATE_MAX_KEEP,
+         MENU_ENUM_LABEL_VALUE_SIMPLE_HEAD_SAVE_STATES },
+      { MENU_ENUM_LABEL_AUTOSAVE_INTERVAL,
+         MENU_ENUM_LABEL_VALUE_SIMPLE_HEAD_SAVES_SYNC },
+      { MENU_ENUM_LABEL_CLOUD_SYNC_SETTINGS,
+         MENU_ENUM_LABEL_VALUE_SIMPLE_HEAD_SAVES_SYNC },
+      { MENU_ENUM_LABEL_USER_LANGUAGE,
+         MENU_ENUM_LABEL_VALUE_SIMPLE_HEAD_GENERAL },
+      { MENU_ENUM_LABEL_ONSCREEN_NOTIFICATIONS_SETTINGS,
+         MENU_ENUM_LABEL_VALUE_SIMPLE_HEAD_GENERAL },
+      { MENU_ENUM_LABEL_MENU_ENABLE_KIOSK_MODE,
+         MENU_ENUM_LABEL_VALUE_SIMPLE_HEAD_GENERAL },
+      { MENU_ENUM_LABEL_MENU_LAYOUT,
+         MENU_ENUM_LABEL_VALUE_SIMPLE_HEAD_APPEARANCE },
+      { MENU_ENUM_LABEL_MENU_SIMPLE_COLOR,
+         MENU_ENUM_LABEL_VALUE_SIMPLE_HEAD_APPEARANCE },
+      { MENU_ENUM_LABEL_MENU_SIMPLE_GAMEPAD_MODE,
+         MENU_ENUM_LABEL_VALUE_SIMPLE_HEAD_APPEARANCE }
    };
 
    sm->heads    = 0;
    sm->head_h   = sm->m->list_row * 0.72f * sm->scale;
    sm->head_gap = SIMPLE_HEAD_GAP * sm->scale * (sm->gamepad ? 0.5f : 1.0f);
-   if (!sm->downloads || !list)
+   if (!sm->headed || !list)
       return;
    for (i = 0; i < list->size && sm->heads < SIMPLE_HEADS; i++)
       for (j = 0; j < ARRAY_SIZE(rows); j++)
@@ -1961,7 +2028,6 @@ static void simple_draw_rows(simple_handle_t *sm, gfx_display_t *p_disp,
       menu_entry_t *entry = &sm->entry;
       bool selected       = (i == selection);
       bool more           = !sm->is_home && i == sm->more_idx;
-      bool section        = more && sm->downloads;
 
       simple_entry_rect(sm, i, &top, &h);
       head  = simple_heading(sm, i);
@@ -1971,7 +2037,7 @@ static void simple_draw_rows(simple_handle_t *sm, gfx_display_t *p_disp,
       if (     top - above >= bottom
             || (sm->is_home && top + h > bottom))
          break;
-      centre = section ? top + h - sm->head_h * 0.35f : top + h * 0.5f;
+      centre = more ? top + h - sm->head_h * 0.35f : top + h * 0.5f;
 
       MENU_ENTRY_INITIALIZE((*entry));
       entry->flags |= MENU_ENTRY_FLAG_RICH_LABEL_ENABLED
@@ -2035,8 +2101,9 @@ static void simple_draw_rows(simple_handle_t *sm, gfx_display_t *p_disp,
          bool choice    = note[0] && simple_is_choice(setting, entry->value);
          bool text      = setting && setting->type == ST_STRING;
 
-         if (section)
-            strlcpy(note, menu_displaylist_simple_downloads_open()
+         if (more)
+            strlcpy(note, !sm->downloads ? "\xE2\x80\xBA"
+                  : menu_displaylist_simple_downloads_open()
                   ? "\xE2\x88\x92" : "+", sizeof(note));
          else if (sm->opts && (entry->flags & MENU_ENTRY_FLAG_CHECKED))
             strlcpy(note, "CURRENT", sizeof(note));
@@ -2080,7 +2147,7 @@ static void simple_draw_rows(simple_handle_t *sm, gfx_display_t *p_disp,
             note_w = (w - x) - (lc - 24.0f * s);
             note[0] = '\0';
          }
-         if (section)
+         if (more)
          {
             simple_note(sm, note, w - x, centre, dims, sm->accent,
                   TEXT_ALIGN_RIGHT);
@@ -2089,12 +2156,11 @@ static void simple_draw_rows(simple_handle_t *sm, gfx_display_t *p_disp,
                   TEXT_ALIGN_LEFT);
             continue;
          }
-         simple_draw_word(sm, (more || (i >= sm->sub_from && !sm->is_home))
+         simple_draw_word(sm, (i >= sm->sub_from && !sm->is_home)
                ? SIMPLE_FONT_FULL : word_font, word,
                x, centre, h,
                w - 2.0f * x - (note_w > 0.0f ? note_w + 16.0f * s : 0.0f),
-               dims, more ? SIMPLE_COL_MUTED
-               : (sm->opts_color && i < MENU_SIMPLE_COLOR_LAST)
+               dims, (sm->opts_color && i < MENU_SIMPLE_COLOR_LAST)
                ? simple_accent[i] : SIMPLE_COL_FG);
 
          if (i == sm->open_idx && simple_is_number(setting, entry->value))

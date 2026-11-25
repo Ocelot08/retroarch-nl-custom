@@ -32,7 +32,6 @@ and solid at the bottom (`simple_band_fade`). Still to do:
 | Open the other More rows in place | Check each list's rows: some depend on the page they are on |
 | RA TESTER's own folders | It shares history, playlists, saves and core settings with the working app |
 | Keep settings changed during a game | Dropped now when the game has settings of its own; "Keeping changes" in `ia-v2.md` |
-| Headings on other pages | The driver draws them from a list of rows that start a group |
 | Box art, page animation, Quick Setup | See `plan.md` |
 
 ## Small fixes

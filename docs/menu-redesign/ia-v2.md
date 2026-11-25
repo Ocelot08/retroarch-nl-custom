@@ -69,7 +69,7 @@ Home
 **Right-side notes:**
 
 - **Games:** the number of systems; with only one system, the number of games.
-- **Downloads:** the installed cores; when updates exist, their number in the highlight colour (yellow unless changed).
+- **Downloads:** the installed cores; when updates exist, their number in the highlight colour (violet unless changed).
 - **Settings:** names its categories in turn, about 4 s each with a short fade. It stops while being navigated or after a touch, and follows Android's "Remove animations".
 - **Help:** help topics until Quick Setup is done and about 5 games have been started (from the play history), then "+ QUIT".
 
