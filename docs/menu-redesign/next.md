@@ -32,8 +32,10 @@ grey (`simple_art_draw`, `simple_band_fade`). Still to do:
 
 ## Small fixes
 
-- Letters Work Sans' Latin subset lacks, such as ź and ế, come from a
-  fallback font and are heavier than the rest of their word.
+- Of Greek, Work Sans has only Ω, μ and π, as symbols, so in a Greek word
+  they are lighter than the fallback font's letters around them.
+- The dot under letters such as ệ is faint: Work Sans Light draws it half the
+  size of a full stop.
 - Indic scripts show as boxes: no fallback font has them. Hebrew and Arabic
   notes (not words) are probably drawn backwards.
 
