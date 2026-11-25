@@ -17,10 +17,12 @@ and solid at the bottom (`simple_band_fade`). Still to do:
   game's detail page and the Game menu. Settings, Downloads and Help stay
   plain.
 
-- **Settings page notes:** "7+ SETTINGS" says too little. Idea, 25 Nov 2026:
-  each note cycles through the names of the settings on its page. Later,
-  animate the change, with control over when the cycle starts and when it
-  flips to the next name.
+- **Settings page notes, animated:** each note names in turn the settings on
+  its page (`simple_cycle`). When it starts, how long a name stays and the
+  delay from row to row are `SIMPLE_CYCLE_START`, `_HOLD` and `_WAVE`. Still
+  to do: animate the change itself, so that it moves down the page as a
+  wave, and follow Android's "Remove animations". The same could go on
+  Home, whose Settings note is to rotate in `ia-v2.md`.
 
 ## Features to build
 

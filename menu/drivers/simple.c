@@ -70,7 +70,14 @@ void android_app_update_viewport_inset(void);
 #define SIMPLE_GUTTER         22.0f
 #define SIMPLE_HEADS          8
 #define SIMPLE_HEAD_GAP       20.0f
-#define SIMPLE_COUNTED        8
+/* The Settings page's notes name in turn what is behind each row. In
+ * milliseconds: before the first change, and again after a touch or a
+ * button; between changes; and between one row's and the next's. */
+#define SIMPLE_CYCLE_START    2000.0f
+#define SIMPLE_CYCLE_HOLD     4000.0f
+#define SIMPLE_CYCLE_WAVE     100.0f
+#define SIMPLE_CYCLE_ROWS     8
+#define SIMPLE_CYCLE_NAMES    8
 #define SIMPLE_MORE_GAP       16.0f
 /* Edge bounce, as Material UI's: drag resistance past an end, the
  * furthest it may go as a share of the view, and the spring back */
@@ -155,7 +162,6 @@ typedef struct simple_handle
    size_t head_row[SIMPLE_HEADS];
    enum msg_hash_enums head_name[SIMPLE_HEADS];
    unsigned heads;
-   unsigned counts[SIMPLE_COUNTED];
    float head_h;
    float head_gap;          /* above a heading, but the page's first */
    size_t last_selection;
@@ -184,6 +190,11 @@ typedef struct simple_handle
    bool downloads;          /* the Downloads page */
    bool settings_page;
    bool keys;               /* moved by buttons since the last touch */
+   double cycle_ms;         /* for which names have changed */
+   float cycle_wait;        /* until they do again */
+   unsigned cycle_count[SIMPLE_CYCLE_ROWS];
+   unsigned cycle_at[SIMPLE_CYCLE_ROWS];
+   char cycle_name[SIMPLE_CYCLE_ROWS][SIMPLE_CYCLE_NAMES][64];
    char core_note[64];
    char msgbox[1024];
    /* Of the setting whose option list was last opened */
@@ -476,8 +487,8 @@ static void simple_quad(gfx_display_t *p_disp, void *userdata,
          dims, c, NULL);
 }
 
-/* The rows of the Settings page whose notes count what is behind them */
-static const enum msg_hash_enums simple_counted[SIMPLE_COUNTED] = {
+/* The rows of the Settings page whose notes name what is behind them */
+static const enum msg_hash_enums simple_cycled[SIMPLE_CYCLE_ROWS] = {
    MENU_ENUM_LABEL_SIMPLE_CONTROLS,
    MENU_ENUM_LABEL_SIMPLE_SCREEN,
    MENU_ENUM_LABEL_SIMPLE_SOUND,
@@ -624,7 +635,10 @@ static int simple_entry_action(void *userdata, menu_entry_t *entry,
 
    /* Taps never move the selection so */
    if (sm && (action == MENU_ACTION_UP || action == MENU_ACTION_DOWN))
-      sm->keys = true;
+   {
+      sm->keys       = true;
+      sm->cycle_wait = SIMPLE_CYCLE_START;
+   }
    if (sm && (action == MENU_ACTION_OK || action == MENU_ACTION_SELECT))
       simple_keep_options(sm, i);
 
@@ -1464,6 +1478,46 @@ static void simple_check_open(simple_handle_t *sm, menu_list_t *menu_list,
       sm->open_idx = (size_t)-1;
 }
 
+/* Which of @count names row @row shows, @ms after names began to change */
+static unsigned simple_cycle_item(double ms, unsigned row, unsigned count)
+{
+   ms -= row * SIMPLE_CYCLE_WAVE;
+   if (count < 2 || ms <= 0.0)
+      return 0;
+   return (unsigned)((ms / SIMPLE_CYCLE_HOLD) + 1.0) % count;
+}
+
+/* On the Settings page: a touch or a button holds the names still */
+static void simple_cycle(simple_handle_t *sm, bool opened)
+{
+   unsigned i;
+   float frame_ms = anim_get_ptr()->delta_time;
+
+   if (!sm->settings_page)
+      return;
+   if (opened)
+   {
+      sm->cycle_ms   = 0.0;
+      sm->cycle_wait = SIMPLE_CYCLE_START;
+      /* Looking settings up is slow: once, as the page opens */
+      for (i = 0; i < SIMPLE_CYCLE_ROWS; i++)
+         sm->cycle_count[i] = menu_displaylist_simple_names(
+               simple_cycled[i], sm->cycle_name[i][0],
+               sizeof(sm->cycle_name[i][0]), SIMPLE_CYCLE_NAMES);
+   }
+   if (frame_ms < 1.0f || frame_ms > 33.3f)
+      frame_ms = 16.667f;
+   if (sm->was_pressed || sm->bouncing)
+      sm->cycle_wait = SIMPLE_CYCLE_START;
+   else if (sm->cycle_wait > 0.0f)
+      sm->cycle_wait -= frame_ms;
+   else
+      sm->cycle_ms   += frame_ms;
+   for (i = 0; i < SIMPLE_CYCLE_ROWS; i++)
+      sm->cycle_at[i] = simple_cycle_item(sm->cycle_ms, i,
+            sm->cycle_count[i]);
+}
+
 static void simple_render(void *data, unsigned dims, bool is_idle)
 {
    size_t i;
@@ -1503,10 +1557,7 @@ static void simple_render(void *data, unsigned dims, bool is_idle)
    was_home     = sm->is_home;
    was_settings = sm->settings_page;
    simple_set_page(sm, settings->uints.menu_layout == MENU_LAYOUT_SIMPLE);
-   /* Looking settings up is slow: once, as the page opens */
-   if (sm->settings_page && !was_settings)
-      for (i = 0; i < SIMPLE_COUNTED; i++)
-         sm->counts[i] = menu_displaylist_simple_count(simple_counted[i]);
+   simple_cycle(sm, !was_settings);
    simple_check_open(sm, menu_list, list);
    simple_desc_layout(sm, dims);
    if (sm->is_home && !was_home)
@@ -1763,7 +1814,7 @@ static void simple_home_note(const simple_handle_t *sm, const char *label,
       strlcpy(s, "PAUSED", len);
 }
 
-/* The settings shown, and "+" for the More row each of them ends in */
+/* A Settings category's note: the name its turn has come to */
 static void simple_settings_note(const simple_handle_t *sm,
       const char *label, char *s, size_t len)
 {
@@ -1771,10 +1822,10 @@ static void simple_settings_note(const simple_handle_t *sm,
    s[0] = '\0';
    if (!sm->settings_page)
       return;
-   for (i = 0; i < SIMPLE_COUNTED; i++)
-      if (string_is_equal(label, msg_hash_to_str(simple_counted[i])))
+   for (i = 0; i < SIMPLE_CYCLE_ROWS; i++)
+      if (string_is_equal(label, msg_hash_to_str(simple_cycled[i])))
       {
-         snprintf(s, len, "%u+ SETTINGS", sm->counts[i]);
+         simple_upper(s, sm->cycle_name[i][sm->cycle_at[i]], len);
          return;
       }
 }
@@ -1956,7 +2007,8 @@ static void simple_draw_rows(simple_handle_t *sm, gfx_display_t *p_disp,
          char fitted[NAME_MAX_LENGTH];
          rarch_setting_t *setting = sm->is_home ? NULL
             : simple_row_setting(list, i);
-         float max_note = (w - 2.0f * x) * 0.5f;
+         float max_note = (w - 2.0f * x)
+            * (sm->settings_page ? 0.6f : 0.5f);
          float note_w;
          bool choice    = note[0] && simple_is_choice(setting, entry->value);
          bool text      = setting && setting->type == ST_STRING;

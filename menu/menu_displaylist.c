@@ -9846,7 +9846,8 @@ static const struct
 #endif
 };
 
-unsigned menu_displaylist_simple_count(enum msg_hash_enums row)
+unsigned menu_displaylist_simple_names(enum msg_hash_enums row,
+      char *s, size_t len, unsigned max)
 {
    size_t i;
    unsigned count                       = 0;
@@ -9872,8 +9873,9 @@ unsigned menu_displaylist_simple_count(enum msg_hash_enums row)
          list = pages[i].list;
    if (list == DISPLAYLIST_NONE)
       return 0;
-   for (i = 0; i < ARRAY_SIZE(simple_rows); i++)
+   for (i = 0; i < ARRAY_SIZE(simple_rows) && count < max; i++)
    {
+      const char *name;
       if (simple_rows[i].list != list)
          continue;
       if (simple_rows[i].name == MSG_UNKNOWN)
@@ -9884,7 +9886,12 @@ unsigned menu_displaylist_simple_count(enum msg_hash_enums row)
                || (   (setting->flags & SD_FLAG_ADVANCED)
                    && !settings->bools.menu_show_advanced_settings))
             continue;
+         if (!(name = menu_cbs_simple_name(setting->name)))
+            name = setting->short_description;
       }
+      else
+         name = msg_hash_to_str(simple_rows[i].name);
+      strlcpy(s + count * len, name ? name : "", len);
       count++;
    }
    return count;

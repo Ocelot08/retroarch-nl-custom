@@ -412,6 +412,9 @@ int menu_cbs_init_bind_scan(menu_file_list_cbs_t *cbs,
 int menu_cbs_init_bind_title(menu_file_list_cbs_t *cbs,
       const char *path, const char *label, unsigned type, size_t idx);
 
+/* The Simple layout's plain name for the setting @label, or NULL */
+const char *menu_cbs_simple_name(const char *label);
+
 #ifdef HAVE_LIBRETRODB
 int action_scan_directory(const char *path,
       const char *label, unsigned type, size_t idx);

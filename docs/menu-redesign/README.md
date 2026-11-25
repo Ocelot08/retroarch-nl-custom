@@ -105,8 +105,8 @@ Saving, Library, Accounts, Accessibility, Interface), Downloads and the
 Game menu's Controls and Screen are short lists of the common settings under plain
 names, each ending in a More row that opens the classic list. RetroArch's
 own lists, and the More rows, are drawn in smaller type. On the Settings
-page a category's note is the number of settings it shows, with a "+" for
-its More row. Games has Game
+page a category's note names in turn the settings on its page, a moment
+later from row to row, and holds still after a touch. Games has Game
 Lists, RetroArch's playlists, ending in Edit Game Lists. Downloads has
 violet headings over its groups, and its More row opens in place, as a trial:
 the rest of the Online Updater, without what is already above. The

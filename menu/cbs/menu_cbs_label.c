@@ -117,23 +117,28 @@ static const enum msg_hash_enums simple_names[][2] = {
       MENU_ENUM_LABEL_VALUE_SIMPLE_NAME_CHOOSE_FOLDER },
 };
 
+const char *menu_cbs_simple_name(const char *label)
+{
+   size_t i;
+   for (i = 0; i < ARRAY_SIZE(simple_names); i++)
+      if (string_is_equal(label, msg_hash_to_str(simple_names[i][0])))
+         return msg_hash_to_str(simple_names[i][1]);
+   return NULL;
+}
+
 static int action_bind_label_simple_name(
       file_list_t *list,
       unsigned type, unsigned i,
       const char *label, const char *path,
       char *s, size_t len)
 {
-   size_t j;
+   const char *name;
    const char *row = (list && i < list->size) ? list->list[i].label : NULL;
    if (     !row
          || config_get_ptr()->uints.menu_layout != MENU_LAYOUT_SIMPLE)
       return 0;
-   for (j = 0; j < ARRAY_SIZE(simple_names); j++)
-      if (string_is_equal(row, msg_hash_to_str(simple_names[j][0])))
-      {
-         strlcpy(s, msg_hash_to_str(simple_names[j][1]), len);
-         break;
-      }
+   if ((name = menu_cbs_simple_name(row)))
+      strlcpy(s, name, len);
    return 0;
 }
 
