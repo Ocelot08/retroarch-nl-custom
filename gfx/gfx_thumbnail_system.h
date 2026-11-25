@@ -46,7 +46,7 @@ static const char * const gfx_thumbnail_systems[][3] = {
    { "Nintendo - Pokemon Mini",       " pokemini ",            " min " },
    { "Nintendo - Satellaview",        " bsx ",                 " " },
    { "Sega - Mega Drive - Genesis",
-      " md gen genesis megadrive segagenesis segamegadrive smd ", " gen smd " },
+      " md gen sgen genesis megadrive segagenesis segamegadrive smd ", " gen smd " },
    { "Sega - Master System - Mark III",
       " sms mastersystem segamastersystem markiii ", " sms " },
    { "Sega - Mega-CD - Sega CD",      " segacd megacd scd ",   " " },
@@ -85,7 +85,9 @@ static const char * const gfx_thumbnail_systems[][3] = {
    { "Microsoft - MSX2",              " ",                     " mx2 " },
    { "Amstrad - CPC",                 " ",                     " cdt " },
    { "Sinclair - ZX Spectrum",        " zx ",                  " tzx " },
-   { "Sharp - X68000",                " x68k ",                " " }
+   { "Sharp - X68000",                " x68k ",                " " },
+   { "FBNeo - Arcade Games",          " fbneo fba cps1 cps2 cps3 ", " " },
+   { "DOS",                           " msdos ",               " " }
 };
 
 /* Lower case letters and digits of @src, between two spaces */
@@ -136,12 +138,15 @@ static const char *gfx_thumbnail_system_full(const char *name,
    {
       char full[64];
       const char *system = gfx_thumbnail_systems[i][0];
-      const char *model  = strstr(system, " - ") + 3;
+      const char *model  = strstr(system, " - ");
       if (strstr(gfx_thumbnail_systems[i][1], key))
          return system;
       gfx_thumbnail_system_key(full, sizeof(full), system, strlen(system));
       if (!strcmp(full, key))
-         return system;
+         return strcmp(system, name) ? system : NULL;
+      if (!model)
+         continue;
+      model += 3;
       gfx_thumbnail_system_key(full, sizeof(full), model, strlen(model));
       /* (but not "64", which two makers have) */
       if (strlen(full) > 4 && !strcmp(full, key))

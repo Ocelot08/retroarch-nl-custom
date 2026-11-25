@@ -2350,6 +2350,17 @@ static void simple_draw_word(simple_handle_t *sm, enum simple_font fi,
    simple_text(sm, fi, fitted, x, centre, dims, color, TEXT_ALIGN_LEFT);
 }
 
+/* RetroArch's ON and OFF, as other options are written. Other languages
+ * have them as they want them. */
+static const char *simple_option_word(const char *word)
+{
+   if (string_is_equal(word, "ON"))
+      return "On";
+   if (string_is_equal(word, "OFF"))
+      return "Off";
+   return word;
+}
+
 static void simple_draw_rows(simple_handle_t *sm, gfx_display_t *p_disp,
       void *userdata, unsigned dims, file_list_t *list, size_t selection)
 {
@@ -2394,6 +2405,8 @@ static void simple_draw_rows(simple_handle_t *sm, gfx_display_t *p_disp,
       else
          simple_saf_name(entry->path);
       word = entry->rich_label[0] ? entry->rich_label : entry->path;
+      if (sm->opts)
+         word = simple_option_word(word);
       /* Whole rows only: a part row's centre can be under the header */
       if (sm->log_rows && top >= view_t - 0.5f && top + h <= bottom + 0.5f)
          simple_log("row %u y=%d-%d \"%s\"", (unsigned)i, (int)top,
