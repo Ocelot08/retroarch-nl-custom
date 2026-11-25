@@ -3209,40 +3209,8 @@ static bool playlist_entry_path_is_valid(const char *entry_path)
    return path_is_valid(entry_path);
 }
 
-static int action_ok_dialog_init(struct menu_state *menu_st);
-
-/* Says why a game did not start. In the Simple layout, in plain words,
- * and with a way to allow its folder where the system has to. */
 static void action_ok_game_failed(const char *content_path,
-      const char *core_path)
-{
-   bool simple            = config_get_ptr()->uints.menu_layout
-      == MENU_LAYOUT_SIMPLE;
-   bool file_ok           = playlist_entry_path_is_valid(content_path);
-   enum msg_hash_enums id = MSG_FAILED_TO_LOAD_FROM_PLAYLIST;
-   const char *_msg       = NULL;
-
-#if defined(ANDROID) && defined(HAVE_SAF)
-   if (     simple && !file_ok
-         && string_starts_with_size(content_path, "saf://",
-            STRLEN_CONST("saf://")))
-   {
-      struct menu_state *menu_st = menu_state_get_ptr();
-      menu_dialog_confirm_set(menu_st, MSG_SIMPLE_GAME_FOLDER,
-            CMD_EVENT_MENU_CHOOSE_FOLDER);
-      action_ok_dialog_init(menu_st);
-      return;
-   }
-#endif
-   if (simple && content_path && *content_path && !file_ok)
-      id = MSG_SIMPLE_GAME_FILE;
-   else if (simple && core_path && *core_path && !path_is_valid(core_path))
-      id = MSG_SIMPLE_GAME_CORE;
-   _msg = msg_hash_to_str(id);
-   RARCH_ERR("[Content] %s\n", _msg);
-   runloop_msg_queue_push(_msg, strlen(_msg), 1, simple ? 300 : 100, true,
-         NULL, MESSAGE_QUEUE_ICON_DEFAULT, MESSAGE_QUEUE_CATEGORY_ERROR);
-}
+      const char *core_path);
 
 /* Simple layout's Continue: the newest History entry, with its core */
 static int action_ok_simple_continue(const char *path,
@@ -6844,6 +6812,39 @@ int action_ok_quit(const char *path, const char *label, unsigned type, size_t id
       return action_ok_dialog_init(menu_st);
    }
    return generic_action_ok_command(CMD_EVENT_QUIT);
+}
+
+/* Says why a game did not start. In the Simple layout, in plain words,
+ * and with a way to allow its folder where the system has to. */
+static void action_ok_game_failed(const char *content_path,
+      const char *core_path)
+{
+   bool simple            = config_get_ptr()->uints.menu_layout
+      == MENU_LAYOUT_SIMPLE;
+   bool file_ok           = playlist_entry_path_is_valid(content_path);
+   enum msg_hash_enums id = MSG_FAILED_TO_LOAD_FROM_PLAYLIST;
+   const char *_msg       = NULL;
+
+#if defined(ANDROID) && defined(HAVE_SAF)
+   if (     simple && !file_ok
+         && string_starts_with_size(content_path, "saf://",
+            STRLEN_CONST("saf://")))
+   {
+      struct menu_state *menu_st = menu_state_get_ptr();
+      menu_dialog_confirm_set(menu_st, MSG_SIMPLE_GAME_FOLDER,
+            CMD_EVENT_MENU_CHOOSE_FOLDER);
+      action_ok_dialog_init(menu_st);
+      return;
+   }
+#endif
+   if (simple && content_path && *content_path && !file_ok)
+      id = MSG_SIMPLE_GAME_FILE;
+   else if (simple && core_path && *core_path && !path_is_valid(core_path))
+      id = MSG_SIMPLE_GAME_CORE;
+   _msg = msg_hash_to_str(id);
+   RARCH_ERR("[Content] %s\n", _msg);
+   runloop_msg_queue_push(_msg, strlen(_msg), 1, simple ? 300 : 100, true,
+         NULL, MESSAGE_QUEUE_ICON_DEFAULT, MESSAGE_QUEUE_CATEGORY_ERROR);
 }
 
 int action_ok_restart_content(const char *path, const char *label, unsigned type, size_t idx, size_t entry_idx)
