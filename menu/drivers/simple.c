@@ -411,6 +411,7 @@ static void simple_fonts_load(simple_handle_t *sm, bool is_threaded)
       "IBMPlexMono-Medium.ttf", "WorkSans-Light.ttf",
       "WorkSans-Light.ttf", "IBMPlexMono-Medium.ttf" };
    char dir[DIR_MAX_LENGTH];
+   char pkg[DIR_MAX_LENGTH];
    char path[PATH_MAX_LENGTH];
    settings_t *settings  = config_get_ptr();
    gfx_display_t *p_disp = disp_get_ptr();
@@ -419,6 +420,8 @@ static void simple_fonts_load(simple_handle_t *sm, bool is_threaded)
    simple_fonts_free(sm);
    fill_pathname_join_special(dir, settings->paths.directory_assets,
          "simple", sizeof(dir));
+   fill_pathname_join_special(pkg, settings->paths.directory_assets,
+         "pkg", sizeof(pkg));
 
    for (i = 0; i < SIMPLE_FONT_LAST; i++)
    {
@@ -430,6 +433,9 @@ static void simple_fonts_load(simple_handle_t *sm, bool is_threaded)
             sm->m->font[i] * sm->scale, is_threaded);
       if (f->font)
       {
+         /* Where the fonts for other scripts are. No path of its own, so
+          * the menu's language does not change this one. */
+         font_driver_set_language_font(f->font, pkg, NULL);
          f->line_height        = (int)(f->font->metrics.height + 0.5f);
          f->line_ascender      = (int)(f->font->metrics.ascender + 0.5f);
          f->line_centre_offset = (int)((f->font->metrics.ascender

@@ -28,6 +28,9 @@ mkdir -p "$dst/assets" "$dst/overlays" "$dst/autoconfig" "$dst/info"
    --exclude=Makefile --exclude=configure --exclude=ctr --exclude=switch \
    --exclude=nxrgui --exclude=pkg --exclude=scripts .) \
    | (cd "$dst/assets" && tar xf -)
+# The fonts other scripts are drawn from, with their licences
+mkdir -p "$dst/assets/pkg"
+cp "$src/retroarch-assets/pkg/"*fallback-font.* "$dst/assets/pkg/"
 (cd "$src/common-overlays" && tar cf - --exclude=.git .) \
    | (cd "$dst/overlays" && tar xf -)
 cp -R "$src/retroarch-joypad-autoconfig/android" "$dst/autoconfig/"

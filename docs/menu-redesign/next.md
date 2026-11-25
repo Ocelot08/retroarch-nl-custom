@@ -32,7 +32,10 @@ grey (`simple_art_draw`, `simple_band_fade`). Still to do:
 
 ## Small fixes
 
-- Languages outside Latin show as boxes.
+- Letters Work Sans' Latin subset lacks, such as ź and ế, come from a
+  fallback font and are heavier than the rest of their word.
+- Indic scripts show as boxes: no fallback font has them. Hebrew and Arabic
+  notes (not words) are probably drawn backwards.
 
 ## To decide
 
