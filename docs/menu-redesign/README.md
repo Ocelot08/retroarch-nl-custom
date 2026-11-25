@@ -178,6 +178,9 @@ up and down are used, until the next touch.
 The fonts are in `pkg/android/phoenix/simple_fonts/` with their licences
 (SIL Open Font Licence 1.1); `bundle_assets.sh` copies them to
 `<assets>/simple/`, where the driver reads them. Work Sans is the project's
-own `fonts/ttf/WorkSans-Light.ttf`, unchanged, with every Latin letter. Other
+own `fonts/ttf/WorkSans-Light.ttf`, with every Latin letter. Its character map
+has been rebuilt without Ω, μ and π (U+03A9, U+03BC, U+03C0), its only Greek,
+so that Greek words come from one font; its DSIG went with it. The glyphs,
+and the ohm and micro signs, are as they were. Other
 scripts are drawn from RetroArch's fallback fonts, which the script bundles
 in `<assets>/pkg/`. If a font is missing the driver uses the default font.

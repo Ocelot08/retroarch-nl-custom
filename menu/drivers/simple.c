@@ -41,6 +41,7 @@
 #include "../../configuration.h"
 #include "../../core_info.h"
 #include "../../defaults.h"
+#include "../../paths.h"
 #include "../../playlist.h"
 #include "../../runloop.h"
 #include "../../command.h"
@@ -2182,6 +2183,15 @@ static size_t simple_crumb_parts(simple_handle_t *sm, bool *gap)
          strlcpy(title, "Home", sizeof(title));
       else if (i == stack->size - 1 && sm->opts)
          strlcpy(title, sm->opt_title, sizeof(title));
+      /* The Game menu by its game's name, also under a page or prompt */
+      else if (   string_is_equal(item->label,
+                     MENU_ENUM_LABEL_CONTENT_SETTINGS_STR)
+               && !path_is_empty(RARCH_PATH_CONTENT))
+      {
+         strlcpy(title, path_basename(path_get(RARCH_PATH_CONTENT)),
+               sizeof(title));
+         path_remove_extension(title);
+      }
       else if (i == stack->size - 1)
          menu_entries_get_title(title, sizeof(title));
       else if (cbs && cbs->action_get_title)
