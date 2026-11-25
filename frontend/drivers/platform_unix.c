@@ -133,6 +133,12 @@ enum platform_android_flags
 };
 
 static char app_dir[DIR_MAX_LENGTH];
+/* In shared storage. The test app has its own, to be deleted with it. */
+#ifdef SIMPLE_MENU_TEST
+#define ANDROID_USER_DIR "RA_TESTER"
+#else
+#define ANDROID_USER_DIR "RetroArch"
+#endif
 static char apk_dir[DIR_MAX_LENGTH];
 /* Where cores may load from: dataDir and nativeLibraryDir, realpath'd */
 static char android_core_dirs[2][DIR_MAX_LENGTH];
@@ -3447,7 +3453,7 @@ static void frontend_unix_get_env(int *argc,
                /* sdcard is writable, this should be the case most of the time*/
                case INTERNAL_STORAGE_WRITABLE:
                   fill_pathname_join(parent_path,
-                        internal_storage_path, "RetroArch",
+                        internal_storage_path, ANDROID_USER_DIR,
                         sizeof(parent_path));
                   break;
             }
@@ -4187,7 +4193,7 @@ static int frontend_unix_parse_drive_list(void *data, bool load_content)
          {
             char user_data_path[PATH_MAX_LENGTH];
             fill_pathname_join_special(user_data_path,
-                  internal_storage_path, "RetroArch",
+                  internal_storage_path, ANDROID_USER_DIR,
                   sizeof(user_data_path));
 
             menu_entries_append(list,
