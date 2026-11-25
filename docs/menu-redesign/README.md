@@ -8,6 +8,7 @@ Working files for the phone-first menu redesign.
 | `ia-current.csv` | Crawl of the current menus on Android, 4 levels below Main Menu |
 | `ia-v1.md` | Proposed structure, v1: Claude Code's first pass |
 | `ia-v2.md` | Proposed structure, v2: the merged direction, the chosen designs and the decisions since v1 |
+| `next.md` | Notes and features that may come next, not yet built |
 
 Each proposed structure is a separate `ia-vN.md`, so versions can be
 compared and tried one at a time.
@@ -103,9 +104,11 @@ In the Simple layout, every Settings category (Controls, Screen, Sound,
 Saving, Library, Accounts, Accessibility, Interface), Downloads and the
 Game menu's Controls and Screen are short lists of the common settings under plain
 names, each ending in a More row that opens the classic list. RetroArch's
-own lists, and the More rows, are drawn in smaller type. Games has Game
+own lists, and the More rows, are drawn in smaller type. On the Settings
+page a category's note is the number of settings it shows, with a "+" for
+its More row. Games has Game
 Lists, RetroArch's playlists, ending in Edit Game Lists. Downloads has
-headings over its groups, and its More row opens in place, as a trial:
+violet headings over its groups, and its More row opens in place, as a trial:
 the rest of the Online Updater, without what is already above. The
 breadcrumb shows the whole path,
 the middle levels as an ellipsis when it is too long. Help has Switch to
@@ -124,7 +127,9 @@ Gamepad Mode (Help, or Settings › Interface) draws the menu in a 4:3
 box at the top, smaller, with button hints, and shows the touch controls
 below it to work the menu with. Without it the menu fills the screen and
 the touch controls are hidden while the menu is open. Other drivers keep
-"Hide Overlay in Menu" as it is.
+"Hide Overlay in Menu" as it is. The line at the left of the selected row
+is for Gamepad Mode; in touch mode it shows only while a controller's
+up and down are used, until the next touch.
 
 The fonts are in `pkg/android/phoenix/simple_fonts/` with their licences
 (SIL Open Font Licence 1.1); `bundle_assets.sh` copies them to

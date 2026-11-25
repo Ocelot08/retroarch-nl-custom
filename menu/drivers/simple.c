@@ -45,7 +45,6 @@
 #include "../../command.h"
 #include "../../input/input_driver.h"
 #include "../../input/input_osk.h"
-#include "../../audio/audio_driver.h"
 #include "../menu_setting.h"
 #include "../../setting_list.h"
 #include "../../msg_hash_lbl_str.h"
@@ -70,7 +69,8 @@ void android_app_update_viewport_inset(void);
 #define SIMPLE_DESIGN_WIDTH   360.0f
 #define SIMPLE_GUTTER         22.0f
 #define SIMPLE_HEADS          8
-#define SIMPLE_SUB_INDENT     14.0f
+#define SIMPLE_HEAD_GAP       20.0f
+#define SIMPLE_COUNTED        8
 #define SIMPLE_MORE_GAP       16.0f
 /* Edge bounce, as Material UI's: drag resistance past an end, the
  * furthest it may go as a share of the view, and the spring back */
@@ -90,6 +90,7 @@ void android_app_update_viewport_inset(void);
 #define SIMPLE_COL_ACCENT     0xF2D64BFF
 #define SIMPLE_COL_SHEET      0x20232BFF
 #define SIMPLE_COL_SELECT     0x4A5060FF   /* selected text */
+#define SIMPLE_COL_HEAD       0x9A8FD0FF   /* section headings */
 
 enum simple_font
 {
@@ -154,7 +155,9 @@ typedef struct simple_handle
    size_t head_row[SIMPLE_HEADS];
    enum msg_hash_enums head_name[SIMPLE_HEADS];
    unsigned heads;
+   unsigned counts[SIMPLE_COUNTED];
    float head_h;
+   float head_gap;          /* above a heading, but the page's first */
    size_t last_selection;
    /* A number row opened to its slider, or (size_t)-1 */
    size_t open_idx;
@@ -179,6 +182,8 @@ typedef struct simple_handle
    bool was_pressed;
    bool opts;               /* the option list opt_path names */
    bool downloads;          /* the Downloads page */
+   bool settings_page;
+   bool keys;               /* moved by buttons since the last touch */
    char core_note[64];
    char msgbox[1024];
    /* Of the setting whose option list was last opened */
@@ -471,18 +476,17 @@ static void simple_quad(gfx_display_t *p_disp, void *userdata,
          dims, c, NULL);
 }
 
-static uint32_t simple_mix(uint32_t a, uint32_t b, float t)
-{
-   uint32_t out = 0xFF;
-   int shift;
-   for (shift = 8; shift <= 24; shift += 8)
-   {
-      float ca = (float)((a >> shift) & 0xFF);
-      float cb = (float)((b >> shift) & 0xFF);
-      out     |= (uint32_t)(ca + (cb - ca) * t + 0.5f) << shift;
-   }
-   return out;
-}
+/* The rows of the Settings page whose notes count what is behind them */
+static const enum msg_hash_enums simple_counted[SIMPLE_COUNTED] = {
+   MENU_ENUM_LABEL_SIMPLE_CONTROLS,
+   MENU_ENUM_LABEL_SIMPLE_SCREEN,
+   MENU_ENUM_LABEL_SIMPLE_SOUND,
+   MENU_ENUM_LABEL_SIMPLE_SAVING,
+   MENU_ENUM_LABEL_SIMPLE_LIBRARY,
+   MENU_ENUM_LABEL_SIMPLE_ACCOUNTS,
+   MENU_ENUM_LABEL_SIMPLE_ACCESSIBILITY,
+   MENU_ENUM_LABEL_SIMPLE_INTERFACE
+};
 
 /* Vertices run bottom-left, bottom-right, top-left, top-right */
 static void simple_grad_quad(gfx_display_t *p_disp, void *userdata,
@@ -499,15 +503,26 @@ static void simple_grad_quad(gfx_display_t *p_disp, void *userdata,
          dims, c, NULL);
 }
 
-/* Colour at the top, eased into the background so it has no edge */
-static void simple_band_quad(gfx_display_t *p_disp, void *userdata,
+/* Behind the fade: the colours, until box art takes their place. Short
+ * of the fade's end, so that rounding leaves no edge. */
+static void simple_band_back(gfx_display_t *p_disp, void *userdata,
       unsigned dims, float h, uint32_t left, uint32_t right)
 {
-   float h1      = h * 0.45f;
-   uint32_t ml   = simple_mix(left,  SIMPLE_COL_BG, 0.75f);
-   uint32_t mr   = simple_mix(right, SIMPLE_COL_BG, 0.75f);
-   simple_grad_quad(p_disp, userdata, dims, 0.0f, h1, left, right, ml, mr);
-   simple_grad_quad(p_disp, userdata, dims, h1, h - h1, ml, mr,
+   simple_grad_quad(p_disp, userdata, dims, 0.0f, h - 2.0f,
+         left, right, left, right);
+}
+
+/* The page's grey over whatever is behind, clear at the top and solid
+ * at the bottom, so it has no edge */
+static void simple_band_fade(gfx_display_t *p_disp, void *userdata,
+      unsigned dims, float h)
+{
+   float h1       = (float)(int)(h * 0.45f);
+   uint32_t clear = SIMPLE_COL_BG & 0xFFFFFF00;
+   uint32_t most  = clear | 0xBF;
+   simple_grad_quad(p_disp, userdata, dims, 0.0f, h1,
+         clear, clear, most, most);
+   simple_grad_quad(p_disp, userdata, dims, h1, h - h1, most, most,
          SIMPLE_COL_BG, SIMPLE_COL_BG);
 }
 
@@ -607,6 +622,9 @@ static int simple_entry_action(void *userdata, menu_entry_t *entry,
 {
    simple_handle_t *sm = (simple_handle_t*)userdata;
 
+   /* Taps never move the selection so */
+   if (sm && (action == MENU_ACTION_UP || action == MENU_ACTION_DOWN))
+      sm->keys = true;
    if (sm && (action == MENU_ACTION_OK || action == MENU_ACTION_SELECT))
       simple_keep_options(sm, i);
 
@@ -758,7 +776,7 @@ static void simple_entry_rect(const simple_handle_t *sm, size_t i,
    {
       unsigned k;
       for (k = 0; k < sm->heads && sm->head_row[k] <= i; k++)
-         *top += sm->head_h;
+         *top += sm->head_h + (sm->head_row[k] ? sm->head_gap : 0.0f);
    }
    if (i >= sm->more_idx)
       *top += SIMPLE_MORE_GAP * s;
@@ -779,7 +797,8 @@ static void simple_scroll(simple_handle_t *sm, const file_list_t *list,
    float extent = (float)size * sm->m->list_row * s
       + (sm->more_idx < size ? SIMPLE_MORE_GAP * s : 0.0f)
       + (sm->open_idx < size ? sm->m->list_row * s : 0.0f)
-      + (float)sm->heads * sm->head_h;
+      + (float)sm->heads * (sm->head_h + sm->head_gap)
+      - ((sm->heads && !sm->head_row[0]) ? sm->head_gap : 0.0f);
 
    max = extent - (bottom - view_t);
    if (max < 0.0f)
@@ -1296,6 +1315,8 @@ static void simple_set_page(simple_handle_t *sm, bool simple_layout)
    sm->is_home = simple_layout && string_is_equal(label,
          msg_hash_to_str(MENU_ENUM_LABEL_MAIN_MENU));
    sm->full      = !sm->is_home;
+   sm->settings_page = simple_layout && string_is_equal(label,
+         msg_hash_to_str(MENU_ENUM_LABEL_DEFERRED_SIMPLE_SETTINGS_LIST));
    sm->downloads = simple_layout && string_is_equal(label, msg_hash_to_str(
             MENU_ENUM_LABEL_DEFERRED_SIMPLE_DOWNLOADS_LIST));
    if (!simple_layout || sm->is_home)
@@ -1386,8 +1407,9 @@ static void simple_find_heads(simple_handle_t *sm, const file_list_t *list)
          MENU_ENUM_LABEL_VALUE_SIMPLE_SETTINGS }
    };
 
-   sm->heads  = 0;
-   sm->head_h = sm->m->list_row * 0.72f * sm->scale;
+   sm->heads    = 0;
+   sm->head_h   = sm->m->list_row * 0.72f * sm->scale;
+   sm->head_gap = SIMPLE_HEAD_GAP * sm->scale * (sm->gamepad ? 0.5f : 1.0f);
    if (!sm->downloads || !list)
       return;
    for (i = 0; i < list->size && sm->heads < SIMPLE_HEADS; i++)
@@ -1456,6 +1478,7 @@ static void simple_render(void *data, unsigned dims, bool is_idle)
    settings_t *settings       = config_get_ptr();
    bool gamepad               = settings->bools.menu_simple_gamepad_mode;
    bool was_home;
+   bool was_settings;
 
    if (!sm)
       return;
@@ -1477,8 +1500,13 @@ static void simple_render(void *data, unsigned dims, bool is_idle)
       simple_fonts_load(sm, video_driver_is_threaded());
    }
 
-   was_home = sm->is_home;
+   was_home     = sm->is_home;
+   was_settings = sm->settings_page;
    simple_set_page(sm, settings->uints.menu_layout == MENU_LAYOUT_SIMPLE);
+   /* Looking settings up is slow: once, as the page opens */
+   if (sm->settings_page && !was_settings)
+      for (i = 0; i < SIMPLE_COUNTED; i++)
+         sm->counts[i] = menu_displaylist_simple_count(simple_counted[i]);
    simple_check_open(sm, menu_list, list);
    simple_desc_layout(sm, dims);
    if (sm->is_home && !was_home)
@@ -1511,6 +1539,8 @@ static void simple_render(void *data, unsigned dims, bool is_idle)
    {
       bool pressed = (sm->pointer.flags & MENU_INP_PTR_FLG_PRESSED) ? true : false;
       float st, x0, x1;
+      if (pressed)
+         sm->keys = false;
       if (!pressed)
          sm->sliding = false;
       else if (!sm->was_pressed
@@ -1733,41 +1763,20 @@ static void simple_home_note(const simple_handle_t *sm, const char *label,
       strlcpy(s, "PAUSED", len);
 }
 
-/* A Settings category's note: the setting that best sums it up */
-static void simple_settings_note(const char *label, char *s, size_t len)
+/* The settings shown, and "+" for the More row each of them ends in */
+static void simple_settings_note(const simple_handle_t *sm,
+      const char *label, char *s, size_t len)
 {
-   settings_t *settings = config_get_ptr();
+   size_t i;
    s[0] = '\0';
-   if (string_is_equal(label, MENU_ENUM_LABEL_SIMPLE_CONTROLS_STR))
-      strlcpy(s, !settings->bools.input_overlay_enable ? "TOUCH OFF"
-            : settings->bools.input_overlay_hide_when_gamepad_connected
-            ? "TOUCH \xC2\xB7 AUTO" : "TOUCH ON", len);
-   else if (string_is_equal(label, MENU_ENUM_LABEL_SIMPLE_SCREEN_STR))
-      strlcpy(s, settings->bools.video_smooth
-            ? "SMOOTH" : "SHARP PIXELS", len);
-   else if (string_is_equal(label, MENU_ENUM_LABEL_SIMPLE_SOUND_STR))
-      strlcpy(s, audio_state_get_ptr()->mute_enable ? "MUTED"
-            : settings->bools.audio_enable ? "ON" : "OFF", len);
-   else if (string_is_equal(label, MENU_ENUM_LABEL_SIMPLE_SAVING_STR))
-      strlcpy(s, settings->bools.savestate_auto_load
-            ? "RESUME ON" : "RESUME OFF", len);
-   else if (string_is_equal(label, MENU_ENUM_LABEL_SIMPLE_LIBRARY_STR))
-      strlcpy(s, settings->bools.network_on_demand_thumbnails
-            ? "BOX ART ON" : "BOX ART OFF", len);
-#ifdef HAVE_CHEEVOS
-   else if (string_is_equal(label, MENU_ENUM_LABEL_SIMPLE_ACCOUNTS_STR))
-   {
-      if (*settings->arrays.cheevos_username)
-         simple_upper(s, settings->arrays.cheevos_username, len);
-      else
-         strlcpy(s, "NOT SIGNED IN", len);
-   }
-#endif
-   else if (string_is_equal(label, MENU_ENUM_LABEL_SIMPLE_ACCESSIBILITY_STR))
-      strlcpy(s, settings->bools.accessibility_enable ? "ON" : "OFF", len);
-   else if (string_is_equal(label, MENU_ENUM_LABEL_SIMPLE_INTERFACE_STR))
-      strlcpy(s, settings->uints.menu_layout == MENU_LAYOUT_SIMPLE
-            ? "SIMPLE" : "CLASSIC", len);
+   if (!sm->settings_page)
+      return;
+   for (i = 0; i < SIMPLE_COUNTED; i++)
+      if (string_is_equal(label, msg_hash_to_str(simple_counted[i])))
+      {
+         snprintf(s, len, "%u+ SETTINGS", sm->counts[i]);
+         return;
+      }
 }
 
 static void simple_draw_continue(simple_handle_t *sm, unsigned dims,
@@ -1878,18 +1887,17 @@ static void simple_draw_rows(simple_handle_t *sm, gfx_display_t *p_disp,
    {
       const char *word;
       const char *head;
-      float top, h, centre, rx;
+      float top, h, centre, above;
       menu_entry_t *entry = &sm->entry;
       bool selected       = (i == selection);
       bool more           = !sm->is_home && i == sm->more_idx;
 
       simple_entry_rect(sm, i, &top, &h);
       head  = simple_heading(sm, i);
-      rx    = x + (i >= sm->sub_from && !sm->is_home
-            ? SIMPLE_SUB_INDENT * s : 0.0f);
+      above = head ? sm->head_h + (i ? sm->head_gap : 0.0f) : 0.0f;
       if (top + h <= view_t)
          continue;
-      if (     top - (head ? sm->head_h : 0.0f) >= bottom
+      if (     top - above >= bottom
             || (sm->is_home && top + h > bottom))
          break;
       centre = top + h * 0.5f;
@@ -1904,8 +1912,9 @@ static void simple_draw_rows(simple_handle_t *sm, gfx_display_t *p_disp,
          simple_log("row %u y=%d-%d \"%s\"", (unsigned)i, (int)top,
                (int)(top + h), word);
 
-      /* Yellow is the gamepad selection; touch gets a quiet mark */
-      if (selected)
+      /* Yellow is the gamepad selection. Touch has none, but a
+       * controller in touch mode gets a quiet mark */
+      if (selected && (sm->gamepad || sm->keys))
       {
          float mark_h = sm->has_continue && i == 0
             ? (sm->m->cont_title_y - sm->m->cont_label_y + 24.0f) * s
@@ -1926,13 +1935,13 @@ static void simple_draw_rows(simple_handle_t *sm, gfx_display_t *p_disp,
 
       if (!more && (i > 0 || !sm->is_home || sm->has_continue))
          simple_quad(p_disp, userdata, dims, x,
-               top - (head ? sm->head_h : 0.0f), w - 2.0f * x, line,
+               top - above, w - 2.0f * x, line,
                SIMPLE_COL_LINE);
       if (head)
       {
          simple_upper(note, head, sizeof(note));
-         simple_note(sm, note, rx, top - sm->head_h * 0.35f, dims,
-               SIMPLE_COL_MUTED, TEXT_ALIGN_LEFT);
+         simple_note(sm, note, x, top - sm->head_h * 0.35f, dims,
+               SIMPLE_COL_HEAD, TEXT_ALIGN_LEFT);
       }
 
       if (sm->is_home)
@@ -1940,7 +1949,8 @@ static void simple_draw_rows(simple_handle_t *sm, gfx_display_t *p_disp,
       else if (entry->value[0] && !string_is_equal(entry->value, "..."))
          simple_upper(note, entry->value, sizeof(note));
       else
-         simple_settings_note(list->list[i].label, note, sizeof(note));
+         simple_settings_note(sm, list->list[i].label, note,
+               sizeof(note));
 
       {
          char fitted[NAME_MAX_LENGTH];
@@ -1997,8 +2007,8 @@ static void simple_draw_rows(simple_handle_t *sm, gfx_display_t *p_disp,
          }
          simple_draw_word(sm, (more || (i >= sm->sub_from && !sm->is_home))
                ? SIMPLE_FONT_FULL : word_font, word,
-               rx, centre, h,
-               w - x - rx - (note_w > 0.0f ? note_w + 16.0f * s : 0.0f),
+               x, centre, h,
+               w - 2.0f * x - (note_w > 0.0f ? note_w + 16.0f * s : 0.0f),
                dims, more ? SIMPLE_COL_MUTED : SIMPLE_COL_FG);
 
          if (i == sm->open_idx && simple_is_number(setting, entry->value))
@@ -2205,8 +2215,9 @@ static void simple_frame(void *data, video_frame_info_t *video_info)
       while (name && *name)
          hash = hash * 31 + (unsigned char)*name++;
       pick = hash % (sizeof(simple_band) / sizeof(simple_band[0]));
-      simple_band_quad(p_disp, userdata, dims, sm->m->band_h * sm->scale,
+      simple_band_back(p_disp, userdata, dims, sm->m->band_h * sm->scale,
             simple_band[pick][0], simple_band[pick][1]);
+      simple_band_fade(p_disp, userdata, dims, sm->m->band_h * sm->scale);
    }
 
    if (list && list->size)

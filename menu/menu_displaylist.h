@@ -421,6 +421,10 @@ void menu_displaylist_info_free(menu_displaylist_info_t *info);
 void menu_displaylist_validation_dump(rarch_setting_t *list_settings);
 #endif
 
+/* How many rows a category of the Simple layout's Settings shows, its
+ * More row aside */
+unsigned menu_displaylist_simple_count(enum msg_hash_enums row);
+
 /* Whether the Simple layout's More Downloads is open on its page */
 bool menu_displaylist_simple_downloads_open(void);
 void menu_displaylist_simple_downloads_set(bool open);
