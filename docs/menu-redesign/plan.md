@@ -168,8 +168,7 @@ The first and the lost presses were seen on the driver before the two lines were
 - **Not yet in the Settings lists, against `ia-v2.md`:** Screen Style
   (needs its preview page and the shader choice), one Resume toggle
   for auto save and load (two rows for now), Menu Mode with Auto (the
-  Gamepad Mode switch for now), Ask Before Keeping Changes. Show Box Art
-  appears once the simple driver draws art. Folder settings show no
+  Gamepad Mode switch for now), Ask Before Keeping Changes. Folder settings show no
   value in the simple driver.
 - **A tap now and then is not logged** right after going back to a page:
   the app saw no tap at all. The scripted check retries a tap the app did

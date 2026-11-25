@@ -18661,6 +18661,7 @@ static void settings_build_menu(
       if (   string_is_equal(settings->arrays.menu_driver, "xmb")
           || string_is_equal(settings->arrays.menu_driver, "ozone")
           || string_is_equal(settings->arrays.menu_driver, "rgui")
+          || string_is_equal(settings->arrays.menu_driver, "simple")
           || string_is_equal(settings->arrays.menu_driver, "glui"))
       {
          enum msg_hash_enums thumbnails_label_value;
@@ -18704,21 +18705,25 @@ static void settings_build_menu(
          menu_settings_list_current_add_range(list, list_info, 0, PLAYLIST_THUMBNAIL_MODE_LAST - PLAYLIST_THUMBNAIL_MODE_OFF - 1, 1, true, true);
          (*list)[list_info->index - 1].ui_type   = ST_UI_TYPE_UINT_RADIO_BUTTONS;
 
-         CONFIG_UINT(
-               list, list_info,
-               &settings->uints.menu_left_thumbnails,
-               MENU_ENUM_LABEL_LEFT_THUMBNAILS,
-               left_thumbnails_label_value,
-               DEFAULT_MENU_LEFT_THUMBNAILS_DEFAULT,
-               &group_info,
-               &subgroup_info,
-               parent_group,
-               general_write_handler,
-               general_read_handler);
-         SETTINGS_ACTION_SET(ok, &(*list)[list_info->index - 1], &setting_action_ok_uint)
-         SETTINGS_ACTION_SET(repr, &(*list)[list_info->index - 1], &setting_get_string_representation_uint_menu_thumbnails)
-         menu_settings_list_current_add_range(list, list_info, 0, PLAYLIST_THUMBNAIL_MODE_LAST - PLAYLIST_THUMBNAIL_MODE_OFF - 1, 1, true, true);
-         (*list)[list_info->index - 1].ui_type   = ST_UI_TYPE_UINT_RADIO_BUTTONS;
+         /* (Simple shows one, on Home) */
+         if (!string_is_equal(settings->arrays.menu_driver, "simple"))
+         {
+            CONFIG_UINT(
+                  list, list_info,
+                  &settings->uints.menu_left_thumbnails,
+                  MENU_ENUM_LABEL_LEFT_THUMBNAILS,
+                  left_thumbnails_label_value,
+                  DEFAULT_MENU_LEFT_THUMBNAILS_DEFAULT,
+                  &group_info,
+                  &subgroup_info,
+                  parent_group,
+                  general_write_handler,
+                  general_read_handler);
+            SETTINGS_ACTION_SET(ok, &(*list)[list_info->index - 1], &setting_action_ok_uint)
+            SETTINGS_ACTION_SET(repr, &(*list)[list_info->index - 1], &setting_get_string_representation_uint_menu_thumbnails)
+            menu_settings_list_current_add_range(list, list_info, 0, PLAYLIST_THUMBNAIL_MODE_LAST - PLAYLIST_THUMBNAIL_MODE_OFF - 1, 1, true, true);
+            (*list)[list_info->index - 1].ui_type   = ST_UI_TYPE_UINT_RADIO_BUTTONS;
+         }
       }
 
       if (string_is_equal(settings->arrays.menu_driver, "xmb"))

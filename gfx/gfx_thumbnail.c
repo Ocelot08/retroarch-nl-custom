@@ -35,6 +35,7 @@
 
 #include "gfx_display.h"
 #include "gfx_anim_preview.h"
+#include "gfx_thumbnail_system.h"
 #include "gfx_media_player.h"
 #include "gfx_media_cpu.h"
 #include "gfx_animation.h"
@@ -3399,7 +3400,12 @@ bool gfx_thumbnail_update_path_cfg(
       const char *type = gfx_thumbnail_get_type(gfx_thumbnails,
             menu_left_thumbnails, menu_icon_thumbnails, path_data, thumbnail_id);
       bool thumbnail_found = false;
+      /* A list called GBA, say, has its art under that name, or the
+       * system's full one */
+      const char *system_full = gfx_thumbnail_system_full(system_name,
+            path_data->content_path);
       /* > Normal content: assemble path */
+thumbnail_lookup:
 
       /* >> Base + system name */
       fill_pathname_join_special(thumbnail_path, dir_thumbnails,
@@ -3474,6 +3480,12 @@ bool gfx_thumbnail_update_path_cfg(
                thumbnail_found = path_is_valid(thumbnail_path);
             }
          }
+      }
+      if (!thumbnail_found && system_full)
+      {
+         system_name = system_full;
+         system_full = NULL;
+         goto thumbnail_lookup;
       }
       /* This logic is valid for locally stored thumbnails. For optional downloads,
        * gfx_thumbnail_get_img_name() is used */

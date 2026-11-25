@@ -35,6 +35,7 @@
 
 #ifdef RARCH_INTERNAL
 #include "../gfx/gfx_thumbnail.h"
+#include "../gfx/gfx_thumbnail_system.h"
 #ifdef HAVE_MENU
 #include "../menu/menu_cbs.h"
 #include "../menu/menu_driver.h"
@@ -237,6 +238,14 @@ static bool task_pl_thumbnail_get_thumbnail_paths(
    }
    else
       system_name = db_name;
+
+   /* The server has full system names only */
+   {
+      const char *full = gfx_thumbnail_system_full(system_name,
+            pl_thumb->thumbnail_path_data->content_path);
+      if (full)
+         system_name = full;
+   }
 
    /* Generate local path */
    fill_pathname_join_special(path, pl_thumb->dir_thumbnails,

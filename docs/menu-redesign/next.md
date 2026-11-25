@@ -12,9 +12,9 @@ grey (`simple_art_draw`, `simple_band_fade`). Still to do:
 - **Other pages** it could go on, from `ia-v2.md`: Games and its lists, and a
   game's detail page. The Game menu waits for its own redesign. Settings,
   Downloads and Help stay plain.
-- **Downloading covers** asks the server for a list's own name, so a list
-  called GBA probably finds none: Home finds art already there by the core's
-  systems instead. Not tried.
+- **Downloading covers** for a list with a short name (below in
+  `README.md`) is not tried: on 25 Nov 2026 the thumbnail server listed no
+  systems at all.
 
 - **Settings page notes, animated:** each note names in turn the settings on
   its page (`simple_cycle`). When it starts, how long a name stays and the

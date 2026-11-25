@@ -1208,42 +1208,21 @@ static void simple_arrows(simple_handle_t *sm, unsigned dims,
    *left_c  = *value_r - value_w - SIMPLE_ARROW_GAP * s - aw * 0.5f;
 }
 
-/* The last game's box art, as Show Box Art says: where its list's name
- * says, else where the systems of its core do, as a list can have any
- * name */
+/* The last game's box art, as Show Box Art says */
 static void simple_art_find(simple_handle_t *sm)
 {
-   const struct playlist_entry *entry = NULL;
-   core_info_t *info                  = NULL;
-   const char *path                   = "";
-   gfx_thumbnail_path_data_t *data    = gfx_thumbnail_path_init();
-   playlist_t *history                = g_defaults.content_history;
+   const char *path                = "";
+   gfx_thumbnail_path_data_t *data = gfx_thumbnail_path_init();
+   playlist_t *history             = g_defaults.content_history;
 
    if (!data)
       return;
    gfx_thumbnail_set_system(data, "history", history);
    if (     history && playlist_size(history) > 0
-         && gfx_thumbnail_set_content_playlist(data, history, 0))
-   {
-      size_t i;
-      bool found = gfx_thumbnail_update_path(data, GFX_THUMBNAIL_RIGHT)
-         && path_is_valid(data->right_path);
-
-      playlist_get_index(history, 0, &entry);
-      if (     !found && entry && entry->core_path
-            && core_info_find(entry->core_path, &info)
-            && info && info->databases_list)
-         for (i = 0; i < info->databases_list->size && !found; i++)
-         {
-            strlcpy(data->content_db_name,
-                  info->databases_list->elems[i].data,
-                  sizeof(data->content_db_name));
-            found = gfx_thumbnail_update_path(data, GFX_THUMBNAIL_RIGHT)
-               && path_is_valid(data->right_path);
-         }
-      if (found)
-         path = data->right_path;
-   }
+         && gfx_thumbnail_set_content_playlist(data, history, 0)
+         && gfx_thumbnail_update_path(data, GFX_THUMBNAIL_RIGHT)
+         && path_is_valid(data->right_path))
+      path = data->right_path;
    if (!string_is_equal(path, sm->art_path))
    {
       strlcpy(sm->art_path, path, sizeof(sm->art_path));
