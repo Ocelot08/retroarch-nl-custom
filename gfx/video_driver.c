@@ -8944,8 +8944,12 @@ bool video_driver_init_internal(bool *video_is_threaded, bool verbosity_enabled)
    else
       video_st->scanline[SCANLINE_ACTIVE] = 0;
 
+#ifdef ANDROID
+   android_app_update_orientation();
+#else
    if ((enum rotation)settings->uints.screen_orientation != ORIENTATION_NORMAL)
       video_display_server_set_screen_orientation((enum rotation)settings->uints.screen_orientation);
+#endif
 
    /* The reasons the pointer is captured for are kept above the
     * drivers. What fullscreen adds is worked out for this video mode,

@@ -119,6 +119,15 @@ enum menu_simple_color
    MENU_SIMPLE_COLOR_LAST
 };
 
+/* Which way up the app is kept, the menu and games (Android) */
+enum orientation_lock
+{
+   ORIENTATION_LOCK_AUTO = 0,
+   ORIENTATION_LOCK_PORTRAIT,
+   ORIENTATION_LOCK_LANDSCAPE,
+   ORIENTATION_LOCK_LAST
+};
+
 enum menu_image_type
 {
    MENU_IMAGE_NONE = 0,

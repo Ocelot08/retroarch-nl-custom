@@ -1206,6 +1206,20 @@ public class RetroActivityCommon extends NativeActivity
     }
   }
 
+  // As enum orientation_lock: any, portrait, landscape either way round
+  public void setOrientationLock(final int lock)
+  {
+    runOnUiThread(new Runnable() {
+      @Override
+      public void run() {
+        screenOrientation = lock == 1 ? ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
+            : lock == 2 ? ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
+            : ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED;
+        setRequestedOrientation(screenOrientation);
+      }
+    });
+  }
+
   public void setScreenOrientation(int orientation)
   {
     int naturalOrientation = getDeviceDefaultOrientation();

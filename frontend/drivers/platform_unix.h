@@ -329,6 +329,7 @@ struct android_app
    jmethodID setWindowSettings;
    jmethodID getCutoutTop;
    jmethodID setScreenOrientation;
+   jmethodID setOrientationLock;
    jmethodID getUserLanguageString;
    jmethodID doVibrate;
    jmethodID doVibrateJoypad;
@@ -604,6 +605,9 @@ unsigned android_app_get_cutout_top(void);
 /* Keeps the game's picture below a cutout the Simple layout's menu
  * draws behind. */
 void android_app_update_viewport_inset(void);
+
+/* Applies Orientation Lock, or without it Screen Orientation. */
+void android_app_update_orientation(void);
 
 #ifdef HAVE_SAF
 struct retro_vfs_authorized_locations;

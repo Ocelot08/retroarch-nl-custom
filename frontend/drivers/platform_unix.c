@@ -4048,6 +4048,8 @@ static void frontend_unix_init(void *data)
          "getCutoutTop", "()I");
    GET_METHOD_ID(env, android_app->setScreenOrientation, class,
          "setScreenOrientation", "(I)V");
+   GET_METHOD_ID(env, android_app->setOrientationLock, class,
+         "setOrientationLock", "(I)V");
    GET_METHOD_ID(env, android_app->doVibrate, class,
          "doVibrate", "(IIII)V");
    GET_METHOD_ID(env, android_app->doVibrateJoypad, class,
@@ -4751,6 +4753,23 @@ void android_app_update_viewport_inset(void)
    video_driver_set_viewport_inset(
          config_get_ptr()->uints.menu_layout == MENU_LAYOUT_SIMPLE
          ? android_app_get_cutout_top() : 0);
+}
+
+void android_app_update_orientation(void)
+{
+   static bool locked;
+   settings_t *settings = config_get_ptr();
+   unsigned lock        = settings->uints.orientation_lock;
+   JNIEnv *env          = jni_thread_getenv();
+
+   if (     (lock || locked)
+         && env && g_android && g_android->setOrientationLock)
+      CALL_VOID_METHOD_PARAM(env, g_android->activity->clazz,
+            g_android->setOrientationLock, (jint)lock);
+   locked = lock != 0;
+   if (!lock && settings->uints.screen_orientation != ORIENTATION_NORMAL)
+      video_display_server_set_screen_orientation(
+            (enum rotation)settings->uints.screen_orientation);
 }
 #endif
 

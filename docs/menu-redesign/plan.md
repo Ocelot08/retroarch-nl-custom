@@ -179,14 +179,8 @@ The first and the lost presses were seen on the driver before the two lines were
   - Update Cores updates installed cores, not everything: RetroArch has no single update-all.
   - System Files is RetroArch's downloader, and does not know what is missing.
   - There are no update counts or summary: they need a request to the server when the page opens.
-- **RA TESTER shares folders with the working app** (history, playlists,
-  saves, per-emulator settings). Its history links to folders Android
-  allowed only the working app, and an emulator's settings can name a
-  gamepad in the working app's private folder. Give it its own folders.
 - **Settings changed during a game** that has its own settings are dropped
   when it closes: "Keeping changes" in `ia-v2.md`, not built.
-- **Orientation** does not turn the screen while the app runs: RetroArch
-  skips that on Android. Probably applies after a restart; not checked.
 - **The text box's cursor** stays at the end on Android, which does not
   report where it is.
 - **Languages** outside Latin show as boxes: the bundled font is a subset.

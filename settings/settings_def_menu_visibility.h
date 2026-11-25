@@ -40,6 +40,11 @@ S_UINT_EX(menu_simple_color, MENU_SIMPLE_COLOR,
       DEFAULT_MENU_SIMPLE_COLOR, SD_FLAG_NONE, SDESC_RANGE_MINMAX, 0, 0, MENU_SIMPLE_COLOR_LAST-1, 1, 0, setting_action_ok_uint, setting_get_string_representation_uint_menu_simple_color, NULL, NULL, setting_uint_action_left_default, setting_uint_action_right_default, ST_UI_TYPE_UINT_COMBOBOX,
       "Highlight Color",
       "In the Simple menu driver, the color of section names, of Continue and of the selection.")
+S_UINT_EX(orientation_lock, ORIENTATION_LOCK,
+      "orientation_lock",
+      DEFAULT_ORIENTATION_LOCK, SD_FLAG_NONE, SDESC_RANGE_MINMAX, 0, 0, ORIENTATION_LOCK_LAST-1, 1, 0, setting_action_ok_uint, setting_get_string_representation_uint_orientation_lock, NULL, NULL, setting_uint_action_left_default, setting_uint_action_right_default, ST_UI_TYPE_UINT_COMBOBOX,
+      "Orientation Lock",
+      "Keep the menu and games in portrait or landscape. Auto turns with the device.")
 #endif
 /* The configuration row lives under defined(HAVE_MENU); other passes are
  * unaffected. */

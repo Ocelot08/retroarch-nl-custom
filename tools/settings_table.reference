@@ -574,6 +574,7 @@ uint	menu_remember_selection	1	MENU_REMEMBER_SELECTION_ALWAYS
 uint	menu_startup_page	1	MENU_STARTUP_PAGE_MAIN_MENU
 uint	menu_layout	1	MENU_LAYOUT_CLASSIC
 uint	menu_simple_color	1	MENU_SIMPLE_COLOR_VIOLET
+uint	orientation_lock	1	ORIENTATION_LOCK_AUTO
 uint	netplay_share_digital	1	RARCH_NETPLAY_SHARE_DIGITAL_NO_SHARING
 uint	netplay_share_analog	1	RARCH_NETPLAY_SHARE_ANALOG_NO_SHARING
 uint	keyboard_gamepad_mapping_type	1	1
@@ -1307,6 +1308,7 @@ uint	menu_remember_selection	1	MENU_REMEMBER_SELECTION_ALWAYS
 uint	menu_startup_page	1	MENU_STARTUP_PAGE_MAIN_MENU
 uint	menu_layout	1	MENU_LAYOUT_CLASSIC
 uint	menu_simple_color	1	MENU_SIMPLE_COLOR_VIOLET
+uint	orientation_lock	1	ORIENTATION_LOCK_AUTO
 uint	netplay_share_digital	1	RARCH_NETPLAY_SHARE_DIGITAL_NO_SHARING
 uint	netplay_share_analog	1	RARCH_NETPLAY_SHARE_ANALOG_NO_SHARING
 uint	keyboard_gamepad_mapping_type	1	1
@@ -2059,6 +2061,7 @@ uint	menu_remember_selection	1	MENU_REMEMBER_SELECTION_ALWAYS
 uint	menu_startup_page	1	MENU_STARTUP_PAGE_MAIN_MENU
 uint	menu_layout	1	MENU_LAYOUT_CLASSIC
 uint	menu_simple_color	1	MENU_SIMPLE_COLOR_VIOLET
+uint	orientation_lock	1	ORIENTATION_LOCK_AUTO
 uint	netplay_share_digital	1	RARCH_NETPLAY_SHARE_DIGITAL_NO_SHARING
 uint	netplay_share_analog	1	RARCH_NETPLAY_SHARE_ANALOG_NO_SHARING
 uint	keyboard_gamepad_mapping_type	1	1

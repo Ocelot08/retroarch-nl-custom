@@ -37,7 +37,6 @@ and solid at the bottom (`simple_band_fade`). Still to do:
 - Use Camera Area has no description.
 - Home counts "4 SYSTEMS", which are game lists.
 - Edit Game Lists still has RetroArch's "Refresh All Playlists".
-- Orientation does nothing until, probably, a restart: say so, or move it.
 - Languages outside Latin show as boxes.
 
 ## To decide

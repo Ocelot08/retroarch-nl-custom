@@ -121,6 +121,11 @@ and More rows have more space above and no line. The top bar has a
 line under it, and an option page's description one above and below, which
 stay as the rows scroll. On Home, Continue counts as the first row.
 
+Settings › Screen › Orientation (`orientation_lock`) is Auto, Portrait or
+Landscape, either way round, for the menu and games. It changes at once,
+and again as the video driver starts. RetroArch's Screen Orientation, which
+on Android waits for a restart, is under All Settings; a lock overrides it.
+
 A name too wide for its row takes the smaller type, then a second line.
 A text value too wide shows as SET, and passwords always do.
 

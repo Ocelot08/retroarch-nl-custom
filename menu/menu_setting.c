@@ -113,6 +113,7 @@
  * cannot preprocess. */
 void android_app_set_window_settings(bool notch_write_over,
       bool auto_mouse_grab);
+void android_app_update_orientation(void);
 #endif
 #include "../location_driver.h"
 #include "../network/cloud_sync_driver.h"
@@ -9626,6 +9627,21 @@ static size_t setting_get_string_representation_uint_menu_simple_color(
    return 0;
 }
 
+static size_t setting_get_string_representation_uint_orientation_lock(
+      rarch_setting_t *setting, char *s, size_t len)
+{
+   /* In the order of enum orientation_lock */
+   static const enum msg_hash_enums names[ORIENTATION_LOCK_LAST] = {
+      MENU_ENUM_LABEL_VALUE_AUTO,
+      MENU_ENUM_LABEL_VALUE_ORIENTATION_LOCK_PORTRAIT,
+      MENU_ENUM_LABEL_VALUE_ORIENTATION_LOCK_LANDSCAPE
+   };
+   if (setting && *setting->value.target.unsigned_integer < ARRAY_SIZE(names))
+      return strlcpy(s, msg_hash_to_str(
+               names[*setting->value.target.unsigned_integer]), len);
+   return 0;
+}
+
 #ifdef HAVE_MIST
 static size_t setting_get_string_representation_steam_rich_presence_format(
       rarch_setting_t *setting, char *s, size_t len)
@@ -11932,6 +11948,9 @@ static void general_write_handler(rarch_setting_t *setting)
          android_app_set_window_settings(
                settings->bools.video_notch_write_over_enable,
                settings->bools.input_auto_mouse_grab);
+         break;
+      case MENU_ENUM_LABEL_ORIENTATION_LOCK:
+         android_app_update_orientation();
          break;
 #endif
       case MENU_ENUM_LABEL_REWIND_BUFFER_SIZE_STEP:

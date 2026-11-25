@@ -1461,6 +1461,7 @@ extern const struct msg_hash_us_lbl_blob_s msg_hash_us_lbl_blob;
 #define MENU_ENUM_LABEL_MENU_LAYOUT_STR (msg_hash_us_lbl_blob.m_MENU_ENUM_LABEL_MENU_LAYOUT)
 #define MENU_ENUM_LABEL_MENU_SIMPLE_GAMEPAD_MODE_STR (msg_hash_us_lbl_blob.m_MENU_ENUM_LABEL_MENU_SIMPLE_GAMEPAD_MODE)
 #define MENU_ENUM_LABEL_MENU_SIMPLE_COLOR_STR (msg_hash_us_lbl_blob.m_MENU_ENUM_LABEL_MENU_SIMPLE_COLOR)
+#define MENU_ENUM_LABEL_ORIENTATION_LOCK_STR (msg_hash_us_lbl_blob.m_MENU_ENUM_LABEL_ORIENTATION_LOCK)
 #define MENU_ENUM_LABEL_MOUSE_ENABLE_STR (msg_hash_us_lbl_blob.m_MENU_ENUM_LABEL_MOUSE_ENABLE)
 #define MENU_ENUM_LABEL_POINTER_ENABLE_STR (msg_hash_us_lbl_blob.m_MENU_ENUM_LABEL_POINTER_ENABLE)
 #define MENU_ENUM_LABEL_NETPLAY_NAT_TRAVERSAL_STR (msg_hash_us_lbl_blob.m_MENU_ENUM_LABEL_NETPLAY_NAT_TRAVERSAL)
@@ -3337,6 +3338,7 @@ extern const struct msg_hash_us_lbl_blob_s msg_hash_us_lbl_blob;
 #define MENU_ENUM_LABEL_MENU_LAYOUT_STR "menu_layout"
 #define MENU_ENUM_LABEL_MENU_SIMPLE_GAMEPAD_MODE_STR "menu_simple_gamepad_mode"
 #define MENU_ENUM_LABEL_MENU_SIMPLE_COLOR_STR "menu_simple_color"
+#define MENU_ENUM_LABEL_ORIENTATION_LOCK_STR "orientation_lock"
 #define MENU_ENUM_LABEL_MOUSE_ENABLE_STR "menu_mouse_enable"
 #define MENU_ENUM_LABEL_POINTER_ENABLE_STR "menu_pointer_enable"
 #define MENU_ENUM_LABEL_NETPLAY_NAT_TRAVERSAL_STR "netplay_nat_traversal"
