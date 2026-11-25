@@ -189,7 +189,7 @@ typedef struct simple_handle
    float spring_v;
    unsigned dims;
    uint32_t accent;
-   unsigned n_systems;
+   unsigned n_lists;
    unsigned n_cores;
    float scale;
    float box_w;             /* the menu's width, and its left edge */
@@ -262,6 +262,69 @@ static void simple_color(float *c, int vert, uint32_t rgba)
    c[vert * 4 + 1] = ((rgba >> 16) & 0xFF) / 255.0f;
    c[vert * 4 + 2] = ((rgba >>  8) & 0xFF) / 255.0f;
    c[vert * 4 + 3] = ( rgba        & 0xFF) / 255.0f;
+}
+
+static int simple_hex(char c)
+{
+   if (c >= '0' && c <= '9')
+      return c - '0';
+   if (c >= 'A' && c <= 'F')
+      return c - 'A' + 10;
+   if (c >= 'a' && c <= 'f')
+      return c - 'a' + 10;
+   return -1;
+}
+
+static void simple_unescape(char *s)
+{
+   char *to = s;
+   for (; *s; s++, to++)
+   {
+      int hi = (*s == '%') ? simple_hex(s[1]) : -1;
+      int lo = (hi >= 0) ? simple_hex(s[2]) : -1;
+      *to    = *s;
+      if (lo >= 0 && (hi || lo))
+      {
+         *to = (char)(hi * 16 + lo);
+         s  += 2;
+      }
+   }
+   *to = '\0';
+}
+
+/* Leaves a folder's own name of a saf:// link in @s. The link is the one
+ * the system's picker gave, escaped, which ends in the storage's id, a
+ * colon and the folder; then a slash and the path inside it, as it is. */
+static void simple_saf_name(char *s)
+{
+   char *p;
+   char *link = strstr(s, "saf://");
+   char *name = link ? link + STRLEN_CONST("saf://") : NULL;
+   char *path = name ? strchr(name, '/') : NULL;
+
+   if (!link)
+      return;
+   if (path)
+   {
+      size_t n = strlen(path);
+      while (n > 1 && path[n - 1] == '/')
+         path[--n] = '\0';
+   }
+   if (path && path[1])
+      name = strrchr(path, '/') + 1;
+   else
+   {
+      if (path)
+         *path = '\0';
+      /* The id was escaped for the picker's link, too */
+      simple_unescape(name);
+      simple_unescape(name);
+      if ((p = strrchr(name, '/')) && p[1])
+         name = p + 1;
+      if ((p = strrchr(name, ':')) && p[1])
+         name = p + 1;
+   }
+   memmove(link, name, strlen(name) + 1);
 }
 
 static void simple_upper(char *dst, const char *src, size_t len)
@@ -1240,7 +1303,7 @@ static void simple_home_counts(simple_handle_t *sm)
          false, false, false, false);
    const struct playlist_entry *entry = NULL;
 
-   sm->n_systems = lpls ? (unsigned)lpls->size : 0;
+   sm->n_lists   = lpls ? (unsigned)lpls->size : 0;
    if (lpls)
       dir_list_free(lpls);
    sm->n_cores   = core_info_get_list(&cores) && cores
@@ -1829,7 +1892,7 @@ static unsigned simple_cycle_item(double ms, unsigned row, unsigned count)
 /* On the Settings page: a touch or a button holds the names still */
 static void simple_cycle(simple_handle_t *sm, bool opened)
 {
-   unsigned i;
+   unsigned i, j;
    float frame_ms = anim_get_ptr()->delta_time;
 
    if (!sm->settings_page)
@@ -1840,9 +1903,18 @@ static void simple_cycle(simple_handle_t *sm, bool opened)
       sm->cycle_wait = SIMPLE_CYCLE_START;
       /* Looking settings up is slow: once, as the page opens */
       for (i = 0; i < SIMPLE_CYCLE_ROWS; i++)
+      {
          sm->cycle_count[i] = menu_displaylist_simple_names(
                simple_cycled[i], sm->cycle_name[i][0],
                sizeof(sm->cycle_name[i][0]), SIMPLE_CYCLE_NAMES);
+         /* "Volume (dB)" is for the row, with its value */
+         for (j = 0; j < sm->cycle_count[i]; j++)
+         {
+            char *unit = strstr(sm->cycle_name[i][j], " (");
+            if (unit)
+               *unit = '\0';
+         }
+      }
    }
    if (frame_ms < 1.0f || frame_ms > 33.3f)
       frame_ms = 16.667f;
@@ -2044,6 +2116,7 @@ static size_t simple_crumb_parts(simple_handle_t *sm, bool *gap)
       else if (cbs && cbs->action_get_title)
          cbs->action_get_title(item->path, item->label, item->type,
                title, sizeof(title));
+      simple_saf_name(title);
       simple_upper(sm->crumb[n++], title, SIMPLE_CRUMB_PART);
    }
    return n;
@@ -2149,9 +2222,9 @@ static void simple_home_note(const simple_handle_t *sm, const char *label,
    s[0] = '\0';
    if (string_is_equal(label, MENU_ENUM_LABEL_SIMPLE_GAMES_STR))
    {
-      if (sm->n_systems)
-         snprintf(s, len, "%u SYSTEM%s", sm->n_systems,
-               sm->n_systems == 1 ? "" : "S");
+      if (sm->n_lists)
+         snprintf(s, len, "%u LIST%s", sm->n_lists,
+               sm->n_lists == 1 ? "" : "S");
       else
          strlcpy(s, "ADD GAMES", len);
    }
@@ -2315,6 +2388,11 @@ static void simple_draw_rows(simple_handle_t *sm, gfx_display_t *p_disp,
       entry->flags |= MENU_ENTRY_FLAG_RICH_LABEL_ENABLED
                     | MENU_ENTRY_FLAG_VALUE_ENABLED;
       menu_entry_get(entry, 0, i, NULL, true);
+      /* (the drawing thread's own) */
+      if (entry->rich_label[0])
+         simple_saf_name(entry->rich_label);
+      else
+         simple_saf_name(entry->path);
       word = entry->rich_label[0] ? entry->rich_label : entry->path;
       /* Whole rows only: a part row's centre can be under the header */
       if (sm->log_rows && top >= view_t - 0.5f && top + h <= bottom + 0.5f)

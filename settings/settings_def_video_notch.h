@@ -10,9 +10,10 @@
 /* config key "video_notch_write_over_enable" differs from the label string; the
  * configuration.c row stays literal for this setting. */
 #ifndef SETTINGS_DEF_CONFIG_PASS
-S_BOOL_NS(video_notch_write_over_enable, VIDEO_NOTCH_WRITE_OVER,
+S_BOOL(video_notch_write_over_enable, VIDEO_NOTCH_WRITE_OVER,
       "video_notch_write_over",
       DEFAULT_NOTCH_WRITE_OVER_ENABLE, SD_FLAG_NONE, 0, 0,
-      "Enable fullscreen over notch in Android and iOS devices")
+      "Enable fullscreen over notch in Android and iOS devices",
+      "Use the whole screen, behind the camera too. In the Simple layout, text and a game's picture stay clear of it.")
 #endif
 #endif

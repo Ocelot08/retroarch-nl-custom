@@ -32,10 +32,6 @@ grey (`simple_art_draw`, `simple_band_fade`). Still to do:
 
 ## Small fixes
 
-- Saved folders in Browse Files show their raw `saf://` link.
-- Use Camera Area has no description.
-- Home counts "4 SYSTEMS", which are game lists.
-- Edit Game Lists still has RetroArch's "Refresh All Playlists".
 - Languages outside Latin show as boxes.
 
 ## To decide

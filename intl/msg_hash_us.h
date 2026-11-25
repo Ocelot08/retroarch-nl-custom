@@ -33610,6 +33610,10 @@ MSG_HASH(
    "Edit Game Lists"
    )
 MSG_HASH(
+   MENU_ENUM_LABEL_VALUE_SIMPLE_NAME_REFRESH_LISTS,
+   "Refresh All Game Lists"
+   )
+MSG_HASH(
    MENU_ENUM_LABEL_VALUE_SIMPLE_NAME_NICKNAME,
    "Nickname"
    )
