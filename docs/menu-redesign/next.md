@@ -17,13 +17,18 @@ and solid at the bottom (`simple_band_fade`). Still to do:
   game's detail page and the Game menu. Settings, Downloads and Help stay
   plain.
 
+- **Settings page notes:** "7+ SETTINGS" says too little. Idea, 25 Nov 2026:
+  each note cycles through the names of the settings on its page. Later,
+  animate the change, with control over when the cycle starts and when it
+  flips to the next name.
+
 ## Features to build
 
 | Feature | Notes |
 |---|---|
 | Open All Settings in place | After More Downloads has been used for a while |
 | Open the other More rows in place | Check each list's rows: some depend on the page they are on |
-| RA TESTER's own folders | It shares history, playlists, saves and emulator settings with the working app |
+| RA TESTER's own folders | It shares history, playlists, saves and core settings with the working app |
 | Keep settings changed during a game | Dropped now when the game has settings of its own; "Keeping changes" in `ia-v2.md` |
 | Headings on other pages | The driver draws them from a list of rows that start a group |
 | Box art, page animation, Quick Setup | See `plan.md` |
@@ -48,11 +53,10 @@ and solid at the bottom (`simple_band_fade`). Still to do:
 
 ## Not tested
 
-- On the phone: the rows, headings, selection line, Settings counts and
-  two-layer background built on 24 Nov 2026. Compare each count with the
-  page it opens, and look for edges in Home's gradient.
-- A physical controller, landscape, and the Vulkan video driver.
+- A physical controller, landscape, and the Vulkan video driver. With a
+  controller in touch mode, that the line at the left shows on up and down
+  and goes at the next touch: arrow keys sent over USB do not reach the menu.
 - RetroArch's own keyboard in Simple, with the system's turned off.
 - The reworded Close, Restart and gamepad prompts.
 - The update rows under More Downloads, and the two short messages for a
-  missing game file or emulator.
+  missing game file or core.

@@ -176,7 +176,7 @@ The first and the lost presses were seen on the driver before the two lines were
   not log, and refuses touch gamepad presses outside Gamepad Mode, where
   they would land on the menu.
 - **Downloads, against `ia-v2.md`:**
-  - Update Emulators updates installed emulators, not everything: RetroArch has no single update-all.
+  - Update Cores updates installed cores, not everything: RetroArch has no single update-all.
   - System Files is RetroArch's downloader, and does not know what is missing.
   - There are no update counts or summary: they need a request to the server when the page opens.
 - **RA TESTER shares folders with the working app** (history, playlists,

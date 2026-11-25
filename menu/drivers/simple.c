@@ -1390,9 +1390,9 @@ static void simple_find_heads(simple_handle_t *sm, const file_list_t *list)
    enum msg_hash_enums last = MSG_UNKNOWN;
    static const enum msg_hash_enums rows[][2] = {
       { MENU_ENUM_LABEL_UPDATE_INSTALLED_CORES,
-         MENU_ENUM_LABEL_VALUE_SIMPLE_NAME_EMULATORS },
+         MENU_ENUM_LABEL_VALUE_SIMPLE_NAME_CORES },
       { MENU_ENUM_LABEL_CORE_UPDATER_LIST,
-         MENU_ENUM_LABEL_VALUE_SIMPLE_NAME_EMULATORS },
+         MENU_ENUM_LABEL_VALUE_SIMPLE_NAME_CORES },
       { MENU_ENUM_LABEL_DOWNLOAD_CORE_SYSTEM_FILES,
          MENU_ENUM_LABEL_VALUE_SIMPLE_HEAD_FILES_ART },
       { MENU_ENUM_LABEL_SIMPLE_BOX_ART,
@@ -1750,10 +1750,10 @@ static void simple_home_note(const simple_handle_t *sm, const char *label,
    else if (string_is_equal(label, MENU_ENUM_LABEL_SIMPLE_DOWNLOADS_STR))
    {
       if (sm->n_cores)
-         snprintf(s, len, "%u EMULATOR%s", sm->n_cores,
+         snprintf(s, len, "%u CORE%s", sm->n_cores,
                sm->n_cores == 1 ? "" : "S");
       else
-         strlcpy(s, "GET EMULATORS", len);
+         strlcpy(s, "GET CORES", len);
    }
    else if (string_is_equal(label, MENU_ENUM_LABEL_SIMPLE_SETTINGS_STR))
       strlcpy(s, "CONTROLS \xC2\xB7 SCREEN", len);

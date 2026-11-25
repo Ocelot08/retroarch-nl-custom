@@ -13,7 +13,7 @@
 
 1. **Who it's for:** most people: add games, start one, keep progress, make it look right. Power users keep Classic and the other menu drivers.
 2. **Don't re-home advanced settings.** Settings ends in **All Settings**, which opens the classic Settings list unchanged. Every "More" row opens RetroArch's own list for that category, unchanged: there are no hand-picked More lists. In the Simple driver those lists use smaller type than Simple's own lists.
-3. **Plain names:** Games, Emulators (cores), Screen (video), Sound, Game Options (core options), Touch Controls, System Files (BIOS), Box Art (thumbnails).
+3. **Plain names:** Games, Cores (RetroArch's word, chosen 25 Nov 2026; first Emulators), Screen (video), Sound, Game Options (core options), Touch Controls, System Files (BIOS), Box Art (thumbnails).
 4. **Home has five rows.** Touch Controls is not on Home; it lives in Settings › Controls and the Game menu's Controls.
 5. **The Game menu has a Home row**, for bigger changes during a game.
 6. **Keeping changes is asked, not found in a menu** (see Keeping changes).
@@ -61,7 +61,7 @@
 Home
 ├─ Continue: <last game>       resumes mid-game
 ├─ Games ›                     8 SYSTEMS (one system: 412 GAMES)
-├─ Downloads ›                 24 EMULATORS, or 3 UPDATES in yellow
+├─ Downloads ›                 24 CORES, or 3 UPDATES in yellow
 ├─ Settings ›                  rotates through its categories
 └─ Help ›                      rotates through help topics; later "+ QUIT"
 ```
@@ -69,7 +69,7 @@ Home
 **Right-side notes:**
 
 - **Games:** the number of systems; with only one system, the number of games.
-- **Downloads:** the installed emulators; when updates exist, their number in yellow.
+- **Downloads:** the installed cores; when updates exist, their number in yellow.
 - **Settings:** names its categories in turn, about 4 s each with a short fade. It stops while being navigated or after a touch, and follows Android's "Remove animations".
 - **Help:** help topics until Quick Setup is done and about 5 games have been started (from the play history), then "+ QUIT".
 
@@ -113,16 +113,16 @@ Games
                                Images/Music/Video, Load Disc, Dump Disc
 ```
 
-A game's detail page (D2): Play, Favorite, Emulator, Information, Remove. A game list row: cover, title, system and last played.
+A game's detail page (D2): Play, Favorite, Core, Information, Remove. A game list row: cover, title, system and last played.
 
 ## Downloads
 
 ```
 Downloads
 ├─ Update Everything           3 UPDATES (yellow); progress page while running
-│                              (built so far: Update Emulators, installed emulators only)
-├─ Emulators ›                 filters: For Your Games, Installed, Updates, All; search
-├─ Missing System Files ›      per emulator: file, MISSING (yellow) or FOUND; Open System Folder
+│                              (built so far: Update Cores, installed cores only)
+├─ Cores ›                     filters: For Your Games, Installed, Updates, All; search
+├─ Missing System Files ›      per core: file, MISSING (yellow) or FOUND; Open System Folder
 │                              (built so far: System Files, RetroArch's downloader)
 ├─ Box Art ›                   Get Missing Box Art; Download While Browsing; counts per system
 └─ More ›                      → Online Updater
@@ -189,9 +189,9 @@ One question per screen; every step skippable.
 2. **Menu style:** Simple or Classic. Simple writes the defaults below, once.
 3. **Menu button** (controller or both): pick the combo, or keep Back.
 4. **Your games:** choose the folder, or later.
-5. **Systems and emulators:** one recommended emulator per system found.
+5. **Systems and cores:** one recommended core per system found.
 6. **Essentials:** core info, databases, assets, controller profiles; box art optional.
-7. **BIOS check:** missing system files per chosen emulator.
+7. **BIOS check:** missing system files per chosen core.
 8. **How saving works:** one screen.
 9. **Remove Quick Setup from the Main Menu?** Classic only. "You can show it again in Settings › User Interface › Menu Item Visibility." Also asked when the setup is skipped.
 10. **Done:** scan the folder and open Games.
@@ -213,9 +213,9 @@ Checked against the Android build. `config_save_on_exit` and Touch Support are a
 
 - **No games:** Add Games button, or Browse Files (under More).
 - **No box art:** a cover set in type until art is fetched; Get Missing Box Art on the list.
-- **No emulator for a file:** a prompt offering the recommended one.
+- **No core for a file:** a prompt offering the recommended one.
 - **Missing BIOS:** names the file and the folder it goes in.
-- **Game didn't start:** the reason in plain words, with Try Another Emulator and Save a Log File.
+- **Game didn't start:** the reason in plain words, with Try Another Core and Save a Log File.
 - **First game:** a short notice says how to open the menu.
 
 ## Page types still to design, in order
@@ -241,4 +241,4 @@ The pages behind More and All Settings are RetroArch's own lists and keep its ex
 1. Which shaders make up Retro TV and Handheld LCD, and are they fast enough on low-end phones?
 2. The limit for kept saves.
 3. Recrawl on an Android phone and a handheld: no game, a multi-disc game, achievements on. 57 lists were not crawled.
-4. Who maintains the recommended emulator per system.
+4. Who maintains the recommended core per system.

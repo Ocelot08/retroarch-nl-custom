@@ -33174,8 +33174,8 @@ MSG_HASH(
    "This game's file can't be found."
    )
 MSG_HASH(
-   MSG_SIMPLE_GAME_EMULATOR,
-   "This game's emulator isn't installed."
+   MSG_SIMPLE_GAME_CORE,
+   "This game's core isn't installed."
    )
 MSG_HASH(
    MSG_FAILED_TO_LOAD_MOVIE_FILE,
@@ -33307,7 +33307,7 @@ MSG_HASH(
    )
 MSG_HASH(
    MENU_ENUM_SUBLABEL_SIMPLE_CONTINUE,
-   "Start the last game played again, with its emulator."
+   "Start the last game played again, with its core."
    )
 MSG_HASH(
    MENU_ENUM_LABEL_VALUE_SIMPLE_GAMES,
@@ -33618,12 +33618,12 @@ MSG_HASH(
    "Shaders"
    )
 MSG_HASH(
-   MENU_ENUM_LABEL_VALUE_SIMPLE_NAME_UPDATE_EMULATORS,
-   "Update Emulators"
+   MENU_ENUM_LABEL_VALUE_SIMPLE_NAME_UPDATE_CORES,
+   "Update Cores"
    )
 MSG_HASH(
-   MENU_ENUM_LABEL_VALUE_SIMPLE_NAME_EMULATORS,
-   "Emulators"
+   MENU_ENUM_LABEL_VALUE_SIMPLE_NAME_CORES,
+   "Cores"
    )
 MSG_HASH(
    MENU_ENUM_LABEL_VALUE_SIMPLE_NAME_SYSTEM_FILES,

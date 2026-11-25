@@ -3235,7 +3235,7 @@ static void action_ok_game_failed(const char *content_path,
    if (simple && content_path && *content_path && !file_ok)
       id = MSG_SIMPLE_GAME_FILE;
    else if (simple && core_path && *core_path && !path_is_valid(core_path))
-      id = MSG_SIMPLE_GAME_EMULATOR;
+      id = MSG_SIMPLE_GAME_CORE;
    _msg = msg_hash_to_str(id);
    RARCH_ERR("[Content] %s\n", _msg);
    runloop_msg_queue_push(_msg, strlen(_msg), 1, simple ? 300 : 100, true,

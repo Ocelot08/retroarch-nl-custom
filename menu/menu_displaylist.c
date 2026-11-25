@@ -10194,13 +10194,13 @@ unsigned menu_displaylist_build_list(
                   update = false;
 #endif
                if (update && menu_entries_append(list,
-                        msg_hash_to_str(MENU_ENUM_LABEL_VALUE_SIMPLE_NAME_UPDATE_EMULATORS),
+                        msg_hash_to_str(MENU_ENUM_LABEL_VALUE_SIMPLE_NAME_UPDATE_CORES),
                         MENU_ENUM_LABEL_UPDATE_INSTALLED_CORES_STR,
                         MENU_ENUM_LABEL_UPDATE_INSTALLED_CORES,
                         MENU_SETTING_ACTION, 0, 0, NULL))
                   count++;
                if (menu_entries_append(list,
-                        msg_hash_to_str(MENU_ENUM_LABEL_VALUE_SIMPLE_NAME_EMULATORS),
+                        msg_hash_to_str(MENU_ENUM_LABEL_VALUE_SIMPLE_NAME_CORES),
                         MENU_ENUM_LABEL_CORE_UPDATER_LIST_STR,
                         MENU_ENUM_LABEL_CORE_UPDATER_LIST,
                         MENU_SETTING_ACTION, 0, 0, NULL))
