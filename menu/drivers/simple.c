@@ -103,6 +103,7 @@ enum simple_font
    SIMPLE_FONT_NOTE,
    SIMPLE_FONT_TITLE,
    SIMPLE_FONT_FULL,       /* RetroArch's own lists */
+   SIMPLE_FONT_MARK,       /* + - and arrows */
    SIMPLE_FONT_LAST
 };
 
@@ -122,11 +123,18 @@ typedef struct simple_metrics
 } simple_metrics_t;
 
 static const simple_metrics_t simple_touch = {
-   { 24.0f, 30.0f, 11.0f, 48.0f, 18.0f },
+   { 24.0f, 30.0f, 11.0f, 48.0f, 18.0f, 24.0f },
    50.0f, 80.0f, 50.0f, 110.0f, 60.0f,
    360.0f, 262.0f, 304.0f, 352.0f };
+/* Touch in a window too short for Home, as in landscape. Home does not
+ * scroll: with Continue and four rows it fits in 360, the least there is. */
+static const simple_metrics_t simple_short = {
+   { 24.0f, 26.0f, 11.0f, 40.0f, 18.0f, 24.0f },
+   30.0f, 54.0f, 50.0f, 70.0f, 48.0f,
+   190.0f, 80.0f, 114.0f, 154.0f };
+#define SIMPLE_HOME_ROWS 4
 static const simple_metrics_t simple_gamepad = {
-   { 17.0f, 20.0f, 9.5f, 22.0f, 14.0f },
+   { 17.0f, 20.0f, 9.5f, 22.0f, 14.0f, 18.0f },
    20.0f, 40.0f, 30.0f, 40.0f, 34.0f,
    96.0f, 46.0f, 66.0f, 88.0f };
 
@@ -182,6 +190,8 @@ typedef struct simple_handle
    unsigned n_systems;
    unsigned n_cores;
    float scale;
+   float box_w;             /* the menu's width, and its left edge */
+   float left;
    bool is_home;
    bool full;               /* one of RetroArch's own lists: smaller type */
    bool has_continue;
@@ -258,12 +268,22 @@ static void simple_upper(char *dst, const char *src, size_t len)
    dst[i] = '\0';
 }
 
-static float simple_scale_for(unsigned dims)
+/* The menu's box and scale. Gamepad mode keeps 4:3: a window wider than
+ * that has the box in its middle, so in landscape the menu looks as it
+ * does in portrait, between the touch controls. Positions in the rest of
+ * this file are from the box's left edge. */
+static void simple_set_box(simple_handle_t *sm, unsigned dims)
 {
-   unsigned w = VIDEO_SCALE_W(dims);
-   unsigned h = VIDEO_SCALE_H(dims);
-   float s    = (float)(w < h ? w : h) / SIMPLE_DESIGN_WIDTH;
-   return s > 0.5f ? s : 0.5f;
+   float w     = (float)VIDEO_SCALE_W(dims);
+   float h     = (float)VIDEO_SCALE_H(dims);
+   bool narrow = sm->gamepad && w * 0.75f > h;
+
+   sm->dims  = dims;
+   sm->box_w = narrow ? (float)(int)(h / 0.75f) : w;
+   sm->left  = (float)(int)((w - sm->box_w) * 0.5f);
+   sm->scale = (narrow || w < h ? sm->box_w : h) / SIMPLE_DESIGN_WIDTH;
+   if (sm->scale < 0.5f)
+      sm->scale = 0.5f;
 }
 
 /* Bottom of the area the menu draws in, in pixels */
@@ -286,6 +306,9 @@ static void simple_set_metrics(simple_handle_t *sm)
    simple_metrics_t *m = &sm->metrics;
 
    *m = sm->gamepad ? simple_gamepad : simple_touch;
+   if (     !sm->gamepad && (float)VIDEO_SCALE_H(sm->dims) / sm->scale
+         < m->cont_bottom + SIMPLE_HOME_ROWS * m->home_row)
+      *m = simple_short;
 #ifdef ANDROID
    inset = (float)android_app_get_cutout_top() / sm->scale;
    android_app_update_viewport_inset();
@@ -319,7 +342,7 @@ static void simple_fonts_load(simple_handle_t *sm, bool is_threaded)
    static const char *files[SIMPLE_FONT_LAST] = {
       "WorkSans-Light.ttf", "WorkSans-Light.ttf",
       "IBMPlexMono-Medium.ttf", "WorkSans-Light.ttf",
-      "WorkSans-Light.ttf" };
+      "WorkSans-Light.ttf", "IBMPlexMono-Medium.ttf" };
    char dir[DIR_MAX_LENGTH];
    char path[PATH_MAX_LENGTH];
    settings_t *settings  = config_get_ptr();
@@ -355,7 +378,7 @@ static void simple_text(simple_handle_t *sm, enum simple_font fi,
    font_data_impl_t *f = &sm->fonts[fi];
    if (!f->font || !s || !*s)
       return;
-   gfx_display_draw_text(f->font, s, x,
+   gfx_display_draw_text(f->font, s, x + sm->left,
          y_centre + (float)f->line_centre_offset, dims,
          color, align, 1.0f, false, 0.0f, false);
 }
@@ -440,6 +463,29 @@ static void simple_fit_note(simple_handle_t *sm, const char *src,
    }
 }
 
+/* Widths of the marks as drawn, as a share of the size, and how far up
+ * puts them level with notes */
+#define SIMPLE_MARK_ARROW 0.28f
+#define SIMPLE_MARK_SIGN  0.52f
+#define SIMPLE_MARK_UP    0.09f
+
+static float simple_mark_size(const simple_handle_t *sm)
+{
+   return sm->m->font[SIMPLE_FONT_MARK] * sm->scale;
+}
+
+/* + - and the arrows, larger than notes so they look the same size */
+static void simple_mark(simple_handle_t *sm, const char *s, float x_centre,
+      float y_centre, unsigned dims, uint32_t color)
+{
+   font_data_t *font = sm->fonts[SIMPLE_FONT_MARK].font;
+   if (font)
+      simple_text(sm, SIMPLE_FONT_MARK, s, x_centre - 0.5f
+            * (float)font_driver_get_message_width(font, s, strlen(s), 1.0f),
+            y_centre - simple_mark_size(sm) * SIMPLE_MARK_UP, dims, color,
+            TEXT_ALIGN_LEFT);
+}
+
 /* Small caps notes, drawn a glyph at a time for the letter-spacing */
 static void simple_note(simple_handle_t *sm, const char *s,
       float x, float y_centre, unsigned dims, uint32_t color,
@@ -482,15 +528,15 @@ static void simple_note(simple_handle_t *sm, const char *s,
    }
 }
 
-static void simple_quad(gfx_display_t *p_disp, void *userdata,
-      unsigned dims, float x, float y, float w, float h, uint32_t rgba)
+static void simple_quad(const simple_handle_t *sm, gfx_display_t *p_disp,
+      void *userdata, unsigned dims, float x, float y, float w, float h, uint32_t rgba)
 {
    float c[16];
    int i;
    for (i = 0; i < 4; i++)
       simple_color(c, i, rgba);
    gfx_display_draw_quad(p_disp, userdata, dims,
-         (int)(x + 0.5f), (int)(y + 0.5f),
+         (int)(x + sm->left + 0.5f), (int)(y + 0.5f),
          VIDEO_SCALE_PACK((unsigned)(w + 0.5f), (unsigned)(h + 0.5f)),
          dims, c, NULL);
 }
@@ -508,40 +554,41 @@ static const enum msg_hash_enums simple_cycled[SIMPLE_CYCLE_ROWS] = {
 };
 
 /* Vertices run bottom-left, bottom-right, top-left, top-right */
-static void simple_grad_quad(gfx_display_t *p_disp, void *userdata,
-      unsigned dims, float y, float h, uint32_t top_l, uint32_t top_r,
-      uint32_t bot_l, uint32_t bot_r)
+static void simple_grad_quad(const simple_handle_t *sm,
+      gfx_display_t *p_disp, void *userdata, unsigned dims, float y, float h,
+      uint32_t top_l, uint32_t top_r, uint32_t bot_l, uint32_t bot_r)
 {
    float c[16];
    simple_color(c, 0, bot_l);
    simple_color(c, 1, bot_r);
    simple_color(c, 2, top_l);
    simple_color(c, 3, top_r);
-   gfx_display_draw_quad(p_disp, userdata, dims, 0, (int)(y + 0.5f),
-         VIDEO_SCALE_PACK(VIDEO_SCALE_W(dims), (unsigned)(h + 0.5f)),
+   gfx_display_draw_quad(p_disp, userdata, dims, (int)sm->left,
+         (int)(y + 0.5f),
+         VIDEO_SCALE_PACK((unsigned)sm->box_w, (unsigned)(h + 0.5f)),
          dims, c, NULL);
 }
 
 /* Behind the fade: the colours, until box art takes their place. Short
  * of the fade's end, so that rounding leaves no edge. */
-static void simple_band_back(gfx_display_t *p_disp, void *userdata,
-      unsigned dims, float h, uint32_t left, uint32_t right)
+static void simple_band_back(const simple_handle_t *sm,
+      gfx_display_t *p_disp, void *userdata, unsigned dims, float h, uint32_t left, uint32_t right)
 {
-   simple_grad_quad(p_disp, userdata, dims, 0.0f, h - 2.0f,
+   simple_grad_quad(sm, p_disp, userdata, dims, 0.0f, h - 2.0f,
          left, right, left, right);
 }
 
 /* The page's grey over whatever is behind, clear at the top and solid
  * at the bottom, so it has no edge */
-static void simple_band_fade(gfx_display_t *p_disp, void *userdata,
-      unsigned dims, float h)
+static void simple_band_fade(const simple_handle_t *sm,
+      gfx_display_t *p_disp, void *userdata, unsigned dims, float h)
 {
    float h1       = (float)(int)(h * 0.45f);
    uint32_t clear = SIMPLE_COL_BG & 0xFFFFFF00;
    uint32_t most  = clear | 0xBF;
-   simple_grad_quad(p_disp, userdata, dims, 0.0f, h1,
+   simple_grad_quad(sm, p_disp, userdata, dims, 0.0f, h1,
          clear, clear, most, most);
-   simple_grad_quad(p_disp, userdata, dims, h1, h - h1, most, most,
+   simple_grad_quad(sm, p_disp, userdata, dims, h1, h - h1, most, most,
          SIMPLE_COL_BG, SIMPLE_COL_BG);
 }
 
@@ -970,7 +1017,7 @@ static bool simple_slider_rect(const simple_handle_t *sm, unsigned dims,
    simple_entry_rect(sm, sm->open_idx, top, &h);
    *top += h;
    *x0   = x + 36.0f * s;
-   *x1   = (float)VIDEO_SCALE_W(dims) - x - 36.0f * s;
+   *x1   = sm->box_w - x - 36.0f * s;
    return true;
 }
 
@@ -979,8 +1026,8 @@ static void simple_arrows(simple_handle_t *sm, unsigned dims,
       float value_w, float *left_c, float *right_c, float *value_r)
 {
    float s  = sm->scale;
-   float aw = simple_note_width(sm, "\xE2\x80\xBA");
-   float r  = (float)VIDEO_SCALE_W(dims) - SIMPLE_GUTTER * s;
+   float aw = simple_mark_size(sm) * SIMPLE_MARK_ARROW;
+   float r  = sm->box_w - SIMPLE_GUTTER * s;
    *right_c = r - aw * 0.5f;
    *value_r = r - aw - SIMPLE_ARROW_GAP * s;
    *left_c  = *value_r - value_w - SIMPLE_ARROW_GAP * s - aw * 0.5f;
@@ -1034,8 +1081,7 @@ static void *simple_init(void **userdata, bool video_is_threaded)
    }
    sm->gamepad  = settings->bools.menu_simple_gamepad_mode;
    sm->open_idx = (size_t)-1;
-   sm->dims     = video_driver_get_output_dims();
-   sm->scale   = simple_scale_for(sm->dims);
+   simple_set_box(sm, video_driver_get_output_dims());
    simple_set_metrics(sm);
    *userdata   = sm;
    return menu;
@@ -1056,8 +1102,8 @@ static void simple_context_reset(void *data, bool is_threaded)
    simple_handle_t *sm = (simple_handle_t*)data;
    if (!sm)
       return;
-   sm->dims  = video_driver_get_output_dims();
-   sm->scale = simple_scale_for(sm->dims);
+   simple_set_box(sm, video_driver_get_output_dims());
+   simple_set_metrics(sm);
    simple_fonts_load(sm, is_threaded);
    video_driver_monitor_reset();
 }
@@ -1147,7 +1193,7 @@ static void simple_kb_layout(simple_handle_t *sm, unsigned dims)
       == INPUT_TEXT_TYPE_PASSWORD;
    const char *text    = NULL;
    font_data_t *font   = sm->fonts[SIMPLE_FONT_FULL].font;
-   float max_w         = (float)VIDEO_SCALE_W(dims)
+   float max_w         = sm->box_w
       - 4.0f * SIMPLE_GUTTER * sm->scale;
 
    if (!menu_input_dialog_get_display_kb())
@@ -1232,7 +1278,7 @@ static void simple_desc_layout(simple_handle_t *sm, unsigned dims)
    unsigned lines = 0;
    if (sm->opts && sm->opt_desc[0])
       lines = simple_wrap(sm, SIMPLE_FONT_FULL, sm->opt_desc,
-            (float)VIDEO_SCALE_W(dims) - 2.0f * SIMPLE_GUTTER * sm->scale,
+            sm->box_w - 2.0f * SIMPLE_GUTTER * sm->scale,
             sm->desc_text, sizeof(sm->desc_text));
    if (lines > (sm->gamepad ? 2u : 6u))
       lines = sm->gamepad ? 2 : 6;
@@ -1270,7 +1316,7 @@ static void simple_card_layout(simple_handle_t *sm, unsigned dims)
 {
    struct menu_state *menu_st = menu_state_get_ptr();
    float s     = sm->scale;
-   float w     = (float)VIDEO_SCALE_W(dims);
+   float w     = sm->box_w;
    float box_b = simple_box_bottom(sm, dims);
    unsigned rows;
 
@@ -1296,7 +1342,7 @@ static void simple_card_layout(simple_handle_t *sm, unsigned dims)
    /* A tap confirms only on the first answer; anywhere else cancels */
    if (sm->card_confirm)
    {
-      float px = (float)VIDEO_POS_X(sm->pointer.pos);
+      float px = (float)VIDEO_POS_X(sm->pointer.pos) - sm->left;
       float py = (float)VIDEO_POS_Y(sm->pointer.pos);
       menu_st->dialog_st.confirm_hover_ok =
             px >= SIMPLE_GUTTER * s && px < w - SIMPLE_GUTTER * s
@@ -1633,8 +1679,7 @@ static void simple_render(void *data, unsigned dims, bool is_idle)
             command_event(CMD_EVENT_OVERLAY_INIT, NULL);
 #endif
       }
-      sm->dims  = dims;
-      sm->scale = simple_scale_for(dims);
+      simple_set_box(sm, dims);
       simple_set_metrics(sm);
       simple_fonts_load(sm, video_driver_is_threaded());
    }
@@ -1690,7 +1735,7 @@ static void simple_render(void *data, unsigned dims, bool is_idle)
       else if (!sm->was_pressed
             && simple_slider_rect(sm, dims, &st, &x0, &x1))
       {
-         float px = (float)VIDEO_POS_X(sm->pointer.pos);
+         float px = (float)VIDEO_POS_X(sm->pointer.pos) - sm->left;
          float py = (float)VIDEO_POS_Y(sm->pointer.pos);
          sm->sliding = py >= st && py < st + sm->m->list_row * sm->scale
             && px >= x0 - 12.0f * sm->scale && px <= x1 + 12.0f * sm->scale;
@@ -1699,7 +1744,8 @@ static void simple_render(void *data, unsigned dims, bool is_idle)
             && simple_slider_rect(sm, dims, &st, &x0, &x1))
          simple_number_set(simple_row_setting(list, sm->open_idx),
                list->list[sm->open_idx].type,
-               ((float)VIDEO_POS_X(sm->pointer.pos) - x0) / (x1 - x0));
+               ((float)VIDEO_POS_X(sm->pointer.pos) - sm->left - x0)
+               / (x1 - x0));
       sm->was_pressed = pressed;
    }
    if (sm->is_home)
@@ -1722,9 +1768,11 @@ static void simple_render(void *data, unsigned dims, bool is_idle)
    if (     (sm->pointer.type != MENU_POINTER_DISABLED)
          && (sm->pointer.flags & MENU_INP_PTR_FLG_ACTIVE))
    {
-      float y = (float)VIDEO_POS_Y(sm->pointer.pos);
+      float px = (float)VIDEO_POS_X(sm->pointer.pos) - sm->left;
+      float y  = (float)VIDEO_POS_Y(sm->pointer.pos);
       menu_st->input_state.ptr = (unsigned)size;
-      if (y >= simple_view_top(sm) && y < bottom)
+      if (     px >= 0.0f && px < sm->box_w
+            && y >= simple_view_top(sm) && y < bottom)
          for (i = sm->first; i < size; i++)
          {
             float top, h;
@@ -1830,7 +1878,7 @@ static void simple_draw_header(simple_handle_t *sm, unsigned dims)
 {
    char crumb[SIMPLE_CRUMB_PARTS * (SIMPLE_CRUMB_PART + 3) + 8];
    float s   = sm->scale;
-   float w   = (float)VIDEO_SCALE_W(dims);
+   float w   = sm->box_w;
    float x   = SIMPLE_GUTTER * s;
    float y   = sm->m->header_y * s;
 
@@ -1933,7 +1981,7 @@ static void simple_draw_continue(simple_handle_t *sm, unsigned dims,
    const char *split = strstr(word, ": ");
    font_data_t *font = sm->fonts[SIMPLE_FONT_TITLE].font;
    float s           = sm->scale;
-   float w           = (float)VIDEO_SCALE_W(dims);
+   float w           = sm->box_w;
    float x           = SIMPLE_GUTTER * s;
    float room        = w - 2.0f * x;
    uint32_t label_c  = (!sm->gamepad || selected)
@@ -2018,7 +2066,7 @@ static void simple_draw_rows(simple_handle_t *sm, gfx_display_t *p_disp,
    size_t i;
    char note[NAME_MAX_LENGTH];
    float s      = sm->scale;
-   float w      = (float)VIDEO_SCALE_W(dims);
+   float w      = sm->box_w;
    float x      = SIMPLE_GUTTER * s;
    float line   = s < 1.0f ? 1.0f : s;
    float bottom = simple_rows_bottom(sm, dims);
@@ -2066,7 +2114,7 @@ static void simple_draw_rows(simple_handle_t *sm, gfx_display_t *p_disp,
          float mark_y = sm->has_continue && i == 0
             ? (sm->m->cont_label_y - 8.0f) * s
             : centre - mark_h * 0.5f;
-         simple_quad(p_disp, userdata, dims, x - 12.0f * s, mark_y,
+         simple_quad(sm, p_disp, userdata, dims, x - 12.0f * s, mark_y,
                3.0f * s, mark_h,
                sm->gamepad ? sm->accent : SIMPLE_COL_DIM);
       }
@@ -2081,7 +2129,7 @@ static void simple_draw_rows(simple_handle_t *sm, gfx_display_t *p_disp,
        * stops too near the header's, which stays, would look double. */
       if (     !more && i > 0 && !head && i != sm->sub_from
             && (sm->is_home || top > view_t + 4.0f * s))
-         simple_quad(p_disp, userdata, dims, x, top, w - 2.0f * x, line,
+         simple_quad(sm, p_disp, userdata, dims, x, top, w - 2.0f * x, line,
                SIMPLE_COL_LINE);
       if (head)
       {
@@ -2144,10 +2192,10 @@ static void simple_draw_rows(simple_handle_t *sm, gfx_display_t *p_disp,
          {
             float lc, rc, vr;
             simple_arrows(sm, dims, note_w, &lc, &rc, &vr);
-            simple_note(sm, "\xE2\x80\xB9", lc, centre, dims,
-                  SIMPLE_COL_MUTED, TEXT_ALIGN_CENTER);
-            simple_note(sm, "\xE2\x80\xBA", rc, centre, dims,
-                  SIMPLE_COL_MUTED, TEXT_ALIGN_CENTER);
+            simple_mark(sm, "\xE2\x80\xB9", lc, centre, dims,
+                  SIMPLE_COL_MUTED);
+            simple_mark(sm, "\xE2\x80\xBA", rc, centre, dims,
+                  SIMPLE_COL_MUTED);
             simple_note(sm, note, vr, centre, dims, SIMPLE_COL_FG,
                   TEXT_ALIGN_RIGHT);
             note_w = (w - x) - (lc - 24.0f * s);
@@ -2155,8 +2203,9 @@ static void simple_draw_rows(simple_handle_t *sm, gfx_display_t *p_disp,
          }
          if (more)
          {
-            simple_note(sm, note, w - x, centre, dims, sm->accent,
-                  TEXT_ALIGN_RIGHT);
+            simple_mark(sm, note, w - x - simple_mark_size(sm) * 0.5f
+                  * (sm->more_opens ? SIMPLE_MARK_SIGN : SIMPLE_MARK_ARROW),
+                  centre, dims, sm->accent);
             simple_upper(note, word, sizeof(note));
             simple_note(sm, note, x, centre, dims, sm->accent,
                   TEXT_ALIGN_LEFT);
@@ -2181,15 +2230,15 @@ static void simple_draw_rows(simple_handle_t *sm, gfx_display_t *p_disp,
                   frac = 0.0f;
                if (frac > 1.0f)
                   frac = 1.0f;
-               simple_note(sm, "\xE2\x88\x92", x + 8.0f * s, sc, dims,
-                     SIMPLE_COL_MUTED, TEXT_ALIGN_CENTER);
-               simple_note(sm, "+", w - x - 8.0f * s, sc, dims,
-                     SIMPLE_COL_MUTED, TEXT_ALIGN_CENTER);
-               simple_quad(p_disp, userdata, dims, x0, sc - s, x1 - x0,
+               simple_mark(sm, "\xE2\x88\x92", x + 8.0f * s, sc, dims,
+                     SIMPLE_COL_MUTED);
+               simple_mark(sm, "+", w - x - 8.0f * s, sc, dims,
+                     SIMPLE_COL_MUTED);
+               simple_quad(sm, p_disp, userdata, dims, x0, sc - s, x1 - x0,
                      2.0f * s, SIMPLE_COL_LINE);
-               simple_quad(p_disp, userdata, dims, x0, sc - s,
+               simple_quad(sm, p_disp, userdata, dims, x0, sc - s,
                      (x1 - x0) * frac, 2.0f * s, SIMPLE_COL_FG);
-               simple_quad(p_disp, userdata, dims,
+               simple_quad(sm, p_disp, userdata, dims,
                      x0 + (x1 - x0) * frac - 1.5f * s, sc - 9.0f * s,
                      3.0f * s, 18.0f * s, SIMPLE_COL_FG);
             }
@@ -2205,11 +2254,11 @@ static void simple_draw_hints(simple_handle_t *sm, gfx_display_t *p_disp,
       void *userdata, unsigned dims)
 {
    float s      = sm->scale;
-   float w      = (float)VIDEO_SCALE_W(dims);
+   float w      = sm->box_w;
    float box_b  = simple_box_bottom(sm, dims);
    float y      = box_b - 14.0f * s;
 
-   simple_quad(p_disp, userdata, dims, 0.0f, box_b, w,
+   simple_quad(sm, p_disp, userdata, dims, 0.0f, box_b, w,
          s < 1.0f ? 1.0f : s, SIMPLE_COL_LINE);
    /* OK and Cancel can be swapped (the default here): name them so */
    simple_note(sm, config_get_ptr()->bools.input_menu_swap_ok_cancel_buttons
@@ -2226,7 +2275,7 @@ static void simple_draw_kb(simple_handle_t *sm, gfx_display_t *p_disp,
    unsigned r;
    const char *p  = sm->kb_text;
    float s        = sm->scale;
-   float w        = (float)VIDEO_SCALE_W(dims);
+   float w        = sm->box_w;
    float x        = SIMPLE_GUTTER * s;
    float tx       = 2.0f * x;
    float line_h   = sm->m->font[SIMPLE_FONT_FULL] * SIMPLE_KB_LINE * s;
@@ -2240,9 +2289,9 @@ static void simple_draw_kb(simple_handle_t *sm, gfx_display_t *p_disp,
    unsigned first = sm->kb_cursor_line >= max
       ? sm->kb_cursor_line - max + 1 : 0;
 
-   simple_quad(p_disp, userdata, dims, 0.0f, 0.0f, w,
+   simple_quad(sm, p_disp, userdata, dims, 0.0f, 0.0f, w,
          simple_box_bottom(sm, dims), 0x000000A6);
-   simple_quad(p_disp, userdata, dims, x, top, w - 2.0f * x,
+   simple_quad(sm, p_disp, userdata, dims, x, top, w - 2.0f * x,
          y - top + (float)shown * line_h + pad * 0.5f + note_h + pad,
          SIMPLE_COL_SHEET);
    simple_note(sm, sm->kb_label, tx, top + pad + note_h * 0.5f, dims,
@@ -2257,7 +2306,7 @@ static void simple_draw_kb(simple_handle_t *sm, gfx_display_t *p_disp,
          memcpy(line, p, n);
          line[n] = '\0';
          if (sm->kb_selected && n)
-            simple_quad(p_disp, userdata, dims, tx, ly,
+            simple_quad(sm, p_disp, userdata, dims, tx, ly,
                   (float)font_driver_get_message_width(
                      sm->fonts[SIMPLE_FONT_FULL].font, line, n, 1.0f),
                   line_h, SIMPLE_COL_SELECT);
@@ -2265,7 +2314,7 @@ static void simple_draw_kb(simple_handle_t *sm, gfx_display_t *p_disp,
                dims, SIMPLE_COL_FG, TEXT_ALIGN_LEFT);
          if (     r == sm->kb_cursor_line && !sm->kb_selected
                && ((menu_driver_get_current_time() / 500000) & 1))
-            simple_quad(p_disp, userdata, dims, tx + sm->kb_cursor_x,
+            simple_quad(sm, p_disp, userdata, dims, tx + sm->kb_cursor_x,
                   ly + line_h * 0.15f, 2.0f * s, line_h * 0.7f,
                   sm->accent);
       }
@@ -2291,7 +2340,7 @@ static void simple_draw_card(simple_handle_t *sm, gfx_display_t *p_disp,
    unsigned r;
    const char *p = sm->card_text;
    float s       = sm->scale;
-   float w       = (float)VIDEO_SCALE_W(dims);
+   float w       = sm->box_w;
    float x       = SIMPLE_GUTTER * s;
    float tx      = 2.0f * SIMPLE_GUTTER * s;
    float row_h   = sm->m->list_row * s;
@@ -2302,9 +2351,9 @@ static void simple_draw_card(simple_handle_t *sm, gfx_display_t *p_disp,
       { MENU_ENUM_LABEL_VALUE_YES, MENU_ENUM_LABEL_VALUE_NO }
    };
 
-   simple_quad(p_disp, userdata, dims, 0.0f, 0.0f, w,
+   simple_quad(sm, p_disp, userdata, dims, 0.0f, 0.0f, w,
          simple_box_bottom(sm, dims), 0x000000A6);
-   simple_quad(p_disp, userdata, dims, x, sm->card_y, w - 2.0f * x,
+   simple_quad(sm, p_disp, userdata, dims, x, sm->card_y, w - 2.0f * x,
          sm->card_h, SIMPLE_COL_SHEET);
 
    for (r = 0; r < sm->card_lines && *p; r++)
@@ -2322,7 +2371,7 @@ static void simple_draw_card(simple_handle_t *sm, gfx_display_t *p_disp,
    for (r = 0; r < rows; r++)
    {
       float ry = sm->card_rows_y + (float)r * row_h;
-      simple_quad(p_disp, userdata, dims, tx, ry, w - 2.0f * tx,
+      simple_quad(sm, p_disp, userdata, dims, tx, ry, w - 2.0f * tx,
             s < 1.0f ? 1.0f : s, SIMPLE_COL_LINE);
       simple_text(sm, SIMPLE_FONT_WORD,
             msg_hash_to_str(answers[sm->card_confirm ? 1 : 0][r]),
@@ -2342,13 +2391,14 @@ static void simple_frame(void *data, video_frame_info_t *video_info)
    file_list_t *list              = menu_list ? MENU_LIST_GET_SELECTION(menu_list, 0) : NULL;
    void *userdata                 = video_info->userdata;
    unsigned dims                  = video_info->dims;
-   float w                        = (float)VIDEO_SCALE_W(dims);
+   float w;
    float h                        = (float)VIDEO_SCALE_H(dims);
    float box_b;
 
    if (!sm || !sm->fonts[SIMPLE_FONT_WORD].font)
       return;
 
+   w     = sm->box_w;
    box_b = simple_box_bottom(sm, dims);
 
    if (video_st->current_video && video_st->current_video->set_viewport)
@@ -2360,10 +2410,17 @@ static void simple_frame(void *data, video_frame_info_t *video_info)
       sm->fonts[i].raster_block.carr.coords.vertices = 0;
    }
 
-   simple_quad(p_disp, userdata, dims, 0.0f, 0.0f, w, box_b, SIMPLE_COL_BG);
+   simple_quad(sm, p_disp, userdata, dims, 0.0f, 0.0f, w, box_b, SIMPLE_COL_BG);
    if (box_b < h)
-      simple_quad(p_disp, userdata, dims, 0.0f, box_b, w, h - box_b,
+      simple_quad(sm, p_disp, userdata, dims, 0.0f, box_b, w, h - box_b,
             SIMPLE_COL_BELOW);
+   if (sm->left > 0.0f)
+   {
+      simple_quad(sm, p_disp, userdata, dims, -sm->left, 0.0f, sm->left, h,
+            SIMPLE_COL_BELOW);
+      simple_quad(sm, p_disp, userdata, dims, w, 0.0f,
+            (float)VIDEO_SCALE_W(dims) - sm->left - w, h, SIMPLE_COL_BELOW);
+   }
 
    if (sm->has_continue && list && list->size)
    {
@@ -2373,9 +2430,9 @@ static void simple_frame(void *data, video_frame_info_t *video_info)
       while (name && *name)
          hash = hash * 31 + (unsigned char)*name++;
       pick = hash % (sizeof(simple_band) / sizeof(simple_band[0]));
-      simple_band_back(p_disp, userdata, dims, sm->m->band_h * sm->scale,
+      simple_band_back(sm, p_disp, userdata, dims, sm->m->band_h * sm->scale,
             simple_band[pick][0], simple_band[pick][1]);
-      simple_band_fade(p_disp, userdata, dims, sm->m->band_h * sm->scale);
+      simple_band_fade(sm, p_disp, userdata, dims, sm->m->band_h * sm->scale);
    }
 
    if (list && list->size)
@@ -2391,15 +2448,15 @@ static void simple_frame(void *data, video_frame_info_t *video_info)
       float line   = sm->scale < 1.0f ? 1.0f : sm->scale;
       float x      = SIMPLE_GUTTER * sm->scale;
       float rows_b = simple_rows_bottom(sm, dims);
-      simple_quad(p_disp, userdata, dims, 0.0f, 0.0f, w, view_t,
+      simple_quad(sm, p_disp, userdata, dims, 0.0f, 0.0f, w, view_t,
             SIMPLE_COL_BG);
-      simple_quad(p_disp, userdata, dims, x, sm->m->list_top * sm->scale,
+      simple_quad(sm, p_disp, userdata, dims, x, sm->m->list_top * sm->scale,
             w - 2.0f * x, line, SIMPLE_COL_LINE);
       if (sm->desc_h > 0.0f)
-         simple_quad(p_disp, userdata, dims, x, view_t, w - 2.0f * x, line,
+         simple_quad(sm, p_disp, userdata, dims, x, view_t, w - 2.0f * x, line,
                SIMPLE_COL_LINE);
       if (rows_b < box_b)
-         simple_quad(p_disp, userdata, dims, 0.0f, rows_b, w,
+         simple_quad(sm, p_disp, userdata, dims, 0.0f, rows_b, w,
                box_b - rows_b, SIMPLE_COL_BG);
    }
    simple_draw_header(sm, dims);
@@ -2435,7 +2492,7 @@ static void simple_frame(void *data, video_frame_info_t *video_info)
 /* Left edge of the part of a row that changes its value */
 static float simple_value_left(const simple_handle_t *sm)
 {
-   return (float)VIDEO_SCALE_W(sm->dims) * 0.6f;
+   return sm->box_w * 0.6f;
 }
 
 static int simple_pointer_up(void *data,
@@ -2457,12 +2514,14 @@ static int simple_pointer_up(void *data,
 
    if (!sm)
       return -1;
-   s = sm->scale;
+   s   = sm->scale;
+   fx -= sm->left;
    simple_log("tap %u,%u gesture=%d ptr=%u", x, y, (int)gesture, ptr);
    if (     gesture != MENU_INPUT_GESTURE_TAP
          && gesture != MENU_INPUT_GESTURE_SHORT_PRESS)
       return 0;
-   if (fy >= simple_box_bottom(sm, sm->dims))
+   if (     fx < 0.0f || fx >= sm->box_w
+         || fy >= simple_box_bottom(sm, sm->dims))
       return 0;
 
    /* The breadcrumb line is the back button */

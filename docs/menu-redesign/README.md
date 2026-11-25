@@ -48,6 +48,13 @@ Test APKs are labelled with what they test, so they can be told apart.
   it, a build falls back to the machine's own debug key and says so.
   No signing key is in the repository.
 
+  RA TESTER keeps its saves, states, playlists, core settings, system
+  files, screenshots and the rest in `RA_TESTER` in the phone's storage
+  (`ANDROID_USER_DIR` in `platform_unix.c`), where other builds use
+  `RetroArch`. Deleting that folder and uninstalling the app removes all
+  of it. An RA TESTER installed before this has the old folders in its
+  `retroarch.cfg`, which must be changed there once.
+
   To check a build on a phone over USB, with the screen unlocked:
 
   ```
@@ -141,8 +148,11 @@ core has settings of its own. A game that cannot be opened says why,
 and offers to choose its folder.
 
 Gamepad Mode (Help, or Settings › Interface) draws the menu in a 4:3
-box at the top, smaller, with button hints, and shows the touch controls
-below it to work the menu with. Without it the menu fills the screen and
+box, smaller, with button hints, and shows the touch controls to work the
+menu with. The box is at the top with the controls below it, or in
+landscape in the middle with the controls at the sides, the same page
+enlarged to the screen's height. Touch mode in a window too short for Home,
+as in landscape, uses a shorter header and Continue. Without it the menu fills the screen and
 the touch controls are hidden while the menu is open. Other drivers keep
 "Hide Overlay in Menu" as it is. The line at the left of the selected row
 is for Gamepad Mode; in touch mode it shows only while a controller's

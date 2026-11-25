@@ -14682,11 +14682,23 @@ unsigned menu_displaylist_build_list(
             };
 
             for (i = 0; i < ARRAY_SIZE(rows); i++)
+            {
                if (menu_entries_append(list,
                         msg_hash_to_str(rows[i][1]),
                         msg_hash_to_str(rows[i][0]),
                         rows[i][0], MENU_SETTING_ACTION, 0, 0, NULL))
                   count++;
+               if (rows[i][0] != MENU_ENUM_LABEL_OVERLAY_LAYOUT_STYLE)
+                  continue;
+               if (MENU_DISPLAYLIST_PARSE_SETTINGS_ENUM(list,
+                        MENU_ENUM_LABEL_OVERLAY_OPACITY,
+                        PARSE_ONLY_FLOAT, false) == 0)
+                  count++;
+               if (MENU_DISPLAYLIST_PARSE_SETTINGS_ENUM(list,
+                        MENU_ENUM_LABEL_INPUT_OVERLAY_HIDE_WHEN_GAMEPAD_CONNECTED,
+                        PARSE_ONLY_BOOL, false) == 0)
+                  count++;
+            }
          }
          break;
       case DISPLAYLIST_OVERLAY_LAYOUT_CONTROLS_LIST:

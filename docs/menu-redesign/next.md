@@ -28,7 +28,6 @@ and solid at the bottom (`simple_band_fade`). Still to do:
 
 | Feature | Notes |
 |---|---|
-| RA TESTER's own folders | It shares history, playlists, saves and core settings with the working app |
 | Keep settings changed during a game | Dropped now when the game has settings of its own; "Keeping changes" in `ia-v2.md` |
 | Box art, page animation, Quick Setup | See `plan.md` |
 
@@ -48,16 +47,15 @@ and solid at the bottom (`simple_band_fade`). Still to do:
 2. Is the right 40% of a row the right size for changing its value?
 3. Should Simple turn Use Camera Area on once only, rather than each time
    the layout changes from Classic?
-4. Should + and − on an opened row be bigger? More Downloads looks like the
-   section labels, which cannot be tapped: only its + or − says it can.
-5. Highlight Color: is a colour of one's own wanted (a hex code), or whole
+4. Highlight Color: is a colour of one's own wanted (a hex code), or whole
    themes, as RGUI has?
-6. Should the labels inside More Downloads (Update Files, Settings) be grey,
+5. Should the labels inside More Downloads (Update Files, Settings) be grey,
    so that they do not look equal to it?
 
 ## Not tested
 
-- A physical controller, landscape, and the Vulkan video driver. With a
+- A physical controller, landscape in touch mode, and the Vulkan video
+  driver. With a
   controller in touch mode, that the line at the left shows on up and down
   and goes at the next touch: arrow keys sent over USB do not reach the menu.
 - RetroArch's own keyboard in Simple, with the system's turned off.
