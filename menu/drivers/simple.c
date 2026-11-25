@@ -207,6 +207,7 @@ typedef struct simple_handle
    bool more_opens;         /* the More row does so in place */
    bool more_open;
    bool settings_page;
+   bool keep_asked;
    bool keys;               /* moved by buttons since the last touch */
    double cycle_ms;         /* for which names have changed */
    float cycle_wait;        /* until they do again */
@@ -682,11 +683,79 @@ static void simple_keep_options(simple_handle_t *sm, size_t i)
    simple_upper(sm->kb_label, sm->opt_title, sizeof(sm->kb_label));
 }
 
+#ifdef HAVE_CONFIGFILE
+/* Whether one of two lists is open, at any level */
+static bool simple_on_stack(const file_list_t *stack,
+      enum msg_hash_enums a, enum msg_hash_enums b)
+{
+   size_t i;
+   for (i = 0; stack && i < stack->size; i++)
+      if (     string_is_equal(stack->list[i].label, msg_hash_to_str(a))
+            || string_is_equal(stack->list[i].label, msg_hash_to_str(b)))
+         return true;
+   return false;
+}
+
+/* Leaving the Game menu's Controls or Screen with settings changed asks
+ * what they are for. Any way out of the question is Just for now. */
+static bool simple_keep(simple_handle_t *sm)
+{
+   struct menu_state *menu_st = menu_state_get_ptr();
+   const file_list_t *stack   = menu_st->entries.list
+      ? MENU_LIST_GET(menu_st->entries.list, 0) : NULL;
+   bool playing               =
+         (runloop_get_flags() & RUNLOOP_FLAG_CORE_RUNNING)
+      && !retroarch_ctl(RARCH_CTL_IS_DUMMY_CORE, NULL)
+      && config_get_ptr()->uints.menu_layout == MENU_LAYOUT_SIMPLE;
+   bool on_page               = simple_on_stack(stack,
+         MENU_ENUM_LABEL_DEFERRED_SIMPLE_GAME_CONTROLS_LIST,
+         MENU_ENUM_LABEL_DEFERRED_SIMPLE_GAME_SCREEN_LIST);
+
+   if (!config_keep_active())
+   {
+      sm->keep_asked = false;
+      if (playing && on_page)
+         config_keep_begin();
+      return false;
+   }
+   if (on_page)
+      return false;
+   if (!playing)
+   {
+      /* The game has closed, which read retroarch.cfg again */
+      config_keep_end(false);
+      return false;
+   }
+   if (simple_on_stack(stack, MENU_ENUM_LABEL_DEFERRED_SIMPLE_KEEP_LIST,
+            MENU_ENUM_LABEL_DEFERRED_SIMPLE_KEEP_LIST))
+      return false;
+   if (sm->keep_asked)
+   {
+      menu_cbs_simple_keep_none();
+      return false;
+   }
+   if (!config_keep_changes())
+   {
+      config_keep_end(false);
+      return false;
+   }
+   sm->keep_asked = true;
+   generic_action_ok_displaylist_push("", NULL,
+         MENU_ENUM_LABEL_DEFERRED_SIMPLE_KEEP_LIST_STR, 0,
+         menu_st->selection_ptr, 0, ACTION_OK_DL_SIMPLE_KEEP_LIST);
+   return true;
+}
+#endif
+
 static int simple_entry_action(void *userdata, menu_entry_t *entry,
       size_t i, enum menu_action action)
 {
    simple_handle_t *sm = (simple_handle_t*)userdata;
 
+#ifdef HAVE_CONFIGFILE
+   if (sm && action == MENU_ACTION_NOOP && simple_keep(sm))
+      return 0;
+#endif
    /* Taps never move the selection so */
    if (sm && (action == MENU_ACTION_UP || action == MENU_ACTION_DOWN))
    {
@@ -1376,7 +1445,8 @@ static void simple_set_page(simple_handle_t *sm, bool simple_layout)
       MENU_ENUM_LABEL_DEFERRED_SIMPLE_GAME_CONTROLS_LIST,
       MENU_ENUM_LABEL_DEFERRED_SIMPLE_GAME_SCREEN_LIST,
       MENU_ENUM_LABEL_DEFERRED_SIMPLE_DOWNLOADS_LIST,
-      MENU_ENUM_LABEL_DEFERRED_SIMPLE_BOX_ART_LIST
+      MENU_ENUM_LABEL_DEFERRED_SIMPLE_BOX_ART_LIST,
+      MENU_ENUM_LABEL_DEFERRED_SIMPLE_KEEP_LIST
    };
 
    menu_entries_get_last_stack(&path, &label, NULL, NULL, NULL);

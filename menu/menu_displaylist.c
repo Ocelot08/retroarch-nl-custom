@@ -10230,6 +10230,40 @@ unsigned menu_displaylist_build_list(
                count++;
 #endif
          break;
+      case DISPLAYLIST_SIMPLE_KEEP_LIST:
+         {
+            char name[128];
+            core_info_t *core_info      = NULL;
+            const char *basename        = path_get(RARCH_PATH_BASENAME);
+            const char *games           =
+               runloop_state_get_ptr()->system.info.library_name;
+
+            if (     core_info_get_current_core(&core_info) && core_info
+                  && core_info->systemname && *core_info->systemname)
+               games = core_info->systemname;
+            if (     basename && *basename
+                  && menu_entries_append(list, msg_hash_to_str(
+                        MENU_ENUM_LABEL_VALUE_SIMPLE_KEEP_GAME),
+                     MENU_ENUM_LABEL_SIMPLE_KEEP_GAME_STR,
+                     MENU_ENUM_LABEL_SIMPLE_KEEP_GAME,
+                     MENU_SETTING_ACTION, 0, 0, NULL))
+               count++;
+            snprintf(name, sizeof(name), msg_hash_to_str(
+                     MENU_ENUM_LABEL_VALUE_SIMPLE_KEEP_CORE),
+                  games ? games : "");
+            if (menu_entries_append(list, name,
+                     MENU_ENUM_LABEL_SIMPLE_KEEP_CORE_STR,
+                     MENU_ENUM_LABEL_SIMPLE_KEEP_CORE,
+                     MENU_SETTING_ACTION, 0, 0, NULL))
+               count++;
+            if (menu_entries_append(list, msg_hash_to_str(
+                        MENU_ENUM_LABEL_VALUE_SIMPLE_KEEP_NONE),
+                     MENU_ENUM_LABEL_SIMPLE_KEEP_NONE_STR,
+                     MENU_ENUM_LABEL_SIMPLE_KEEP_NONE,
+                     MENU_SETTING_ACTION, 0, 0, NULL))
+               count++;
+         }
+         break;
       case DISPLAYLIST_SIMPLE_CONTROLS_LIST:
       case DISPLAYLIST_SIMPLE_SCREEN_LIST:
       case DISPLAYLIST_SIMPLE_SOUND_LIST:
@@ -19224,6 +19258,7 @@ static bool menu_displaylist_ctl_internal(
          case DISPLAYLIST_SIMPLE_GAME_SCREEN_LIST:
          case DISPLAYLIST_SIMPLE_DOWNLOADS_LIST:
          case DISPLAYLIST_SIMPLE_BOX_ART_LIST:
+         case DISPLAYLIST_SIMPLE_KEEP_LIST:
             menu_entries_clear(info->list);
             count = menu_displaylist_build_list(info->list,
                   settings, type, false);

@@ -11132,6 +11132,333 @@ int8_t config_save_overrides(enum override_type type,
    return ret;
 }
 
+static settings_t *config_keep_settings;
+static input_config_binds_copy_t *config_keep_binds;
+static bool config_keep_marked;
+
+void config_keep_begin(void)
+{
+   runloop_state_t *runloop_st = runloop_state_get_ptr();
+   settings_t *settings        = config_st;
+
+   if (config_keep_settings)
+      return;
+   if (!(runloop_st->flags & RUNLOOP_FLAG_OVERRIDES_ACTIVE))
+   {
+      if (     settings->bools.config_save_on_exit
+            && !video_driver_get_configured_ident()
+            && !path_is_empty(RARCH_PATH_CONFIG))
+         config_save_file(path_get(RARCH_PATH_CONFIG));
+      runloop_st->flags |= RUNLOOP_FLAG_OVERRIDES_ACTIVE;
+      config_keep_marked = true;
+   }
+   if ((config_keep_settings = (settings_t*)malloc(sizeof(*settings))))
+      memcpy(config_keep_settings, settings, sizeof(*settings));
+   if ((config_keep_binds = input_config_binds_copy_new()))
+      input_config_binds_copy_take(config_keep_binds);
+   if (!config_keep_settings || !config_keep_binds)
+      config_keep_end(false);
+}
+
+bool config_keep_active(void)
+{
+   return config_keep_settings != NULL;
+}
+
+void config_keep_end(bool keep)
+{
+   if (config_keep_marked && !keep)
+      runloop_state_get_ptr()->flags &= ~RUNLOOP_FLAG_OVERRIDES_ACTIVE;
+   config_keep_marked = false;
+   free(config_keep_settings);
+   config_keep_settings = NULL;
+   if (config_keep_binds)
+      input_config_binds_copy_free(config_keep_binds);
+   config_keep_binds = NULL;
+}
+
+/* A file's own change, or none if it has no such key and only those it
+ * has are to change */
+static bool config_keep_key(config_file_t *conf, bool own, const char *key)
+{
+   return conf && (!own || config_get_entry(conf, key));
+}
+
+/* A remap has these, an override does not */
+static bool config_keep_skip(const char *ident)
+{
+   return string_starts_with(ident, "input_turbo")
+       || string_starts_with(ident, "state_slot");
+}
+
+/* How many settings have changed. They are put into @conf, unless it is
+ * NULL: with @own, only those it already has. */
+static unsigned config_keep_write(config_file_t *conf, bool own)
+{
+   int i, j;
+   int size, tmp;
+   unsigned n                         = 0;
+   settings_t *was                    = config_keep_settings;
+   settings_t *now                    = config_st;
+   struct config_bool_setting *b0     = NULL;
+   struct config_bool_setting *b1     = NULL;
+   struct config_int_setting *i0      = NULL;
+   struct config_int_setting *i1      = NULL;
+   struct config_uint_setting *u0     = NULL;
+   struct config_uint_setting *u1     = NULL;
+   struct config_size_setting *s0     = NULL;
+   struct config_size_setting *s1     = NULL;
+   struct config_float_setting *f0    = NULL;
+   struct config_float_setting *f1    = NULL;
+   struct config_array_setting *a0    = NULL;
+   struct config_array_setting *a1    = NULL;
+   struct config_path_setting *p0     = NULL;
+   struct config_path_setting *p1     = NULL;
+
+   size = tmp = SETTINGS_BOOL_COUNT_MAX;
+   b0   = populate_settings_bool(was, &size);
+   b1   = populate_settings_bool(now, &tmp);
+   for (i = 0; b0 && b1 && i < size; i++)
+      if (     *b0[i].ptr != *b1[i].ptr
+            && !config_keep_skip(b1[i].ident))
+      {
+         n++;
+         if (config_keep_key(conf, own, b1[i].ident))
+            config_set_string(conf, b1[i].ident,
+                  *b1[i].ptr ? "true" : "false");
+      }
+
+   size = tmp = SETTINGS_INT_COUNT_MAX;
+   i0   = populate_settings_int(was, &size);
+   i1   = populate_settings_int(now, &tmp);
+   for (i = 0; i0 && i1 && i < size; i++)
+      if (     cfg_int_get(&i0[i]) != cfg_int_get(&i1[i])
+            && !config_keep_skip(i1[i].ident))
+      {
+         n++;
+         if (config_keep_key(conf, own, i1[i].ident))
+            config_set_int(conf, i1[i].ident, cfg_int_get(&i1[i]));
+      }
+
+   size = tmp = SETTINGS_UINT_COUNT_MAX;
+   u0   = populate_settings_uint(was, &size);
+   u1   = populate_settings_uint(now, &tmp);
+   for (i = 0; u0 && u1 && i < size; i++)
+      if (     cfg_uint_get(&u0[i]) != cfg_uint_get(&u1[i])
+            && !config_keep_skip(u1[i].ident))
+      {
+         n++;
+         if (config_keep_key(conf, own, u1[i].ident))
+            config_set_int(conf, u1[i].ident, cfg_uint_get(&u1[i]));
+      }
+
+   size = tmp = SETTINGS_SIZE_COUNT_MAX;
+   s0   = populate_settings_size(was, &size);
+   s1   = populate_settings_size(now, &tmp);
+   for (i = 0; s0 && s1 && i < size; i++)
+      if (*s0[i].ptr != *s1[i].ptr)
+      {
+         n++;
+         if (config_keep_key(conf, own, s1[i].ident))
+            config_set_int(conf, s1[i].ident, (int)*s1[i].ptr);
+      }
+
+   size = tmp = SETTINGS_FLOAT_COUNT_MAX;
+   f0   = populate_settings_float(was, &size);
+   f1   = populate_settings_float(now, &tmp);
+   for (i = 0; f0 && f1 && i < size; i++)
+      if (*f0[i].ptr != *f1[i].ptr)
+      {
+         n++;
+         if (config_keep_key(conf, own, f1[i].ident))
+            config_set_float(conf, f1[i].ident, *f1[i].ptr);
+      }
+
+   size = tmp = SETTINGS_ARRAY_COUNT_MAX;
+   a0   = populate_settings_array(was, &size);
+   a1   = populate_settings_array(now, &tmp);
+   for (i = 0; a0 && a1 && i < size; i++)
+      if (     !(a1[i].flags & CFG_BOOL_FLG_SENSITIVE)
+            && !string_is_equal(a0[i].ptr, a1[i].ptr))
+      {
+         n++;
+         if (config_keep_key(conf, own, a1[i].ident))
+            config_set_string(conf, a1[i].ident, a1[i].ptr);
+      }
+
+   size = tmp = SETTINGS_PATH_COUNT_MAX;
+   p0   = populate_settings_path(was, &size);
+   p1   = populate_settings_path(now, &tmp);
+   for (i = 0; p0 && p1 && i < size; i++)
+      if (     !(p1[i].flags & CFG_BOOL_FLG_SENSITIVE)
+            && !string_is_equal(p0[i].ptr, p1[i].ptr))
+      {
+         n++;
+         if (config_keep_key(conf, own, p1[i].ident))
+            config_set_path(conf, p1[i].ident, p1[i].ptr);
+      }
+
+   for (i = 0; i < MAX_USERS; i++)
+      for (j = 0; j < RARCH_BIND_LIST_END; j++)
+      {
+         char key[64];
+         char btn[64];
+         char prefix[16];
+         const struct input_bind_map *map = NULL;
+         const struct retro_keybind *b    = input_config_bind(i, j);
+         const struct retro_keybind *w    =
+            input_config_binds_copy_bind(config_keep_binds, i, j);
+
+         if (     b->joykey  == w->joykey
+               && b->joyaxis == w->joyaxis
+               && RETRO_KEYBIND_KEY(b)     == RETRO_KEYBIND_KEY(w)
+               && RETRO_KEYBIND_MBUTTON(b) == RETRO_KEYBIND_MBUTTON(w))
+            continue;
+         if (!input_config_bind_map_get_valid(j))
+            continue;
+         map       = (const struct input_bind_map*)INPUT_CONFIG_BIND_MAP_GET(j);
+         prefix[0] = '\0';
+         if (map)
+            input_config_get_prefix(prefix, sizeof(prefix), i, map->meta);
+         if (!*prefix || !RETRO_KEYBIND_VALID(b))
+            continue;
+         n++;
+         fill_pathname_join_delim(key, prefix, map->base, '_', sizeof(key));
+         if (!config_keep_key(conf, own, key))
+            continue;
+         btn[0] = '\0';
+         input_keymaps_translate_rk_to_str(RETRO_KEYBIND_KEY(b),
+               btn, sizeof(btn));
+         config_set_string(conf, key, btn);
+         save_keybind_joykey (conf, prefix, map->base, b, true);
+         save_keybind_axis   (conf, prefix, map->base, b, true);
+         save_keybind_mbutton(conf, prefix, map->base, b, true);
+      }
+
+   free(b0);
+   free(b1);
+   free(i0);
+   free(i1);
+   free(u0);
+   free(u1);
+   free(s0);
+   free(s1);
+   free(f0);
+   free(f1);
+   free(a0);
+   free(a1);
+   free(p0);
+   free(p1);
+   return n;
+}
+
+unsigned config_keep_changes(void)
+{
+   unsigned ret          = 0;
+   const settings_t *was = config_keep_settings;
+   const settings_t *now = config_st;
+
+   if (!was)
+      return 0;
+   if (config_keep_write(NULL, false))
+      ret |= CONFIG_KEEP_SETTINGS;
+   if (     memcmp(was->uints.input_remap_ids, now->uints.input_remap_ids,
+            sizeof(now->uints.input_remap_ids))
+         || memcmp(was->uints.input_keymapper_ids,
+            now->uints.input_keymapper_ids,
+            sizeof(now->uints.input_keymapper_ids))
+         || memcmp(was->uints.input_remap_ports,
+            now->uints.input_remap_ports,
+            sizeof(now->uints.input_remap_ports))
+         || memcmp(was->uints.input_libretro_device,
+            now->uints.input_libretro_device,
+            sizeof(now->uints.input_libretro_device))
+         || memcmp(was->uints.input_analog_dpad_mode,
+            now->uints.input_analog_dpad_mode,
+            sizeof(now->uints.input_analog_dpad_mode))
+         || was->bools.input_turbo_enable     != now->bools.input_turbo_enable
+         || was->bools.input_turbo_allow_dpad != now->bools.input_turbo_allow_dpad
+         || was->ints.input_turbo_bind        != now->ints.input_turbo_bind
+         || was->uints.input_turbo_mode       != now->uints.input_turbo_mode
+         || was->uints.input_turbo_button     != now->uints.input_turbo_button
+         || was->uints.input_turbo_period     != now->uints.input_turbo_period
+         || was->uints.input_turbo_duty_cycle != now->uints.input_turbo_duty_cycle)
+      ret |= CONFIG_KEEP_REMAPS;
+   return ret;
+}
+
+/* The core's override gets the changes; the folder's and the game's, which
+ * are read after it, keep any of the same keys in step */
+bool config_keep_save(enum override_type type)
+{
+   int i;
+   char dir[DIR_MAX_LENGTH];
+   char name[3][NAME_MAX_LENGTH];
+   bool ret              = false;
+   const char *core_name = runloop_state_get_ptr()->system.info.library_name;
+   const char *basename  = path_get(RARCH_PATH_BASENAME);
+   bool has_content      = basename && *basename;
+
+   if (     !config_keep_settings || !core_name || !*core_name
+         || (type == OVERRIDE_GAME && !has_content))
+      return false;
+
+   fill_pathname_application_special(dir, sizeof(dir),
+         APPLICATION_SPECIAL_DIRECTORY_CONFIG);
+   {
+      char core_dir[DIR_MAX_LENGTH];
+      fill_pathname_join_special(core_dir, dir, core_name, sizeof(core_dir));
+      if (!path_is_directory(core_dir) && !path_mkdir(core_dir))
+         return false;
+   }
+
+   strlcpy(name[0], core_name, sizeof(name[0]));
+   name[1][0] = name[2][0] = '\0';
+   if (has_content)
+   {
+      fill_pathname_parent_dir_name(name[1], basename, sizeof(name[1]));
+      strlcpy(name[2], path_basename_nocompression(basename),
+            sizeof(name[2]));
+   }
+
+   for (i = (type == OVERRIDE_GAME) ? 2 : 0; i < 3; i++)
+   {
+      char path[PATH_MAX_LENGTH];
+      config_file_t *conf = NULL;
+      bool own            = (type != OVERRIDE_GAME && i > 0);
+
+      if (!*name[i] || (own && string_is_equal(name[i], core_name)))
+         continue;
+      fill_pathname_join_special_ext(path, dir, core_name, name[i],
+            FILE_PATH_CONFIG_EXTENSION, sizeof(path));
+      if (path_is_valid(path))
+         conf = config_file_new_from_path_to_string(path);
+      else if (own)
+         continue;
+      if (!conf && !(conf = config_file_new_alloc()))
+         continue;
+      config_keep_write(conf, own);
+      if (conf->flags & CONF_FILE_FLG_MODIFIED)
+      {
+         if (config_file_write(conf, path, true))
+            RARCH_LOG("[Override] Changes saved: \"%s\".\n", path);
+         else if (!own)
+         {
+            config_file_free(conf);
+            return false;
+         }
+      }
+      if (!own)
+      {
+         ret = true;
+         if (path_is_empty(RARCH_PATH_CONFIG_OVERRIDE))
+            path_set(RARCH_PATH_CONFIG_OVERRIDE, path);
+      }
+      config_file_free(conf);
+   }
+   return ret;
+}
+
 /* Replaces currently loaded configuration file with
  * another one. Will load a dummy core to flush state
  * properly. */

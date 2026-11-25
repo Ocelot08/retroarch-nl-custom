@@ -1764,6 +1764,21 @@ unsigned config_keychain_reapply(void);
 int8_t config_save_overrides(enum override_type type,
       void *data, bool remove, const char *path);
 
+/* What config_keep_changes() found */
+#define CONFIG_KEEP_SETTINGS (1 << 0)
+#define CONFIG_KEEP_REMAPS   (1 << 1)
+
+/* Settings changed during a game, in the Simple layout. begin() takes a
+ * copy to compare with, after writing retroarch.cfg, which is not written
+ * again until end(). save() adds what has changed, and nothing else, to
+ * the core's or the game's override. end() leaves the game marked as one
+ * with overrides if @keep, so that closing it reads retroarch.cfg again. */
+void config_keep_begin(void);
+bool config_keep_active(void);
+unsigned config_keep_changes(void);
+bool config_keep_save(enum override_type type);
+void config_keep_end(bool keep);
+
 /* Replaces currently loaded configuration file with
  * another one. Will load a dummy core to flush state
  * properly. */

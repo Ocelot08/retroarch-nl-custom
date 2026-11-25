@@ -179,8 +179,6 @@ The first and the lost presses were seen on the driver before the two lines were
   - Update Cores updates installed cores, not everything: RetroArch has no single update-all.
   - System Files is RetroArch's downloader, and does not know what is missing.
   - There are no update counts or summary: they need a request to the server when the page opens.
-- **Settings changed during a game** that has its own settings are dropped
-  when it closes: "Keeping changes" in `ia-v2.md`, not built.
 - **The text box's cursor** stays at the end on Android, which does not
   report where it is.
 - **Languages** outside Latin show as boxes: the bundled font is a subset.

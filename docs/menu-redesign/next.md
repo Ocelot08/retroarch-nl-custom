@@ -28,7 +28,7 @@ and solid at the bottom (`simple_band_fade`). Still to do:
 
 | Feature | Notes |
 |---|---|
-| Keep settings changed during a game | Dropped now when the game has settings of its own; "Keeping changes" in `ia-v2.md` |
+| The rest of "Keeping changes" in `ia-v2.md` | The question on Game Options, the banner, Ask Before Keeping Changes. Settings changed from Home during a game are still dropped when it has settings of its own. Shaders and which controller a player uses are not asked about |
 | Box art, page animation, Quick Setup | See `plan.md` |
 
 ## Small fixes
@@ -53,6 +53,8 @@ and solid at the bottom (`simple_band_fade`). Still to do:
 
 ## Not tested
 
+- Keep Changes? in Gamepad Mode, after a resume from its page, and with
+  changed binds.
 - A physical controller, landscape in touch mode, and the Vulkan video
   driver. With a
   controller in touch mode, that the line at the left shows on up and down

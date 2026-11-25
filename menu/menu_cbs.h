@@ -237,6 +237,7 @@ enum
    ACTION_OK_DL_SIMPLE_GAME_SCREEN_LIST,
    ACTION_OK_DL_SIMPLE_DOWNLOADS_LIST,
    ACTION_OK_DL_SIMPLE_BOX_ART_LIST,
+   ACTION_OK_DL_SIMPLE_KEEP_LIST,
    ACTION_OK_DL_MENU_SETTINGS_LIST,
 #ifdef _3DS
    ACTION_OK_DL_MENU_BOTTOM_SETTINGS_LIST,
@@ -413,6 +414,9 @@ int menu_cbs_init_bind_title(menu_file_list_cbs_t *cbs,
       const char *path, const char *label, unsigned type, size_t idx);
 
 /* The Simple layout's plain name for the setting @label, or NULL */
+/* Answers the Simple layout's Keep Changes question */
+void menu_cbs_simple_keep_none(void);
+
 const char *menu_cbs_simple_name(const char *label);
 
 #ifdef HAVE_LIBRETRODB

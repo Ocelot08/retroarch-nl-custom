@@ -507,6 +507,8 @@ static enum msg_hash_enums action_ok_dl_to_enum(unsigned lbl)
          return MENU_ENUM_LABEL_DEFERRED_SIMPLE_DOWNLOADS_LIST;
       case ACTION_OK_DL_SIMPLE_BOX_ART_LIST:
          return MENU_ENUM_LABEL_DEFERRED_SIMPLE_BOX_ART_LIST;
+      case ACTION_OK_DL_SIMPLE_KEEP_LIST:
+         return MENU_ENUM_LABEL_DEFERRED_SIMPLE_KEEP_LIST;
       case ACTION_OK_DL_USER_INTERFACE_SETTINGS_LIST:
          return MENU_ENUM_LABEL_DEFERRED_USER_INTERFACE_SETTINGS_LIST;
       case ACTION_OK_DL_AI_SERVICE_SETTINGS_LIST:
@@ -2002,6 +2004,7 @@ int generic_action_ok_displaylist_push(
       case ACTION_OK_DL_SIMPLE_GAME_SCREEN_LIST:
       case ACTION_OK_DL_SIMPLE_DOWNLOADS_LIST:
       case ACTION_OK_DL_SIMPLE_BOX_ART_LIST:
+      case ACTION_OK_DL_SIMPLE_KEEP_LIST:
       case ACTION_OK_DL_USER_INTERFACE_SETTINGS_LIST:
       case ACTION_OK_DL_AI_SERVICE_SETTINGS_LIST:
 #ifdef HAVE_SMBCLIENT
@@ -9362,6 +9365,59 @@ static int action_ok_simple_alias(const char *path,
    return 0;
 }
 
+#ifdef HAVE_CONFIGFILE
+/* Just for now: closing the game reads retroarch.cfg again, and a remap
+ * file in use is not written with what was changed */
+void menu_cbs_simple_keep_none(void)
+{
+   settings_t *settings = config_get_ptr();
+   unsigned changes     = config_keep_changes();
+   if (changes & CONFIG_KEEP_REMAPS)
+      settings->bools.remap_save_on_exit = false;
+   config_keep_end(changes != 0);
+}
+
+static int action_ok_simple_keep(const char *path,
+      const char *label, unsigned type, size_t idx, size_t entry_idx)
+{
+   if (string_is_equal(label, MENU_ENUM_LABEL_SIMPLE_KEEP_NONE_STR))
+      menu_cbs_simple_keep_none();
+   else
+   {
+      const char *msg;
+      bool ok          = true;
+      bool game        = string_is_equal(label,
+            MENU_ENUM_LABEL_SIMPLE_KEEP_GAME_STR);
+      unsigned changes = config_keep_changes();
+      uint32_t flags   = runloop_get_flags();
+
+      if (changes & CONFIG_KEEP_SETTINGS)
+         ok = config_keep_save(game ? OVERRIDE_GAME : OVERRIDE_CORE);
+      if (changes & CONFIG_KEEP_REMAPS)
+      {
+         if (!game)
+            generic_action_ok_remap_file_operation(path, label, type, idx,
+                  entry_idx, ACTION_OK_REMAP_FILE_SAVE_CORE);
+         /* A game's own is read in place of the core's */
+         if (game || (flags & RUNLOOP_FLAG_REMAPS_GAME_ACTIVE))
+            generic_action_ok_remap_file_operation(path, label, type, idx,
+                  entry_idx, ACTION_OK_REMAP_FILE_SAVE_GAME);
+      }
+      config_keep_end((changes & CONFIG_KEEP_SETTINGS) != 0);
+      if (!ok || (changes & CONFIG_KEEP_SETTINGS))
+      {
+         msg = msg_hash_to_str(ok ? MENU_ENUM_LABEL_VALUE_SIMPLE_KEEP_SAVED
+               : MENU_ENUM_LABEL_VALUE_SIMPLE_KEEP_FAILED);
+         runloop_msg_queue_push(msg, strlen(msg), 1, 100, true, NULL,
+               MESSAGE_QUEUE_ICON_DEFAULT, ok
+               ? MESSAGE_QUEUE_CATEGORY_SUCCESS
+               : MESSAGE_QUEUE_CATEGORY_ERROR);
+      }
+   }
+   return action_cancel_pop_default(path, label, type, idx);
+}
+#endif
+
 static int action_ok_simple_home(const char *path,
       const char *label, unsigned type, size_t idx, size_t entry_idx)
 {
@@ -10944,6 +11000,11 @@ static int menu_cbs_init_bind_ok_compare_label(menu_file_list_cbs_t *cbs,
          {MENU_ENUM_LABEL_SIMPLE_GAME_OPTIONS, action_ok_simple_alias},
          {MENU_ENUM_LABEL_SIMPLE_HOME, action_ok_simple_home},
          {MENU_ENUM_LABEL_SIMPLE_CLASSIC, action_ok_simple_classic},
+#ifdef HAVE_CONFIGFILE
+         {MENU_ENUM_LABEL_SIMPLE_KEEP_GAME, action_ok_simple_keep},
+         {MENU_ENUM_LABEL_SIMPLE_KEEP_CORE, action_ok_simple_keep},
+         {MENU_ENUM_LABEL_SIMPLE_KEEP_NONE, action_ok_simple_keep},
+#endif
          {MENU_ENUM_LABEL_FRONTEND_COUNTERS,                   action_ok_push_default},
          {MENU_ENUM_LABEL_CORE_COUNTERS,                       action_ok_push_default},
          {MENU_ENUM_LABEL_ONLINE_UPDATER,                      action_ok_push_default},

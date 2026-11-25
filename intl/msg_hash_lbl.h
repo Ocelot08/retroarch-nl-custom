@@ -1960,6 +1960,22 @@ MSG_HASH(
    "simple_classic"
    )
 MSG_HASH(
+   MENU_ENUM_LABEL_SIMPLE_KEEP_GAME,
+   "simple_keep_game"
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_SIMPLE_KEEP_CORE,
+   "simple_keep_core"
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_SIMPLE_KEEP_NONE,
+   "simple_keep_none"
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_DEFERRED_SIMPLE_KEEP_LIST,
+   "deferred_simple_keep_list"
+   )
+MSG_HASH(
    MENU_ENUM_LABEL_DEFERRED_SIMPLE_GAMES_LIST,
    "deferred_simple_games_list"
    )

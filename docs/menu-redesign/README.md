@@ -149,7 +149,11 @@ Choosing the Simple layout draws the menu behind a camera cutout
 a game's picture stays below it. A game always has touch controls, the
 default ones if its own cannot be read, or Back to open the Game menu.
 Settings changed before a game starts are saved first when that game's
-core has settings of its own. A game that cannot be opened says why,
+core has settings of its own. Leaving the Game menu's Controls or Screen
+with settings changed opens Keep Changes?: For this game, For all ‹System›
+games or Just for now, which any other way out also is. Only what was
+changed goes into the override (`config_keep_*`); remaps go into their own
+files. While these pages are open `retroarch.cfg` is not written. A game that cannot be opened says why,
 and offers to choose its folder.
 
 Gamepad Mode (Help, or Settings › Interface) draws the menu in a 4:3

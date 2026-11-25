@@ -33730,6 +33730,42 @@ MSG_HASH(
    "RetroArch's own menus. To come back, set Settings > User Interface > Menu Layout to Simple."
    )
 MSG_HASH(
+   MENU_ENUM_LABEL_VALUE_SIMPLE_KEEP,
+   "Keep Changes?"
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_VALUE_SIMPLE_KEEP_GAME,
+   "For this game"
+   )
+MSG_HASH(
+   MENU_ENUM_SUBLABEL_SIMPLE_KEEP_GAME,
+   "Used each time this game is opened."
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_VALUE_SIMPLE_KEEP_CORE,
+   "For all %s games"
+   )
+MSG_HASH(
+   MENU_ENUM_SUBLABEL_SIMPLE_KEEP_CORE,
+   "Used for every game this core opens."
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_VALUE_SIMPLE_KEEP_NONE,
+   "Just for now"
+   )
+MSG_HASH(
+   MENU_ENUM_SUBLABEL_SIMPLE_KEEP_NONE,
+   "Until this game is closed."
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_VALUE_SIMPLE_KEEP_SAVED,
+   "Changes saved."
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_VALUE_SIMPLE_KEEP_FAILED,
+   "The changes could not be saved."
+   )
+MSG_HASH(
    MENU_ENUM_LABEL_VALUE_SIMPLE_CHANGE_DISC,
    "Change Disc"
    )
