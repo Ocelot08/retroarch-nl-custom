@@ -94,10 +94,8 @@ void android_app_update_viewport_inset(void);
 #define SIMPLE_COL_MUTED      0x9AA0ADFF
 #define SIMPLE_COL_DIM        0x7B818FFF   /* 4.5:1 on the page */
 #define SIMPLE_COL_LINE       0x2F333DFF
-#define SIMPLE_COL_ACCENT     0xF2D64BFF
 #define SIMPLE_COL_SHEET      0x20232BFF
 #define SIMPLE_COL_SELECT     0x4A5060FF   /* selected text */
-#define SIMPLE_COL_HEAD       0x9A8FD0FF   /* section headings */
 
 enum simple_font
 {
@@ -132,6 +130,12 @@ static const simple_metrics_t simple_gamepad = {
    { 17.0f, 20.0f, 9.5f, 22.0f, 14.0f },
    20.0f, 40.0f, 30.0f, 40.0f, 34.0f,
    96.0f, 46.0f, 66.0f, 88.0f };
+
+/* The highlight, 6:1 or more on the page, as enum menu_simple_color */
+static const uint32_t simple_accent[MENU_SIMPLE_COLOR_LAST] = {
+   0xF2D64BFF, 0xF5A04BFF, 0xFF7F76FF, 0xF08BC0FF,
+   0xAA9DEBFF, 0x74B3FFFF, 0x6FD08CFF, 0xEEF0F4FF
+};
 
 /* Art band colours, picked by the game's name until box art is drawn */
 static const uint32_t simple_band[][2] = {
@@ -175,6 +179,7 @@ typedef struct simple_handle
    float drag_start_scroll;
    float spring_v;
    unsigned dims;
+   uint32_t accent;
    unsigned n_systems;
    unsigned n_cores;
    float scale;
@@ -187,6 +192,7 @@ typedef struct simple_handle
    bool sliding;
    bool was_pressed;
    bool opts;               /* the option list opt_path names */
+   bool opts_color;         /* the highlight's */
    bool downloads;          /* the Downloads page */
    bool settings_page;
    bool keys;               /* moved by buttons since the last touch */
@@ -1335,6 +1341,8 @@ static void simple_set_page(simple_handle_t *sm, bool simple_layout)
    sm->opts    = sm->opt_path[0] && string_is_equal(path, sm->opt_path)
       && string_is_equal(label,
             MENU_ENUM_LABEL_DEFERRED_DROPDOWN_BOX_LIST_STR);
+   sm->opts_color = sm->opts
+      && atoi(sm->opt_path) == (int)MENU_ENUM_LABEL_MENU_SIMPLE_COLOR;
    sm->is_home = simple_layout && string_is_equal(label,
          msg_hash_to_str(MENU_ENUM_LABEL_MAIN_MENU));
    sm->full      = !sm->is_home;
@@ -1563,6 +1571,8 @@ static void simple_render(void *data, unsigned dims, bool is_idle)
       simple_fonts_load(sm, video_driver_is_threaded());
    }
 
+   sm->accent   = simple_accent[
+      MIN(settings->uints.menu_simple_color, MENU_SIMPLE_COLOR_LAST - 1)];
    was_home     = sm->is_home;
    was_settings = sm->settings_page;
    simple_set_page(sm, settings->uints.menu_layout == MENU_LAYOUT_SIMPLE);
@@ -1853,7 +1863,7 @@ static void simple_draw_continue(simple_handle_t *sm, unsigned dims,
    float x           = SIMPLE_GUTTER * s;
    float room        = w - 2.0f * x;
    uint32_t label_c  = (!sm->gamepad || selected)
-      ? SIMPLE_COL_ACCENT : SIMPLE_COL_MUTED;
+      ? sm->accent : SIMPLE_COL_MUTED;
 
    strlcpy(title, split ? split + 2 : word, sizeof(title));
    simple_note(sm, "CONTINUE", x, sm->m->cont_label_y * s, dims,
@@ -1985,7 +1995,7 @@ static void simple_draw_rows(simple_handle_t *sm, gfx_display_t *p_disp,
             : centre - mark_h * 0.5f;
          simple_quad(p_disp, userdata, dims, x - 12.0f * s, mark_y,
                3.0f * s, mark_h,
-               sm->gamepad ? SIMPLE_COL_ACCENT : SIMPLE_COL_DIM);
+               sm->gamepad ? sm->accent : SIMPLE_COL_DIM);
       }
 
       if (sm->has_continue && i == 0)
@@ -2004,7 +2014,7 @@ static void simple_draw_rows(simple_handle_t *sm, gfx_display_t *p_disp,
       {
          simple_upper(note, head, sizeof(note));
          simple_note(sm, note, x, top - sm->head_h * 0.35f, dims,
-               SIMPLE_COL_HEAD, TEXT_ALIGN_LEFT);
+               sm->accent, TEXT_ALIGN_LEFT);
       }
 
       if (sm->is_home)
@@ -2052,8 +2062,9 @@ static void simple_draw_rows(simple_handle_t *sm, gfx_display_t *p_disp,
          if (     (choice && simple_options(setting))
                || (note[0] && setting && setting->type == ST_BOOL))
          {
-            simple_note(sm, note, w - x, centre, dims, SIMPLE_COL_FG,
-                  TEXT_ALIGN_RIGHT);
+            simple_note(sm, note, w - x, centre, dims,
+                  setting->enum_idx == MENU_ENUM_LABEL_MENU_SIMPLE_COLOR
+                  ? sm->accent : SIMPLE_COL_FG, TEXT_ALIGN_RIGHT);
             note[0] = '\0';
          }
          else if (choice)
@@ -2071,10 +2082,10 @@ static void simple_draw_rows(simple_handle_t *sm, gfx_display_t *p_disp,
          }
          if (section)
          {
-            simple_note(sm, note, w - x, centre, dims, SIMPLE_COL_HEAD,
+            simple_note(sm, note, w - x, centre, dims, sm->accent,
                   TEXT_ALIGN_RIGHT);
             simple_upper(note, word, sizeof(note));
-            simple_note(sm, note, x, centre, dims, SIMPLE_COL_HEAD,
+            simple_note(sm, note, x, centre, dims, sm->accent,
                   TEXT_ALIGN_LEFT);
             continue;
          }
@@ -2082,7 +2093,9 @@ static void simple_draw_rows(simple_handle_t *sm, gfx_display_t *p_disp,
                ? SIMPLE_FONT_FULL : word_font, word,
                x, centre, h,
                w - 2.0f * x - (note_w > 0.0f ? note_w + 16.0f * s : 0.0f),
-               dims, more ? SIMPLE_COL_MUTED : SIMPLE_COL_FG);
+               dims, more ? SIMPLE_COL_MUTED
+               : (sm->opts_color && i < MENU_SIMPLE_COLOR_LAST)
+               ? simple_accent[i] : SIMPLE_COL_FG);
 
          if (i == sm->open_idx && simple_is_number(setting, entry->value))
          {
@@ -2182,7 +2195,7 @@ static void simple_draw_kb(simple_handle_t *sm, gfx_display_t *p_disp,
                && ((menu_driver_get_current_time() / 500000) & 1))
             simple_quad(p_disp, userdata, dims, tx + sm->kb_cursor_x,
                   ly + line_h * 0.15f, 2.0f * s, line_h * 0.7f,
-                  SIMPLE_COL_ACCENT);
+                  sm->accent);
       }
       p += n;
       if (*p)

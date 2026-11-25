@@ -105,6 +105,20 @@ enum menu_layout_type
    MENU_LAYOUT_LAST
 };
 
+/* The simple driver's highlight colors */
+enum menu_simple_color
+{
+   MENU_SIMPLE_COLOR_YELLOW = 0,
+   MENU_SIMPLE_COLOR_ORANGE,
+   MENU_SIMPLE_COLOR_RED,
+   MENU_SIMPLE_COLOR_PINK,
+   MENU_SIMPLE_COLOR_VIOLET,
+   MENU_SIMPLE_COLOR_BLUE,
+   MENU_SIMPLE_COLOR_GREEN,
+   MENU_SIMPLE_COLOR_WHITE,
+   MENU_SIMPLE_COLOR_LAST
+};
+
 enum menu_image_type
 {
    MENU_IMAGE_NONE = 0,

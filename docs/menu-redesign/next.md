@@ -53,7 +53,9 @@ and solid at the bottom (`simple_band_fade`). Still to do:
    the layout changes from Classic?
 4. Should + and − on an opened row be bigger? More Downloads looks like the
    section labels, which cannot be tapped: only its + or − says it can.
-5. Should the labels inside More Downloads (Update Files, Settings) be grey,
+5. Highlight Color: is a colour of one's own wanted (a hex code), or whole
+   themes, as RGUI has?
+6. Should the labels inside More Downloads (Update Files, Settings) be grey,
    so that they do not look equal to it?
 
 ## Not tested

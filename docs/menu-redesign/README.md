@@ -97,6 +97,10 @@ set end keep small arrows, and prompts show as a card with answer rows.
 Text is typed with the system's keyboard into a box at the top. It has no
 images or art yet.
 
+Settings › Interface › Highlight Color picks one colour for section
+labels, Continue and the gamepad selection, and for the update notice in
+`ia-v2.md` once it is built. The choices are in `simple_accent`.
+
 Lines go only between two rows of the same list or section. Section labels
 have more space above and no line; More rows have a gap. The top bar has a
 line under it, and an option page's description one above and below, which
@@ -113,7 +117,7 @@ own lists, and the More rows, are drawn in smaller type. On the Settings
 page a category's note names in turn the settings on its page, a moment
 later from row to row, and holds still after a touch. Games has Game
 Lists, RetroArch's playlists, ending in Edit Game Lists. Downloads has
-violet headings over its groups, and its More row, styled as one of them, opens in place, as a trial:
+headings over its groups, and its More row, styled as one of them, opens in place, as a trial:
 the rest of the Online Updater, without what is already above. The
 breadcrumb shows the whole path,
 the middle levels as an ellipsis when it is too long. Help has Switch to

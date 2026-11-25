@@ -423,6 +423,7 @@ typedef struct settings
       unsigned menu_remember_selection;
       unsigned menu_startup_page;
       unsigned menu_layout;
+      unsigned menu_simple_color;
       unsigned menu_file_browser_extension_display;
 
       unsigned playlist_entry_remove_enable;
