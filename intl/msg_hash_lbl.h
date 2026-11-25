@@ -1940,10 +1940,6 @@ MSG_HASH(
    "simple_accounts_more"
    )
 MSG_HASH(
-   MENU_ENUM_LABEL_SIMPLE_ACCESSIBILITY_MORE,
-   "simple_accessibility_more"
-   )
-MSG_HASH(
    MENU_ENUM_LABEL_SIMPLE_INTERFACE_MORE,
    "simple_interface_more"
    )

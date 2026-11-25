@@ -28,8 +28,6 @@ and solid at the bottom (`simple_band_fade`). Still to do:
 
 | Feature | Notes |
 |---|---|
-| Open All Settings in place | After More Downloads has been used for a while |
-| Open the other More rows in place | Check each list's rows: some depend on the page they are on |
 | RA TESTER's own folders | It shares history, playlists, saves and core settings with the working app |
 | Keep settings changed during a game | Dropped now when the game has settings of its own; "Keeping changes" in `ia-v2.md` |
 | Box art, page animation, Quick Setup | See `plan.md` |

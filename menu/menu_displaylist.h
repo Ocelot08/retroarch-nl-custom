@@ -426,9 +426,12 @@ void menu_displaylist_validation_dump(rarch_setting_t *list_settings);
 unsigned menu_displaylist_simple_names(enum msg_hash_enums row,
       char *s, size_t len, unsigned max);
 
-/* Whether the Simple layout's More Downloads is open on its page */
-bool menu_displaylist_simple_downloads_open(void);
-void menu_displaylist_simple_downloads_set(bool open);
+/* Whether the Simple layout's row @more opens in place in the simple
+ * driver, and whether it is open */
+bool menu_displaylist_simple_opens(enum msg_hash_enums more);
+bool menu_displaylist_simple_is_open(enum msg_hash_enums more);
+void menu_displaylist_simple_toggle(enum msg_hash_enums more);
+void menu_displaylist_simple_close_all(void);
 
 unsigned menu_displaylist_build_list(
       file_list_t *list,

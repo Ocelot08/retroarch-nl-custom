@@ -98,8 +98,12 @@ Text is typed with the system's keyboard into a box at the top. It has no
 images or art yet.
 
 The Settings page, Controls, Screen, Saving and Interface have section
-labels; the shorter pages have none. More rows are drawn as labels too,
-with › for those that open a page and + or − for More Downloads.
+labels; the shorter pages have none. A page's last row is drawn as a label
+too. "More" opens the rest of the page in place, without what is already
+above, with + or −: Downloads, Screen, Sound and Accounts. "All" opens
+RetroArch's own list, with ›: Controls, Saving, Library and Interface, and
+All Settings on the Settings page. Accessibility has neither. File pickers,
+passwords, drivers and rows that show or hide others are only in All.
 
 Settings › Interface › Highlight Color picks one colour (violet unless
 changed) for section labels, Continue and the gamepad selection, and for the update notice in
@@ -116,12 +120,12 @@ A text value too wide shows as SET, and passwords always do.
 In the Simple layout, every Settings category (Controls, Screen, Sound,
 Saving, Library, Accounts, Accessibility, Interface), Downloads and the
 Game menu's Controls and Screen are short lists of the common settings under plain
-names, each ending in a More row that opens the classic list. RetroArch's
+names, most ending in a More or All row for the rest (below). RetroArch's
 own lists, and the More rows, are drawn in smaller type. On the Settings
 page a category's note names in turn the settings on its page, a moment
 later from row to row, and holds still after a touch. Games has Game
 Lists, RetroArch's playlists, ending in Edit Game Lists. Downloads has
-headings over its groups, and its More row, styled as one of them, opens in place, as a trial:
+headings over its groups, and its More row opens in place:
 the rest of the Online Updater, without what is already above. The
 breadcrumb shows the whole path,
 the middle levels as an ellipsis when it is too long. Help has Switch to

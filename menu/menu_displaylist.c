@@ -9899,16 +9899,108 @@ unsigned menu_displaylist_simple_names(enum msg_hash_enums row,
    return count;
 }
 
-static bool simple_downloads_open = false;
+/* The Simple layout's More rows that open in place, and a bit for each
+ * that is open */
+static const enum msg_hash_enums simple_opens[] = {
+#if defined(HAVE_NETWORKING) && !defined(HAVE_LAKKA)
+   MENU_ENUM_LABEL_SIMPLE_DOWNLOADS_MORE,
+#endif
+   MENU_ENUM_LABEL_SIMPLE_SCREEN_MORE,
+   MENU_ENUM_LABEL_SIMPLE_SOUND_MORE,
+   MENU_ENUM_LABEL_SIMPLE_ACCOUNTS_MORE
+};
+static unsigned simple_open = 0;
 
-bool menu_displaylist_simple_downloads_open(void)
+/* What is under them, Downloads aside: what their page does not have, or
+ * has by the same name, without file pickers, passwords and rows that change the list. All
+ * Settings has those. */
+static const struct
 {
-   return simple_downloads_open;
+   enum msg_hash_enums more;
+   enum msg_hash_enums label;
+   enum menu_displaylist_parse_type parse;
+} simple_more_rows[] = {
+   { MENU_ENUM_LABEL_SIMPLE_SCREEN_MORE,
+      MENU_ENUM_LABEL_VIDEO_OUTPUT_SETTINGS,           PARSE_ACTION },
+   { MENU_ENUM_LABEL_SIMPLE_SCREEN_MORE,
+      MENU_ENUM_LABEL_VIDEO_SCALING_SETTINGS,          PARSE_ACTION },
+   { MENU_ENUM_LABEL_SIMPLE_SCREEN_MORE,
+      MENU_ENUM_LABEL_VIDEO_SYNCHRONIZATION_SETTINGS,  PARSE_ACTION },
+   { MENU_ENUM_LABEL_SIMPLE_SCREEN_MORE,
+      MENU_ENUM_LABEL_VIDEO_FULLSCREEN_MODE_SETTINGS,  PARSE_ACTION },
+   { MENU_ENUM_LABEL_SIMPLE_SCREEN_MORE,
+      MENU_ENUM_LABEL_VIDEO_WINDOWED_MODE_SETTINGS,    PARSE_ACTION },
+   { MENU_ENUM_LABEL_SIMPLE_SCREEN_MORE,
+      MENU_ENUM_LABEL_VIDEO_HDR_SETTINGS,              PARSE_ACTION },
+   { MENU_ENUM_LABEL_SIMPLE_SCREEN_MORE,
+      MENU_ENUM_LABEL_VIDEO_STEREO_SETTINGS,           PARSE_ACTION },
+   { MENU_ENUM_LABEL_SIMPLE_SCREEN_MORE,
+      MENU_ENUM_LABEL_SUSPEND_SCREENSAVER_ENABLE,      PARSE_ONLY_BOOL },
+   { MENU_ENUM_LABEL_SIMPLE_SCREEN_MORE,
+      MENU_ENUM_LABEL_VIDEO_SHADER_DELAY,              PARSE_ONLY_UINT },
+   { MENU_ENUM_LABEL_SIMPLE_SCREEN_MORE,
+      MENU_ENUM_LABEL_BRIGHTNESS_CONTROL,              PARSE_ONLY_UINT },
+   { MENU_ENUM_LABEL_SIMPLE_SOUND_MORE,
+      MENU_ENUM_LABEL_AUDIO_OUTPUT_SETTINGS,           PARSE_ACTION },
+#ifdef HAVE_MICROPHONE
+   { MENU_ENUM_LABEL_SIMPLE_SOUND_MORE,
+      MENU_ENUM_LABEL_MICROPHONE_SETTINGS,             PARSE_ACTION },
+#endif
+   { MENU_ENUM_LABEL_SIMPLE_SOUND_MORE,
+      MENU_ENUM_LABEL_AUDIO_SYNCHRONIZATION_SETTINGS,  PARSE_ACTION },
+   { MENU_ENUM_LABEL_SIMPLE_SOUND_MORE,
+      MENU_ENUM_LABEL_MIDI_SETTINGS,                   PARSE_ACTION },
+#if defined(HAVE_AUDIOMIXER)
+   { MENU_ENUM_LABEL_SIMPLE_SOUND_MORE,
+      MENU_ENUM_LABEL_AUDIO_MIXER_SETTINGS,            PARSE_ACTION },
+#endif
+   { MENU_ENUM_LABEL_SIMPLE_SOUND_MORE,
+      MENU_ENUM_LABEL_AUDIO_MIXER_VOLUME,              PARSE_ONLY_FLOAT },
+   { MENU_ENUM_LABEL_SIMPLE_SOUND_MORE,
+      MENU_ENUM_LABEL_AUDIO_MIXER_MUTE,                PARSE_ONLY_BOOL },
+   { MENU_ENUM_LABEL_SIMPLE_SOUND_MORE,
+      MENU_ENUM_LABEL_AUDIO_RESPECT_SILENT_MODE,       PARSE_ONLY_BOOL },
+   { MENU_ENUM_LABEL_SIMPLE_SOUND_MORE,
+      MENU_ENUM_LABEL_SYSTEM_BGM_ENABLE,               PARSE_ONLY_BOOL },
+   { MENU_ENUM_LABEL_SIMPLE_SOUND_MORE,
+      MENU_ENUM_LABEL_AUDIO_REWIND_MUTE,               PARSE_ONLY_BOOL },
+   { MENU_ENUM_LABEL_SIMPLE_SOUND_MORE,
+      MENU_ENUM_LABEL_AUDIO_FASTFORWARD_SPEEDUP,       PARSE_ONLY_BOOL },
+   { MENU_ENUM_LABEL_SIMPLE_SOUND_MORE,
+      MENU_ENUM_LABEL_AUDIO_FASTFORWARD_CALLBACK,      PARSE_ONLY_BOOL },
+   { MENU_ENUM_LABEL_SIMPLE_ACCOUNTS_MORE,
+      MENU_ENUM_LABEL_PRIVACY_SETTINGS,                PARSE_ACTION },
+   { MENU_ENUM_LABEL_SIMPLE_ACCOUNTS_MORE,
+      MENU_ENUM_LABEL_ACCOUNTS_LIST,                   PARSE_ACTION }
+};
+
+static unsigned simple_open_bit(enum msg_hash_enums more)
+{
+   size_t i;
+   for (i = 0; i < ARRAY_SIZE(simple_opens); i++)
+      if (simple_opens[i] == more)
+         return 1u << i;
+   return 0;
 }
 
-void menu_displaylist_simple_downloads_set(bool open)
+bool menu_displaylist_simple_opens(enum msg_hash_enums more)
 {
-   simple_downloads_open = open;
+   return simple_open_bit(more) != 0;
+}
+
+bool menu_displaylist_simple_is_open(enum msg_hash_enums more)
+{
+   return (simple_open & simple_open_bit(more)) != 0;
+}
+
+void menu_displaylist_simple_toggle(enum msg_hash_enums more)
+{
+   simple_open ^= simple_open_bit(more);
+}
+
+void menu_displaylist_simple_close_all(void)
+{
+   simple_open = 0;
 }
 
 #if defined(HAVE_NETWORKING) && !defined(HAVE_LAKKA)
@@ -10160,8 +10252,7 @@ unsigned menu_displaylist_build_list(
                   MENU_ENUM_LABEL_SIMPLE_LIBRARY_MORE },
                { MENU_ENUM_LABEL_VALUE_SIMPLE_ACCOUNTS_MORE,
                   MENU_ENUM_LABEL_SIMPLE_ACCOUNTS_MORE },
-               { MENU_ENUM_LABEL_VALUE_SIMPLE_ACCESSIBILITY_MORE,
-                  MENU_ENUM_LABEL_SIMPLE_ACCESSIBILITY_MORE },
+               { MSG_UNKNOWN, MSG_UNKNOWN },    /* Accessibility has all */
                { MENU_ENUM_LABEL_VALUE_SIMPLE_INTERFACE_MORE,
                   MENU_ENUM_LABEL_SIMPLE_INTERFACE_MORE },
                { MENU_ENUM_LABEL_VALUE_SIMPLE_CONTROLS_MORE,
@@ -10234,19 +10325,30 @@ unsigned menu_displaylist_build_list(
                         NULL))
                   count++;
             }
-            if (m < ARRAY_SIZE(more) && menu_entries_append(list,
+            if (     m < ARRAY_SIZE(more) && more[m][1] != MSG_UNKNOWN
+                  && menu_entries_append(list,
                      msg_hash_to_str(more[m][0]),
                      msg_hash_to_str(more[m][1]),
                      more[m][1], MENU_SETTING_ACTION, 0, 0, NULL))
                count++;
 #if defined(HAVE_NETWORKING) && !defined(HAVE_LAKKA)
-            /* The simple driver opens it in place */
             if (     type == DISPLAYLIST_SIMPLE_DOWNLOADS_LIST
-                  && simple_downloads_open
+                  && menu_displaylist_simple_is_open(
+                     MENU_ENUM_LABEL_SIMPLE_DOWNLOADS_MORE)
                   && string_is_equal(menu_driver_ident(), "simple"))
                count += menu_displaylist_parse_simple_downloads_more(
                      list, settings);
 #endif
+            /* The simple driver opens them in place */
+            if (     m < ARRAY_SIZE(more)
+                  && menu_displaylist_simple_is_open(more[m][1])
+                  && string_is_equal(menu_driver_ident(), "simple"))
+               for (i = 0; i < ARRAY_SIZE(simple_more_rows); i++)
+                  if (     simple_more_rows[i].more == more[m][1]
+                        && MENU_DISPLAYLIST_PARSE_SETTINGS_ENUM(list,
+                           simple_more_rows[i].label,
+                           simple_more_rows[i].parse, false) == 0)
+                     count++;
          }
          break;
       case DISPLAYLIST_SIMPLE_SETTINGS_LIST:

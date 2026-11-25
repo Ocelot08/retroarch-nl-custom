@@ -194,6 +194,8 @@ typedef struct simple_handle
    bool opts_color;         /* the highlight's */
    bool downloads;          /* the Downloads page */
    bool headed;             /* a page with sections */
+   bool more_opens;         /* the More row does so in place */
+   bool more_open;
    bool settings_page;
    bool keys;               /* moved by buttons since the last touch */
    double cycle_ms;         /* for which names have changed */
@@ -555,7 +557,6 @@ static bool simple_is_more(const char *label)
       || string_is_equal(label, MENU_ENUM_LABEL_SIMPLE_SAVING_MORE_STR)
       || string_is_equal(label, MENU_ENUM_LABEL_SIMPLE_LIBRARY_MORE_STR)
       || string_is_equal(label, MENU_ENUM_LABEL_SIMPLE_ACCOUNTS_MORE_STR)
-      || string_is_equal(label, MENU_ENUM_LABEL_SIMPLE_ACCESSIBILITY_MORE_STR)
       || string_is_equal(label, MENU_ENUM_LABEL_SIMPLE_INTERFACE_MORE_STR)
       || string_is_equal(label, MENU_ENUM_LABEL_SIMPLE_DOWNLOADS_MORE_STR));
 }
@@ -1649,7 +1650,7 @@ static void simple_render(void *data, unsigned dims, bool is_idle)
    if (sm->is_home && !was_home)
    {
       simple_home_counts(sm);
-      menu_displaylist_simple_downloads_set(false);
+      menu_displaylist_simple_close_all();
    }
 
    sm->has_continue = sm->is_home && size > 0
@@ -1659,11 +1660,17 @@ static void simple_render(void *data, unsigned dims, bool is_idle)
    for (i = 0; i < size; i++)
       if (simple_is_more(list->list[i].label))
       {
-         sm->more_idx = i;
+         menu_file_list_cbs_t *cbs = (menu_file_list_cbs_t*)
+            list->list[i].actiondata;
+         enum msg_hash_enums more  = cbs
+            ? (enum msg_hash_enums)cbs->enum_idx : MSG_UNKNOWN;
+         sm->more_idx   = i;
+         sm->more_opens = menu_displaylist_simple_opens(more);
+         sm->more_open  = menu_displaylist_simple_is_open(more);
          break;
       }
 
-   sm->sub_from = (sm->downloads && sm->more_idx < size)
+   sm->sub_from = (sm->more_idx < size && sm->more_opens)
       ? sm->more_idx + 1 : size;
    simple_find_heads(sm, list);
 
@@ -2102,9 +2109,8 @@ static void simple_draw_rows(simple_handle_t *sm, gfx_display_t *p_disp,
          bool text      = setting && setting->type == ST_STRING;
 
          if (more)
-            strlcpy(note, !sm->downloads ? "\xE2\x80\xBA"
-                  : menu_displaylist_simple_downloads_open()
-                  ? "\xE2\x88\x92" : "+", sizeof(note));
+            strlcpy(note, !sm->more_opens ? "\xE2\x80\xBA"
+                  : sm->more_open ? "\xE2\x88\x92" : "+", sizeof(note));
          else if (sm->opts && (entry->flags & MENU_ENTRY_FLAG_CHECKED))
             strlcpy(note, "CURRENT", sizeof(note));
          else if (text && !entry->value[0])

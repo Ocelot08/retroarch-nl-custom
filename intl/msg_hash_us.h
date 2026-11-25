@@ -33467,7 +33467,7 @@ MSG_HASH(
    )
 MSG_HASH(
    MENU_ENUM_LABEL_VALUE_SIMPLE_CONTROLS_MORE,
-   "More Controls Settings"
+   "All Controls Settings"
    )
 MSG_HASH(
    MENU_ENUM_SUBLABEL_SIMPLE_CONTROLS_MORE,
@@ -33479,7 +33479,7 @@ MSG_HASH(
    )
 MSG_HASH(
    MENU_ENUM_SUBLABEL_SIMPLE_SCREEN_MORE,
-   "Every screen setting, as RetroArch lists them."
+   "More screen settings. All Settings has the rest."
    )
 MSG_HASH(
    MENU_ENUM_LABEL_VALUE_SIMPLE_SOUND_MORE,
@@ -33487,11 +33487,11 @@ MSG_HASH(
    )
 MSG_HASH(
    MENU_ENUM_SUBLABEL_SIMPLE_SOUND_MORE,
-   "Every sound setting, as RetroArch lists them."
+   "More sound settings. All Settings has the rest."
    )
 MSG_HASH(
    MENU_ENUM_LABEL_VALUE_SIMPLE_SAVING_MORE,
-   "More Saving Settings"
+   "All Saving Settings"
    )
 MSG_HASH(
    MENU_ENUM_SUBLABEL_SIMPLE_SAVING_MORE,
@@ -33691,7 +33691,7 @@ MSG_HASH(
    )
 MSG_HASH(
    MENU_ENUM_LABEL_VALUE_SIMPLE_LIBRARY_MORE,
-   "More Library Settings"
+   "All Library Settings"
    )
 MSG_HASH(
    MENU_ENUM_SUBLABEL_SIMPLE_LIBRARY_MORE,
@@ -33703,19 +33703,11 @@ MSG_HASH(
    )
 MSG_HASH(
    MENU_ENUM_SUBLABEL_SIMPLE_ACCOUNTS_MORE,
-   "Every user setting in RetroArch."
-   )
-MSG_HASH(
-   MENU_ENUM_LABEL_VALUE_SIMPLE_ACCESSIBILITY_MORE,
-   "More Accessibility"
-   )
-MSG_HASH(
-   MENU_ENUM_SUBLABEL_SIMPLE_ACCESSIBILITY_MORE,
-   "Every accessibility setting in RetroArch."
+   "More account settings. All Settings has the rest."
    )
 MSG_HASH(
    MENU_ENUM_LABEL_VALUE_SIMPLE_INTERFACE_MORE,
-   "More Interface Settings"
+   "All Interface Settings"
    )
 MSG_HASH(
    MENU_ENUM_SUBLABEL_SIMPLE_INTERFACE_MORE,
