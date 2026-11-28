@@ -130,6 +130,13 @@ Landscape, either way round, for the menu and games. It changes at once,
 and again as the video driver starts. RetroArch's Screen Orientation, which
 on Android waits for a restart, is under All Settings; a lock overrides it.
 
+Going into a page, the page moves left a third of the way and fades while
+the new one slides in over it from the right; going back, the other way
+(`SIMPLE_SLIDE_MS`, `_BEHIND`). The header stays: the levels both
+breadcrumbs share stay put and the new one fades in after them. With
+Android's "Remove animations" on, or as the menu opens, pages change at
+once.
+
 A name too wide for its row takes the smaller type, then a second line.
 A text value too wide shows as SET, and passwords always do.
 

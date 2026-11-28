@@ -24,7 +24,7 @@ grey (`simple_art_draw`, `simple_band_fade`). Still to do:
 | Feature | Notes |
 |---|---|
 | The rest of "Keeping changes" in `ia-v2.md` | The question on Game Options, the banner, Ask Before Keeping Changes. Shaders and which controller a player uses are not asked about |
-| Box art beyond Home, page animation, Quick Setup | See `plan.md` |
+| Box art beyond Home, the rest of the animation, Quick Setup | See `plan.md` |
 
 ## Small fixes
 
@@ -57,6 +57,9 @@ grey (`simple_art_draw`, `simple_band_fade`). Still to do:
   and goes at the next touch: arrow keys sent over USB do not reach the menu.
 - RetroArch's own keyboard in Simple, with the system's turned off.
 - The reworded Close, Restart and gamepad prompts.
-- The Settings page notes with Android's "Remove animations" on.
+- The Settings page notes and the page move with Android's "Remove
+  animations" on.
+- The page move in Gamepad Mode in landscape, where the box is narrower than
+  the screen.
 - The update rows under More Downloads, and the two short messages for a
   missing game file or core.

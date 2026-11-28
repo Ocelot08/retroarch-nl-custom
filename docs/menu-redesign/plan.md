@@ -38,7 +38,11 @@ Every page style, setting page and prompt depends on this, so settle it before b
 - **Instead:** each frame builds one list of boxes, and drawing, hit-testing, scrolling, focus and animation all read it.
 - **Why:** animation is then those boxes moving over time, using RetroArch's existing `gfx_animation`. It needs no special cases.
 
-Build this before any animation.
+Build this before animation that moves things within a page (selection,
+sheets, scrolling). The page change did not need it (28 Nov 2026): every
+drawing call is placed from `sm->left`, so the page coming in moves with
+it, and the page going is the last frame's drawing kept and drawn again
+(`simple_rec_t`, `simple_replay`).
 
 ### 3. The input model
 
@@ -144,7 +148,7 @@ Done: driver logging, the scripted run and the signing key. Left: separate test 
    - The states from `ia-v2.md`: no games, no art, no emulator, missing BIOS, game didn't start, first game.
    - Their notices.
 8. **Animation:**
-   - page changes;
+   - page changes (built: Parallax, 28 Nov 2026);
    - selection movement;
    - sheets opening;
    - list scrolling.
