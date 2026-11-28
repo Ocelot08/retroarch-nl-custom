@@ -116,6 +116,7 @@ GENERIC_DEFERRED_PUSH(deferred_push_simple_game_screen_list,         DISPLAYLIST
 GENERIC_DEFERRED_PUSH(deferred_push_simple_downloads_list,           DISPLAYLIST_SIMPLE_DOWNLOADS_LIST)
 GENERIC_DEFERRED_PUSH(deferred_push_simple_box_art_list,             DISPLAYLIST_SIMPLE_BOX_ART_LIST)
 GENERIC_DEFERRED_PUSH(deferred_push_simple_keep_list,             DISPLAYLIST_SIMPLE_KEEP_LIST)
+GENERIC_DEFERRED_PUSH(deferred_push_simple_setup_list,            DISPLAYLIST_SIMPLE_SETUP_LIST)
 GENERIC_DEFERRED_PUSH(deferred_push_options,                        DISPLAYLIST_OPTIONS)
 GENERIC_DEFERRED_PUSH(deferred_push_netplay,                        DISPLAYLIST_NETPLAY_ROOM_LIST)
 GENERIC_DEFERRED_PUSH(deferred_push_netplay_sublist,                DISPLAYLIST_NETPLAY)
@@ -873,6 +874,7 @@ static int menu_cbs_init_bind_deferred_push_compare_label(
       {MENU_ENUM_LABEL_DEFERRED_SIMPLE_DOWNLOADS_LIST, deferred_push_simple_downloads_list},
       {MENU_ENUM_LABEL_DEFERRED_SIMPLE_BOX_ART_LIST, deferred_push_simple_box_art_list},
       {MENU_ENUM_LABEL_DEFERRED_SIMPLE_KEEP_LIST, deferred_push_simple_keep_list},
+      {MENU_ENUM_LABEL_DEFERRED_SIMPLE_SETUP_LIST, deferred_push_simple_setup_list},
       {MENU_ENUM_LABEL_DEFERRED_ACCOUNTS_YOUTUBE_LIST, deferred_push_accounts_youtube_list},
       {MENU_ENUM_LABEL_DEFERRED_ACCOUNTS_TWITCH_LIST, deferred_push_accounts_twitch_list},
       {MENU_ENUM_LABEL_DEFERRED_ACCOUNTS_FACEBOOK_LIST, deferred_push_accounts_facebook_list},

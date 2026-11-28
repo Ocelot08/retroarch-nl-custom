@@ -898,6 +898,21 @@ void menu_dialog_confirm_clear(struct menu_state *menu_st);
 #if defined(HAVE_ONLINE_UPDATER) && defined(HAVE_NETWORKING) && defined(HAVE_COMPRESSION) && defined(HAVE_CONFIGFILE)
 void menu_first_run_download_start(void);
 #endif
+
+/* Quick Setup, in menu_cbs_ok.c: open() shows its first page, poll()
+ * takes the folder Android's picker gave it */
+void menu_cbs_simple_setup_open(void);
+void menu_cbs_simple_setup_poll(void);
+/* The core for the system @db at @i in its list, while @i is in it */
+bool menu_cbs_simple_setup_core(unsigned i, const char **db,
+      const char **core);
+/* 0: no scan, 1: scanning, 2: scanned */
+unsigned menu_cbs_simple_setup_scan(void);
+#ifdef HAVE_NETWORKING
+/* The core list's file for @core, NULL before the list is fetched */
+const char *menu_cbs_simple_setup_file(const char *core, bool *have);
+void menu_cbs_simple_setup_download(void);
+#endif
 void menu_dialog_confirm(struct menu_state *menu_st);
 
 extern const menu_ctx_driver_t *menu_ctx_drivers[];

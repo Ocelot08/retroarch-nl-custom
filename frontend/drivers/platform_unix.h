@@ -617,6 +617,10 @@ void android_app_update_orientation(void);
 struct retro_vfs_authorized_locations;
 
 void android_show_saf_tree_picker(void);
+/* Quick Setup's folder: ask() shows the picker, and take() gives the
+ * folder chosen, once, in place of opening it in the file browser */
+void android_saf_setup_ask(void);
+bool android_saf_setup_take(char *s, size_t len);
 bool android_get_vfs_authorized_locations(
       struct retro_vfs_authorized_locations *locations);
 #endif

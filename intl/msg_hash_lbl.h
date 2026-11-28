@@ -1972,6 +1972,42 @@ MSG_HASH(
    "simple_keep_none"
    )
 MSG_HASH(
+   MENU_ENUM_LABEL_SIMPLE_SETUP,
+   "simple_setup"
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_SIMPLE_SETUP_START,
+   "simple_setup_start"
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_SIMPLE_SETUP_SKIP,
+   "simple_setup_skip"
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_SIMPLE_SETUP_FOLDER,
+   "simple_setup_folder"
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_SIMPLE_SETUP_NEXT,
+   "simple_setup_next"
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_SIMPLE_SETUP_CORES,
+   "simple_setup_cores"
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_SIMPLE_SETUP_WAIT,
+   "simple_setup_wait"
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_SIMPLE_SETUP_GAMES,
+   "simple_setup_games"
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_DEFERRED_SIMPLE_SETUP_LIST,
+   "deferred_simple_setup_list"
+   )
+MSG_HASH(
    MENU_ENUM_LABEL_DEFERRED_SIMPLE_KEEP_LIST,
    "deferred_simple_keep_list"
    )

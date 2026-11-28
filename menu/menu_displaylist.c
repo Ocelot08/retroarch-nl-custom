@@ -10097,6 +10097,96 @@ static unsigned menu_displaylist_parse_simple_downloads_more(
 }
 #endif
 
+/* Quick Setup's page for the step in @step (menu_cbs_ok.c) */
+static unsigned menu_displaylist_simple_setup(file_list_t *list,
+      settings_t *settings, const char *step)
+{
+   unsigned count = 0;
+
+#define SETUP_ROW(e) \
+   do { \
+      if (menu_entries_append(list, \
+               msg_hash_to_str(MENU_ENUM_LABEL_VALUE_##e), \
+               MENU_ENUM_LABEL_##e##_STR, MENU_ENUM_LABEL_##e, \
+               MENU_SETTING_ACTION, 0, 0, NULL)) \
+         count++; \
+   } while (0)
+
+   if (string_is_equal(step, "2"))
+   {
+      SETUP_ROW(SIMPLE_SETUP_FOLDER);
+      SETUP_ROW(SIMPLE_SETUP_NEXT);
+   }
+   else if (string_is_equal(step, "3"))
+   {
+      unsigned i;
+      const char *db   = NULL;
+      const char *core = NULL;
+      unsigned found   = 0;
+      bool missing     = false;
+      bool listed      = true;
+      char lpl[PATH_MAX_LENGTH];
+      char row[NAME_MAX_LENGTH];
+
+      if (menu_cbs_simple_setup_scan() == 1)
+         SETUP_ROW(SIMPLE_SETUP_WAIT);
+      /* The systems found, each with its core */
+      for (i = 0; menu_cbs_simple_setup_core(i, &db, &core); i++)
+      {
+         const char *state = "";
+         fill_pathname_join_special(lpl,
+               settings->paths.directory_playlist, db, sizeof(lpl));
+         strlcat(lpl, ".lpl", sizeof(lpl));
+         if (!path_is_valid(lpl))
+            continue;
+         found++;
+#ifdef HAVE_NETWORKING
+         {
+            bool have = false;
+            if (!menu_cbs_simple_setup_file(core, &have))
+               listed = false;
+            else if (have)
+               state  = msg_hash_to_str(
+                     MENU_ENUM_LABEL_VALUE_SIMPLE_SETUP_HAVE);
+            else
+            {
+               state   = msg_hash_to_str(
+                     MENU_ENUM_LABEL_VALUE_SIMPLE_SETUP_GET);
+               missing = true;
+            }
+         }
+#endif
+         snprintf(row, sizeof(row), "%s: %s %s", db, core, state);
+         if (menu_entries_append(list, row, "", MENU_ENUM_LABEL_NO_ITEMS,
+                  MENU_INFO_MESSAGE, 0, 0, NULL))
+            count++;
+      }
+      if (!found && menu_cbs_simple_setup_scan() != 1)
+         if (menu_entries_append(list, msg_hash_to_str(
+                  MENU_ENUM_LABEL_VALUE_SIMPLE_SETUP_NONE), "",
+                  MENU_ENUM_LABEL_NO_ITEMS, MENU_INFO_MESSAGE, 0, 0, NULL))
+            count++;
+      if (found && !listed)
+         if (menu_entries_append(list, msg_hash_to_str(
+                  MENU_ENUM_LABEL_VALUE_SIMPLE_SETUP_LISTING), "",
+                  MENU_ENUM_LABEL_NO_ITEMS, MENU_INFO_MESSAGE, 0, 0, NULL))
+            count++;
+#ifdef HAVE_NETWORKING
+      if (missing)
+         SETUP_ROW(SIMPLE_SETUP_CORES);
+#endif
+      SETUP_ROW(SIMPLE_SETUP_NEXT);
+   }
+   else if (string_is_equal(step, "4"))
+      SETUP_ROW(SIMPLE_SETUP_GAMES);
+   else
+      SETUP_ROW(SIMPLE_SETUP_START);
+   if (!string_is_equal(step, "4"))
+      SETUP_ROW(SIMPLE_SETUP_SKIP);
+#undef SETUP_ROW
+   return count;
+}
+
 unsigned menu_displaylist_build_list(
       file_list_t *list,
       settings_t *settings,
@@ -10421,6 +10511,12 @@ unsigned menu_displaylist_build_list(
          }
          break;
       case DISPLAYLIST_SIMPLE_HELP_LIST:
+         if (menu_entries_append(list,
+                  msg_hash_to_str(MENU_ENUM_LABEL_VALUE_SIMPLE_SETUP),
+                  MENU_ENUM_LABEL_SIMPLE_SETUP_STR,
+                  MENU_ENUM_LABEL_SIMPLE_SETUP,
+                  MENU_SETTING_ACTION, 0, 0, NULL))
+            count++;
          if (menu_entries_append(list,
                   msg_hash_to_str(MENU_ENUM_LABEL_VALUE_SIMPLE_CLASSIC),
                   MENU_ENUM_LABEL_SIMPLE_CLASSIC_STR,
@@ -19085,6 +19181,12 @@ static bool menu_displaylist_ctl_internal(
                                | MD_FLAG_NEED_PUSH;
             break;
 #endif
+         case DISPLAYLIST_SIMPLE_SETUP_LIST:
+            menu_entries_clear(info->list);
+            count = menu_displaylist_simple_setup(info->list, settings,
+                  info->path);
+            info->flags |= MD_FLAG_NEED_REFRESH | MD_FLAG_NEED_PUSH;
+            break;
          case DISPLAYLIST_SAVING_SETTINGS_LIST:
          case DISPLAYLIST_CLOUD_SYNC_SETTINGS_LIST:
          case DISPLAYLIST_DRIVER_SETTINGS_LIST:

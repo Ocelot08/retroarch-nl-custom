@@ -509,6 +509,8 @@ static enum msg_hash_enums action_ok_dl_to_enum(unsigned lbl)
          return MENU_ENUM_LABEL_DEFERRED_SIMPLE_BOX_ART_LIST;
       case ACTION_OK_DL_SIMPLE_KEEP_LIST:
          return MENU_ENUM_LABEL_DEFERRED_SIMPLE_KEEP_LIST;
+      case ACTION_OK_DL_SIMPLE_SETUP_LIST:
+         return MENU_ENUM_LABEL_DEFERRED_SIMPLE_SETUP_LIST;
       case ACTION_OK_DL_USER_INTERFACE_SETTINGS_LIST:
          return MENU_ENUM_LABEL_DEFERRED_USER_INTERFACE_SETTINGS_LIST;
       case ACTION_OK_DL_AI_SERVICE_SETTINGS_LIST:
@@ -2005,6 +2007,7 @@ int generic_action_ok_displaylist_push(
       case ACTION_OK_DL_SIMPLE_DOWNLOADS_LIST:
       case ACTION_OK_DL_SIMPLE_BOX_ART_LIST:
       case ACTION_OK_DL_SIMPLE_KEEP_LIST:
+      case ACTION_OK_DL_SIMPLE_SETUP_LIST:
       case ACTION_OK_DL_USER_INTERFACE_SETTINGS_LIST:
       case ACTION_OK_DL_AI_SERVICE_SETTINGS_LIST:
 #ifdef HAVE_SMBCLIENT
@@ -9419,6 +9422,248 @@ static int action_ok_simple_keep(const char *path,
 }
 #endif
 
+/* Quick Setup in the Simple layout: one page per step, the step in the
+ * list's path. A first pass; its words are placeholders. */
+#define SIMPLE_SETUP_WELCOME "1"
+#define SIMPLE_SETUP_FOLDER  "2"
+#define SIMPLE_SETUP_CORES   "3"
+#define SIMPLE_SETUP_DONE    "4"
+
+/* One core per system, by the system's database name. A placeholder
+ * list, to be chosen */
+static const char *const simple_setup_cores[][2] = {
+   { "Nintendo - Game Boy",                            "gambatte" },
+   { "Nintendo - Game Boy Color",                      "gambatte" },
+   { "Nintendo - Game Boy Advance",                    "mgba" },
+   { "Nintendo - Nintendo Entertainment System",       "fceumm" },
+   { "Nintendo - Super Nintendo Entertainment System", "snes9x" },
+   { "Nintendo - Nintendo 64",                         "mupen64plus_next" },
+   { "Nintendo - Nintendo DS",                         "melonds" },
+   { "Sega - Master System - Mark III",                "genesis_plus_gx" },
+   { "Sega - Mega Drive - Genesis",                    "genesis_plus_gx" },
+   { "Sega - Game Gear",                               "genesis_plus_gx" },
+   { "Sony - PlayStation",                             "pcsx_rearmed" },
+   { "NEC - PC Engine - TurboGrafx 16",                "mednafen_pce_fast" },
+   { "Atari - 2600",                                   "stella" }
+};
+
+/* 0: no scan, 1: scanning, 2: scanned */
+static unsigned simple_setup_scan;
+static bool simple_setup_asked;
+
+bool menu_cbs_simple_setup_core(unsigned i, const char **db,
+      const char **core)
+{
+   if (i >= ARRAY_SIZE(simple_setup_cores))
+      return false;
+   *db   = simple_setup_cores[i][0];
+   *core = simple_setup_cores[i][1];
+   return true;
+}
+
+unsigned menu_cbs_simple_setup_scan(void)
+{
+   return simple_setup_scan;
+}
+
+static void simple_setup_push(const char *step)
+{
+   generic_action_ok_displaylist_push(step, NULL,
+         MENU_ENUM_LABEL_DEFERRED_SIMPLE_SETUP_LIST_STR,
+         MENU_SETTING_ACTION, 0, 0, ACTION_OK_DL_SIMPLE_SETUP_LIST);
+}
+
+/* The core list, for the Cores page to name what is installed */
+static void simple_setup_list_cores(void)
+{
+#ifdef HAVE_NETWORKING
+   core_updater_list_t *core_list = core_updater_list_get_cached();
+   if (!core_list)
+   {
+      core_updater_list_init_cached();
+      core_list = core_updater_list_get_cached();
+   }
+   if (core_list && core_updater_list_size(core_list) == 0)
+   {
+      menu_state_get_ptr()->flags |= MENU_ST_FLAG_ENTRIES_NONBLOCKING_REFRESH;
+      generic_action_ok_command(CMD_EVENT_NETWORK_INIT);
+      task_push_get_core_updater_list(core_list, true, true);
+   }
+#endif
+}
+
+#ifdef HAVE_LIBRETRODB
+static void simple_setup_scanned(retro_task_t *task,
+      void *task_data, void *user_data, const char *err)
+{
+   struct menu_state *menu_st = menu_state_get_ptr();
+   simple_setup_scan          = 2;
+   /* As after any scan: the new lists in the menu's tabs */
+   if (menu_st->driver_ctx->environ_cb)
+      menu_st->driver_ctx->environ_cb(MENU_ENVIRON_RESET_HORIZONTAL_LIST,
+            NULL, menu_st->userdata);
+   menu_st->flags            |= MENU_ST_FLAG_ENTRIES_NEED_REFRESH;
+}
+#endif
+
+#if defined(ANDROID) && defined(HAVE_SAF)
+/* Scans @dir, and goes on to the Cores page */
+static void simple_setup_scan_folder(const char *dir)
+{
+#ifdef HAVE_LIBRETRODB
+   if (task_push_dbscan_known(dir, true, simple_setup_scanned, NULL))
+      simple_setup_scan = 1;
+#endif
+   simple_setup_list_cores();
+   simple_setup_push(SIMPLE_SETUP_CORES);
+}
+#endif
+
+void menu_cbs_simple_setup_open(void)
+{
+   simple_setup_push(SIMPLE_SETUP_WELCOME);
+}
+
+/* The folder chosen in Android's picker, on the main thread */
+void menu_cbs_simple_setup_poll(void)
+{
+#if defined(ANDROID) && defined(HAVE_SAF)
+   char dir[PATH_MAX_LENGTH];
+   if (android_saf_setup_take(dir, sizeof(dir)))
+      simple_setup_scan_folder(dir);
+#endif
+}
+
+/* Done or skipped: not opened by itself again */
+static void simple_setup_finish(void)
+{
+   settings_t *settings = config_get_ptr();
+   configuration_set_bool(settings,
+         settings->bools.menu_simple_setup_done, true);
+#ifdef HAVE_CONFIGFILE
+   if (     settings->bools.config_save_on_exit
+         && !(runloop_get_flags() & RUNLOOP_FLAG_CORE_RUNNING))
+      command_event(CMD_EVENT_MENU_SAVE_CURRENT_CONFIG, NULL);
+#endif
+   menu_entries_flush_stack(MENU_ENUM_LABEL_MAIN_MENU_STR, 0);
+}
+
+#ifdef HAVE_NETWORKING
+/* The core list's file for @core, or NULL */
+const char *menu_cbs_simple_setup_file(const char *core, bool *have)
+{
+   size_t i;
+   size_t len                     = strlen(core);
+   core_updater_list_t *core_list = core_updater_list_get_cached();
+
+   if (!core_list)
+      return NULL;
+   for (i = 0; i < core_updater_list_size(core_list); i++)
+   {
+      const core_updater_list_entry_t *entry = NULL;
+      if (     core_updater_list_get_index(core_list, i, &entry)
+            && entry->remote_filename
+            && !strncmp(entry->remote_filename, core, len)
+            && string_starts_with(entry->remote_filename + len,
+               "_libretro"))
+      {
+         *have = path_is_valid(entry->local_core_path);
+         return entry->remote_filename;
+      }
+   }
+   return NULL;
+}
+
+/* Downloads, once each, the cores for the systems found */
+void menu_cbs_simple_setup_download(void)
+{
+   unsigned i, j;
+   char lpl[PATH_MAX_LENGTH];
+   settings_t *settings = config_get_ptr();
+
+   simple_setup_asked   = true;
+   generic_action_ok_command(CMD_EVENT_NETWORK_INIT);
+   for (i = 0; i < ARRAY_SIZE(simple_setup_cores); i++)
+   {
+      bool have        = false;
+      bool again       = false;
+      const char *file = NULL;
+      fill_pathname_join_special(lpl,
+            settings->paths.directory_playlist, simple_setup_cores[i][0],
+            sizeof(lpl));
+      strlcat(lpl, ".lpl", sizeof(lpl));
+      if (!path_is_valid(lpl))
+         continue;
+      for (j = 0; j < i; j++)
+         if (string_is_equal(simple_setup_cores[j][1],
+                  simple_setup_cores[i][1]))
+            again = true;
+      file = menu_cbs_simple_setup_file(simple_setup_cores[i][1], &have);
+      if (file && !have && !again)
+         action_ok_core_updater_download(file, NULL, 0, 0, 0);
+   }
+}
+#endif
+
+static int action_ok_simple_setup(const char *path,
+      const char *label, unsigned type, size_t idx, size_t entry_idx)
+{
+   const char *step = NULL;
+   menu_entries_get_last_stack(&step, NULL, NULL, NULL, NULL);
+
+   if (string_is_equal(label, MENU_ENUM_LABEL_SIMPLE_SETUP_STR))
+      menu_cbs_simple_setup_open();
+   else if (string_is_equal(label, MENU_ENUM_LABEL_SIMPLE_SETUP_SKIP_STR))
+      simple_setup_finish();
+   else if (string_is_equal(label, MENU_ENUM_LABEL_SIMPLE_SETUP_START_STR))
+      simple_setup_push(SIMPLE_SETUP_FOLDER);
+   else if (string_is_equal(label, MENU_ENUM_LABEL_SIMPLE_SETUP_FOLDER_STR))
+   {
+#if defined(ANDROID) && defined(HAVE_SAF)
+      android_saf_setup_ask();
+#else
+      /* RetroArch's own folder browser, with Scan This Directory */
+      filebrowser_clear_type();
+      return generic_action_ok_displaylist_push(path, NULL,
+            MENU_ENUM_LABEL_SCAN_DIRECTORY_STR, type, idx, entry_idx,
+            ACTION_OK_DL_PUSH_DEFAULT);
+#endif
+   }
+   else if (string_is_equal(label, MENU_ENUM_LABEL_SIMPLE_SETUP_NEXT_STR))
+   {
+      if (string_is_equal(step, SIMPLE_SETUP_FOLDER))
+      {
+         simple_setup_list_cores();
+         simple_setup_push(SIMPLE_SETUP_CORES);
+      }
+      else
+         simple_setup_push(SIMPLE_SETUP_DONE);
+   }
+#ifdef HAVE_NETWORKING
+   else if (string_is_equal(label, MENU_ENUM_LABEL_SIMPLE_SETUP_CORES_STR))
+   {
+      /* Asked once, before the first download */
+      if (simple_setup_asked)
+         menu_cbs_simple_setup_download();
+      else
+      {
+         struct menu_state *menu_st = menu_state_get_ptr();
+         menu_dialog_confirm_set(menu_st, MSG_SIMPLE_SETUP_DOWNLOAD,
+               CMD_EVENT_MENU_SIMPLE_SETUP_CORES);
+         action_ok_dialog_init(menu_st);
+      }
+   }
+#endif
+   else if (string_is_equal(label, MENU_ENUM_LABEL_SIMPLE_SETUP_GAMES_STR))
+   {
+      simple_setup_finish();
+      return generic_action_ok_displaylist_push("", NULL,
+            MENU_ENUM_LABEL_SIMPLE_GAMES_STR, MENU_SETTING_ACTION,
+            0, 0, ACTION_OK_DL_SIMPLE_GAMES_LIST);
+   }
+   return 0;
+}
+
 static int action_ok_simple_home(const char *path,
       const char *label, unsigned type, size_t idx, size_t entry_idx)
 {
@@ -11001,6 +11246,13 @@ static int menu_cbs_init_bind_ok_compare_label(menu_file_list_cbs_t *cbs,
          {MENU_ENUM_LABEL_SIMPLE_GAME_OPTIONS, action_ok_simple_alias},
          {MENU_ENUM_LABEL_SIMPLE_HOME, action_ok_simple_home},
          {MENU_ENUM_LABEL_SIMPLE_CLASSIC, action_ok_simple_classic},
+         {MENU_ENUM_LABEL_SIMPLE_SETUP, action_ok_simple_setup},
+         {MENU_ENUM_LABEL_SIMPLE_SETUP_START, action_ok_simple_setup},
+         {MENU_ENUM_LABEL_SIMPLE_SETUP_SKIP, action_ok_simple_setup},
+         {MENU_ENUM_LABEL_SIMPLE_SETUP_FOLDER, action_ok_simple_setup},
+         {MENU_ENUM_LABEL_SIMPLE_SETUP_NEXT, action_ok_simple_setup},
+         {MENU_ENUM_LABEL_SIMPLE_SETUP_CORES, action_ok_simple_setup},
+         {MENU_ENUM_LABEL_SIMPLE_SETUP_GAMES, action_ok_simple_setup},
 #ifdef HAVE_CONFIGFILE
          {MENU_ENUM_LABEL_SIMPLE_KEEP_GAME, action_ok_simple_keep},
          {MENU_ENUM_LABEL_SIMPLE_KEEP_CORE, action_ok_simple_keep},

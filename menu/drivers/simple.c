@@ -262,6 +262,7 @@ typedef struct simple_handle
    unsigned cycle_at[SIMPLE_CYCLE_ROWS];
    float cycle_alpha[SIMPLE_CYCLE_ROWS];
    bool cycle_still;        /* Android's "Remove animations" */
+   bool setup_seen;         /* Quick Setup looked at for this layout */
    char cycle_name[SIMPLE_CYCLE_ROWS][SIMPLE_CYCLE_NAMES][64];
    char core_note[64];
    char art_path[PATH_MAX_LENGTH];
@@ -1923,7 +1924,8 @@ static void simple_set_page(simple_handle_t *sm, bool simple_layout)
       MENU_ENUM_LABEL_DEFERRED_SIMPLE_GAME_SCREEN_LIST,
       MENU_ENUM_LABEL_DEFERRED_SIMPLE_DOWNLOADS_LIST,
       MENU_ENUM_LABEL_DEFERRED_SIMPLE_BOX_ART_LIST,
-      MENU_ENUM_LABEL_DEFERRED_SIMPLE_KEEP_LIST
+      MENU_ENUM_LABEL_DEFERRED_SIMPLE_KEEP_LIST,
+      MENU_ENUM_LABEL_DEFERRED_SIMPLE_SETUP_LIST
    };
 
    menu_entries_get_last_stack(&path, &label, NULL, NULL, NULL);
@@ -2250,6 +2252,20 @@ static void simple_render(void *data, unsigned dims, bool is_idle)
 
    if (!sm)
       return;
+
+   /* Quick Setup opens by itself once, when the layout is Simple at Home
+    * with no game, until it has been done or skipped */
+   menu_cbs_simple_setup_poll();
+   if (settings->uints.menu_layout != MENU_LAYOUT_SIMPLE)
+      sm->setup_seen = false;
+   else if (!sm->setup_seen && menu_list)
+   {
+      sm->setup_seen = true;
+      if (     !settings->bools.menu_simple_setup_done
+            && !(runloop_get_flags() & RUNLOOP_FLAG_CORE_RUNNING)
+            && MENU_LIST_GET_STACK_SIZE(menu_list, 0) == 1)
+         menu_cbs_simple_setup_open();
+   }
 
    if (dims != sm->dims || gamepad != sm->gamepad)
    {

@@ -33174,6 +33174,10 @@ MSG_HASH(
    "This game's file can't be found."
    )
 MSG_HASH(
+   MSG_SIMPLE_SETUP_DOWNLOAD,
+   "Download the cores listed? Placeholder: this uses the internet and some storage."
+   )
+MSG_HASH(
    MSG_SIMPLE_GAME_CORE,
    "This game's core isn't installed."
    )
@@ -33768,6 +33772,82 @@ MSG_HASH(
 MSG_HASH(
    MENU_ENUM_LABEL_VALUE_SIMPLE_KEEP_FAILED,
    "The changes could not be saved."
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_VALUE_SIMPLE_SETUP,
+   "Getting Started"
+   )
+MSG_HASH(
+   MENU_ENUM_SUBLABEL_SIMPLE_SETUP,
+   "Quick Setup: choose your games folder and get the cores to play them."
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_VALUE_SIMPLE_SETUP_TITLE,
+   "Quick Setup"
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_VALUE_SIMPLE_SETUP_START,
+   "Start"
+   )
+MSG_HASH(
+   MENU_ENUM_SUBLABEL_SIMPLE_SETUP_START,
+   "Placeholder: choose a games folder, then get a core for each system found."
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_VALUE_SIMPLE_SETUP_SKIP,
+   "Skip Setup"
+   )
+MSG_HASH(
+   MENU_ENUM_SUBLABEL_SIMPLE_SETUP_SKIP,
+   "It can be run again from Help > Getting Started."
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_VALUE_SIMPLE_SETUP_FOLDER,
+   "Choose Games Folder"
+   )
+MSG_HASH(
+   MENU_ENUM_SUBLABEL_SIMPLE_SETUP_FOLDER,
+   "Placeholder: the folder your games are in. It is scanned for games."
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_VALUE_SIMPLE_SETUP_NEXT,
+   "Next"
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_VALUE_SIMPLE_SETUP_CORES,
+   "Download Cores"
+   )
+MSG_HASH(
+   MENU_ENUM_SUBLABEL_SIMPLE_SETUP_CORES,
+   "Placeholder: one core for each system listed."
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_VALUE_SIMPLE_SETUP_WAIT,
+   "Looking for games..."
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_VALUE_SIMPLE_SETUP_NONE,
+   "No games found yet."
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_VALUE_SIMPLE_SETUP_LISTING,
+   "Finding cores..."
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_VALUE_SIMPLE_SETUP_HAVE,
+   "Installed"
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_VALUE_SIMPLE_SETUP_GET,
+   "To download"
+   )
+MSG_HASH(
+   MENU_ENUM_LABEL_VALUE_SIMPLE_SETUP_GAMES,
+   "Open Games"
+   )
+MSG_HASH(
+   MENU_ENUM_SUBLABEL_SIMPLE_SETUP_GAMES,
+   "Placeholder: setup is done."
    )
 MSG_HASH(
    MENU_ENUM_LABEL_VALUE_SIMPLE_HOME_OWN,

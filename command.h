@@ -192,6 +192,8 @@ enum event_command
    CMD_EVENT_MENU_FIRST_RUN_DOWNLOAD,
    /* Asks for a folder of games, where the system has to allow it. */
    CMD_EVENT_MENU_CHOOSE_FOLDER,
+   /* Downloads the cores Quick Setup lists. */
+   CMD_EVENT_MENU_SIMPLE_SETUP_CORES,
    CMD_EVENT_MENU_SAVE_AS_CONFIG,
    CMD_EVENT_MENU_SAVE_MAIN_CONFIG,
    CMD_EVENT_MENU_SAVE_CURRENT_CONFIG,

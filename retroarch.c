@@ -5694,6 +5694,11 @@ bool command_event(enum event_command cmd, void *data)
          android_show_saf_tree_picker();
 #endif
          break;
+      case CMD_EVENT_MENU_SIMPLE_SETUP_CORES:
+#if defined(HAVE_MENU) && defined(HAVE_NETWORKING)
+         menu_cbs_simple_setup_download();
+#endif
+         break;
       case CMD_EVENT_MENU_SAVE_CURRENT_CONFIG:
          /* Same as at quit: the companion's live layout first. */
          ui_companion_event_command(CMD_EVENT_MENU_SAVE_CURRENT_CONFIG);

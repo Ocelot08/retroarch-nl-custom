@@ -2145,6 +2145,25 @@ bool android_get_vfs_authorized_locations(
    return true;
 }
 
+/* 0: not asked, 1: asked, 2: chosen. Written on the Java UI thread */
+static retro_atomic_int_t android_saf_setup_state;
+static char android_saf_setup_folder[PATH_MAX_LENGTH];
+
+void android_saf_setup_ask(void)
+{
+   retro_atomic_store_release_int(&android_saf_setup_state, 1);
+   android_show_saf_tree_picker();
+}
+
+bool android_saf_setup_take(char *s, size_t len)
+{
+   if (retro_atomic_load_acquire_int(&android_saf_setup_state) != 2)
+      return false;
+   strlcpy(s, android_saf_setup_folder, len);
+   retro_atomic_store_release_int(&android_saf_setup_state, 0);
+   return true;
+}
+
 void android_show_saf_tree_picker(void)
 {
    JNIEnv *env;
@@ -2210,7 +2229,15 @@ JNIEXPORT void JNICALL Java_com_retroarch_browser_retroactivity_RetroActivityCom
       return;
    }
 
-   if ((serialized_path = retro_vfs_path_join_saf(tree, "")) != NULL)
+   if ((serialized_path = retro_vfs_path_join_saf(tree, "")) != NULL
+         && retro_atomic_load_acquire_int(&android_saf_setup_state) == 1)
+   {
+      strlcpy(android_saf_setup_folder, serialized_path,
+            sizeof(android_saf_setup_folder));
+      retro_atomic_store_release_int(&android_saf_setup_state, 2);
+      free(serialized_path);
+   }
+   else if (serialized_path)
    {
       generic_action_ok_displaylist_push(
             msg_hash_to_str(MENU_ENUM_LABEL_VALUE_FILE_BROWSER_OPEN_PICKER),
