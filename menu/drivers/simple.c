@@ -68,6 +68,9 @@ void android_app_update_viewport_inset(void);
 
 #define SIMPLE_CRUMB_PARTS    12
 #define SIMPLE_CRUMB_PART     48
+/* Widest a breadcrumb level may be, as a share of the line, once the
+ * whole path is too wide */
+#define SIMPLE_CRUMB_SHARE    0.45f
 #define SIMPLE_DESIGN_WIDTH   360.0f
 #define SIMPLE_GUTTER         22.0f
 #define SIMPLE_HEADS          8
@@ -2229,11 +2232,41 @@ static void simple_crumb(simple_handle_t *sm, char *s, size_t len,
    s[0] = '\0';
    if (!n)
       return;
+   simple_crumb_join(sm, s, len, n, 1, gap);
+   if (simple_note_width(sm, s) <= max_w)
+      return;
+   /* Long names, such as a game's, are shortened first */
+   for (keep_from = 1; keep_from < n; keep_from++)
+   {
+      char part[SIMPLE_CRUMB_PART];
+      strlcpy(part, sm->crumb[keep_from], sizeof(part));
+      simple_fit_note(sm, part, max_w * SIMPLE_CRUMB_SHARE,
+            sm->crumb[keep_from], SIMPLE_CRUMB_PART);
+   }
    for (keep_from = 1; keep_from < n; keep_from++)
    {
       simple_crumb_join(sm, s, len, n, keep_from, gap);
       if (simple_note_width(sm, s) <= max_w)
          return;
+   }
+   /* Home and the current level, shortened to fit */
+   if (n > 1)
+   {
+      char head[SIMPLE_CRUMB_PART + 16];
+      float room;
+      strlcpy(head, "\xE2\x86\x90 ", sizeof(head));
+      strlcat(head, sm->crumb[0], sizeof(head));
+      strlcat(head, (n > 2 || gap) ? " / \xE2\x80\xA6 / " : " / ",
+            sizeof(head));
+      room = max_w - simple_note_width(sm, head);
+      if (room >= max_w * SIMPLE_CRUMB_SHARE * 0.5f)
+      {
+         char last[SIMPLE_CRUMB_PART];
+         simple_fit_note(sm, sm->crumb[n - 1], room, last, sizeof(last));
+         strlcpy(s, head, len);
+         strlcat(s, last, len);
+         return;
+      }
    }
    /* Only the current level fits, if that */
    {
