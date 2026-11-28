@@ -472,6 +472,18 @@ static size_t simple_utf8_len(unsigned char c)
    return 4;
 }
 
+/* Hebrew or Arabic in @s. Notes are drawn a letter at a time, for their
+ * spacing; these are drawn whole, so the font driver orders and joins
+ * them. */
+static bool simple_is_rtl(const char *s)
+{
+   const unsigned char *p;
+   for (p = (const unsigned char*)s; *p; p++)
+      if ((*p & 0xFE) == 0xD6 || (*p & 0xFC) == 0xD8)
+         return true;
+   return false;
+}
+
 static float simple_note_width(simple_handle_t *sm, const char *s)
 {
    const char *p;
@@ -481,6 +493,8 @@ static float simple_note_width(simple_handle_t *sm, const char *s)
       * SIMPLE_TRACKING;
    if (!f->font || !s || !*s)
       return 0.0f;
+   if (simple_is_rtl(s))
+      return font_driver_get_message_width(f->font, s, strlen(s), 1.0f);
    for (p = s; *p; )
    {
       size_t n = simple_utf8_len((unsigned char)*p);
@@ -578,6 +592,11 @@ static void simple_note(simple_handle_t *sm, const char *s,
 
    if (!f->font || !s || !*s)
       return;
+   if (simple_is_rtl(s))
+   {
+      simple_text(sm, SIMPLE_FONT_NOTE, s, x, y_centre, dims, color, align);
+      return;
+   }
 
    for (p = s; *p; )
    {
