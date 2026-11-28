@@ -9,6 +9,7 @@ Working files for the phone-first menu redesign.
 | `ia-v1.md` | Proposed structure, v1: Claude Code's first pass |
 | `ia-v2.md` | Proposed structure, v2: the merged direction, the chosen designs and the decisions since v1 |
 | `next.md` | Notes and features that may come next, not yet built |
+| `quick-setup-plan.md` | How Quick Setup would be built, in what order, and what is to decide |
 
 Each proposed structure is a separate `ia-vN.md`, so versions can be
 compared and tried one at a time.
