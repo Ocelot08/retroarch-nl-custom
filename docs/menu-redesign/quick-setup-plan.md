@@ -1,6 +1,6 @@
 # Quick Setup: plan
 
-A plan only; nothing here is built yet. The steps are those in `ia-v2.md`
+A first pass is built (below); the rest is a plan. The steps are those in `ia-v2.md`
 (Quick Setup); this says how each would be built, in what order, and what
 is still to decide.
 
@@ -46,19 +46,44 @@ Each phase can be tried on the phone without starting a game.
    list is decided.
 5. **Classic:** the Main Menu entry and step 9.
 
-## To decide
+## Decided (28 Nov 2026)
 
-1. **Starting by itself:** should Quick Setup open on its own the first
-   time Simple is chosen, or only from Help and the Main Menu?
-2. **Recommended emulators:** a short list kept in this project (one
-   emulator per system), or worked out from the core info files? The brief
-   leaves this open.
-3. **Downloads:** steps 5 and 6 download several megabytes. Ask once before
-   the first download, or say so on the page and let Skip be the way out?
-4. **Existing users:** if someone has already changed a setting that
-   Simple's defaults would write, keep theirs or apply Simple's?
-5. **The games folder on Android:** Android's own folder picker gives a
-   `saf://` folder, which this fork reads through
-   `vfs_implementation_saf.c`. Whether the scanner works from one has not
-   been tried. Use Android's picker if it does, else RetroArch's file
-   browser?
+1. **Starting by itself:** once, the first time Simple is at Home with no
+   game, with Skip on every page; also from Help › Getting Started and,
+   later, the Main Menu.
+2. **Recommended emulators:** a short list kept in this project, one core
+   per system.
+3. **Downloads:** asked once, before the first.
+4. **Existing users:** settings they have changed are kept; Simple's
+   defaults do not overwrite them.
+5. **The games folder on Android:** Android's picker. The scanner reads a
+   `saf://` folder: on the phone it listed all 66 files of a folder of 32
+   zips, opening each zip.
+
+## First pass (built)
+
+Only what gets someone playing; the words are placeholders, for Nick to
+write. Pages, each with Skip Setup: Welcome (Start), Your Games (Choose
+Games Folder, Next), Cores (the systems found, each with its core,
+Installed or To download; Download Cores; Next), Done (Open Games).
+
+- The step is the list's path; the code is `action_ok_simple_setup` and
+  the `menu_cbs_simple_setup_*` functions in `menu_cbs_ok.c`, and
+  `menu_displaylist_simple_setup` in `menu_displaylist.c`.
+- `menu_simple_setup_done` is set by Skip and Open Games.
+- Android's picker gives its folder to Quick Setup through
+  `android_saf_setup_ask` and `android_saf_setup_take` in
+  `platform_unix.c`, in place of opening it in the file browser. Elsewhere
+  Choose Games Folder opens Scan Directory.
+- A system is found when its database playlist (`<system>.lpl`) exists.
+- The list of cores, `simple_setup_cores`, is a placeholder.
+
+Tested on the phone: it opens by itself and not after Skip or Done; Back
+through each step; the picker, the scan and the Cores page; Open Games;
+Help › Getting Started. Not tested: Download Cores (not tapped); the Cores
+page with games found, since the test app has no databases, so nothing
+matched.
+
+Still to decide: the list of cores; whether it should open for people
+already using Simple, as it does now; the breadcrumb, which repeats
+"Quick Setup" for each step.

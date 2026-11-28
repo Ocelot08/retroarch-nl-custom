@@ -24,7 +24,8 @@ grey (`simple_art_draw`, `simple_band_fade`). Still to do:
 | Feature | Notes |
 |---|---|
 | The rest of "Keeping changes" in `ia-v2.md` | The question on Game Options, the banner, Ask Before Keeping Changes. Shaders and which controller a player uses are not asked about |
-| Box art beyond Home, the rest of the animation, Quick Setup | See `plan.md` |
+| Box art beyond Home, the rest of the animation | See `plan.md` |
+| The rest of Quick Setup, and its words | See `quick-setup-plan.md` |
 
 ## Small fixes
 
