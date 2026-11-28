@@ -139,12 +139,14 @@ Game menu's Controls and Screen are short lists of the common settings under pla
 names, most ending in a More or All row for the rest (below). RetroArch's
 own lists, and the More rows, are drawn in smaller type. On the Settings
 page a category's note names in turn the settings on its page, a moment
-later from row to row, and holds still after a touch. Games has Game
+later from row to row, fading out and in (at once with Android's "Remove
+animations"), and holds still after a touch. Games has Game
 Lists, RetroArch's playlists, ending in Edit Game Lists. Downloads has
 headings over its groups, and its More row opens in place:
 the rest of the Online Updater, without what is already above. The
-breadcrumb shows the whole path,
-the middle levels as an ellipsis when it is too long. Help has Switch to
+breadcrumb shows the whole path; when it is too long, long names such as a
+game's are shortened, then the middle levels become an ellipsis, and Home
+stays. Help has Switch to
 Classic Menu; in the Classic layout the Main Menu lists Settings, so the
 way back is Settings › User Interface › Menu Layout.
 

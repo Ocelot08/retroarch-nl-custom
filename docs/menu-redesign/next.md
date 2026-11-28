@@ -16,12 +16,8 @@ grey (`simple_art_draw`, `simple_band_fade`). Still to do:
   `README.md`) is not tried: on 25 Nov 2026 the thumbnail server listed no
   systems at all.
 
-- **Settings page notes, animated:** each note names in turn the settings on
-  its page (`simple_cycle`). When it starts, how long a name stays and the
-  delay from row to row are `SIMPLE_CYCLE_START`, `_HOLD` and `_WAVE`. Still
-  to do: animate the change itself, so that it moves down the page as a
-  wave, and follow Android's "Remove animations". The same could go on
-  Home, whose Settings note is to rotate in `ia-v2.md`.
+- **Settings page notes:** the same fading names could go on Home, whose
+  Settings note is to rotate in `ia-v2.md`.
 
 ## Features to build
 
@@ -34,8 +30,9 @@ grey (`simple_art_draw`, `simple_band_fade`). Still to do:
 
 - The dot under letters such as ệ is faint: Work Sans Light draws it half the
   size of a full stop.
-- Indic scripts show as boxes: no fallback font has them. Hebrew and Arabic
-  notes (not words) are probably drawn backwards.
+- Indic scripts show as boxes: no fallback font has them.
+- A note with Hebrew or Arabic is drawn whole, so its Latin part, as in the
+  Language row, loses the notes' letter spacing.
 
 ## To decide
 
@@ -60,5 +57,6 @@ grey (`simple_art_draw`, `simple_band_fade`). Still to do:
   and goes at the next touch: arrow keys sent over USB do not reach the menu.
 - RetroArch's own keyboard in Simple, with the system's turned off.
 - The reworded Close, Restart and gamepad prompts.
+- The Settings page notes with Android's "Remove animations" on.
 - The update rows under More Downloads, and the two short messages for a
   missing game file or core.
