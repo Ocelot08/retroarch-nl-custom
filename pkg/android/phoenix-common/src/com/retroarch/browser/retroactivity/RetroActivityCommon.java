@@ -2208,6 +2208,14 @@ public class RetroActivityCommon extends NativeActivity
     }
   }
 
+  /** True with "Remove animations" on in Android's accessibility settings */
+  public boolean areAnimationsRemoved() {
+    if (Build.VERSION.SDK_INT < 17)
+      return false;
+    return android.provider.Settings.Global.getFloat(getContentResolver(),
+        android.provider.Settings.Global.ANIMATOR_DURATION_SCALE, 1.0f) == 0.0f;
+  }
+
   public boolean isScreenReaderEnabled() {
     AccessibilityManager accessibilityManager = (AccessibilityManager) getSystemService(ACCESSIBILITY_SERVICE);
     boolean isAccessibilityEnabled = accessibilityManager.isEnabled();

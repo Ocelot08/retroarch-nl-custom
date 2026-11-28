@@ -55,6 +55,7 @@
 /* As in menu_setting.c: platform_unix.h brings in JNI */
 unsigned android_app_get_cutout_top(void);
 void android_app_update_viewport_inset(void);
+bool android_animations_removed(void);
 #endif
 
 /* Test builds log pages, taps and actions to logcat for scripted runs */
@@ -81,6 +82,7 @@ void android_app_update_viewport_inset(void);
 #define SIMPLE_CYCLE_START    2000.0f
 #define SIMPLE_CYCLE_HOLD     4000.0f
 #define SIMPLE_CYCLE_WAVE     100.0f
+#define SIMPLE_CYCLE_FADE     250.0f   /* out, then the next name in */
 #define SIMPLE_CYCLE_ROWS     8
 #define SIMPLE_CYCLE_NAMES    8
 /* Edge bounce, as Material UI's: drag resistance past an end, the
@@ -220,6 +222,8 @@ typedef struct simple_handle
    float cycle_wait;        /* until they do again */
    unsigned cycle_count[SIMPLE_CYCLE_ROWS];
    unsigned cycle_at[SIMPLE_CYCLE_ROWS];
+   float cycle_alpha[SIMPLE_CYCLE_ROWS];
+   bool cycle_still;        /* Android's "Remove animations" */
    char cycle_name[SIMPLE_CYCLE_ROWS][SIMPLE_CYCLE_NAMES][64];
    char core_note[64];
    char art_path[PATH_MAX_LENGTH];
@@ -1974,13 +1978,32 @@ static void simple_check_open(simple_handle_t *sm, menu_list_t *menu_list,
       sm->open_idx = (size_t)-1;
 }
 
-/* Which of @count names row @row shows, @ms after names began to change */
-static unsigned simple_cycle_item(double ms, unsigned row, unsigned count)
+/* Which of @count names row @row shows, @ms after names began to change,
+ * and how faded it is. Without @fade a name changes at once. */
+static unsigned simple_cycle_item(double ms, unsigned row, unsigned count,
+      bool fade, float *alpha)
 {
-   ms -= row * SIMPLE_CYCLE_WAVE;
+   double k, p;
+   *alpha = 1.0f;
+   ms    -= row * SIMPLE_CYCLE_WAVE;
    if (count < 2 || ms <= 0.0)
       return 0;
-   return (unsigned)((ms / SIMPLE_CYCLE_HOLD) + 1.0) % count;
+   if (!fade)
+      return (unsigned)((ms / SIMPLE_CYCLE_HOLD) + 1.0) % count;
+   /* Fades out until the first change, at SIMPLE_CYCLE_FADE */
+   ms -= SIMPLE_CYCLE_FADE;
+   if (ms <= 0.0)
+   {
+      *alpha = (float)(-ms / SIMPLE_CYCLE_FADE);
+      return 0;
+   }
+   k = floor(ms / SIMPLE_CYCLE_HOLD);
+   p = ms - k * SIMPLE_CYCLE_HOLD;
+   if (p < SIMPLE_CYCLE_FADE)
+      *alpha = (float)(p / SIMPLE_CYCLE_FADE);
+   else if (p > SIMPLE_CYCLE_HOLD - SIMPLE_CYCLE_FADE)
+      *alpha = (float)((SIMPLE_CYCLE_HOLD - p) / SIMPLE_CYCLE_FADE);
+   return (unsigned)(k + 1.0) % count;
 }
 
 /* On the Settings page: a touch or a button holds the names still */
@@ -1995,6 +2018,9 @@ static void simple_cycle(simple_handle_t *sm, bool opened)
    {
       sm->cycle_ms   = 0.0;
       sm->cycle_wait = SIMPLE_CYCLE_START;
+#ifdef ANDROID
+      sm->cycle_still = android_animations_removed();
+#endif
       /* Looking settings up is slow: once, as the page opens */
       for (i = 0; i < SIMPLE_CYCLE_ROWS; i++)
       {
@@ -2019,8 +2045,13 @@ static void simple_cycle(simple_handle_t *sm, bool opened)
    else
       sm->cycle_ms   += frame_ms;
    for (i = 0; i < SIMPLE_CYCLE_ROWS; i++)
+   {
       sm->cycle_at[i] = simple_cycle_item(sm->cycle_ms, i,
-            sm->cycle_count[i]);
+            sm->cycle_count[i], !sm->cycle_still, &sm->cycle_alpha[i]);
+      /* Held still, a name is drawn in full */
+      if (sm->cycle_wait > 0.0f)
+         sm->cycle_alpha[i] = 1.0f;
+   }
 }
 
 static void simple_render(void *data, unsigned dims, bool is_idle)
@@ -2377,18 +2408,21 @@ static void simple_home_note(const simple_handle_t *sm, const char *label,
       strlcpy(s, "PAUSED", len);
 }
 
-/* A Settings category's note: the name its turn has come to */
+/* A Settings category's note: the name its turn has come to, and how
+ * faded it is */
 static void simple_settings_note(const simple_handle_t *sm,
-      const char *label, char *s, size_t len)
+      const char *label, char *s, size_t len, float *alpha)
 {
    size_t i;
-   s[0] = '\0';
+   s[0]   = '\0';
+   *alpha = 1.0f;
    if (!sm->settings_page)
       return;
    for (i = 0; i < SIMPLE_CYCLE_ROWS; i++)
       if (string_is_equal(label, msg_hash_to_str(simple_cycled[i])))
       {
          simple_upper(s, sm->cycle_name[i][sm->cycle_at[i]], len);
+         *alpha = sm->cycle_alpha[i];
          return;
       }
 }
@@ -2513,6 +2547,7 @@ static void simple_draw_rows(simple_handle_t *sm, gfx_display_t *p_disp,
    {
       const char *word;
       const char *head;
+      float note_alpha = 1.0f;
       float top, h, centre, above;
       menu_entry_t *entry = &sm->entry;
       bool selected       = (i == selection);
@@ -2585,7 +2620,7 @@ static void simple_draw_rows(simple_handle_t *sm, gfx_display_t *p_disp,
          simple_upper(note, entry->value, sizeof(note));
       else
          simple_settings_note(sm, list->list[i].label, note,
-               sizeof(note));
+               sizeof(note), &note_alpha);
 
       {
          char fitted[NAME_MAX_LENGTH];
@@ -2685,8 +2720,8 @@ static void simple_draw_rows(simple_handle_t *sm, gfx_display_t *p_disp,
             }
          }
       }
-      simple_note(sm, note, w - x, centre, dims, SIMPLE_COL_DIM,
-            TEXT_ALIGN_RIGHT);
+      simple_note(sm, note, w - x, centre, dims, (SIMPLE_COL_DIM & ~0xFFu)
+            | (uint32_t)(note_alpha * 255.0f + 0.5f), TEXT_ALIGN_RIGHT);
    }
    sm->log_rows = false;
 }

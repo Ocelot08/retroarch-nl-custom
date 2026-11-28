@@ -349,6 +349,7 @@ struct android_app
 
    jmethodID isScreenReaderEnabled;
    jmethodID accessibilitySpeak;
+   jmethodID areAnimationsRemoved;
 
    jmethodID showKeyboard;
    jmethodID hideKeyboard;
@@ -592,6 +593,9 @@ void frontend_android_get_version_sdk(int32_t *sdk);
 bool android_core_path_resolve(const char *path, char *s, size_t len);
 
 bool is_screen_reader_enabled(void);
+
+/* Android's "Remove animations" is on */
+bool android_animations_removed(void);
 
 /* Pushes the live values of the window-affecting settings to the
  * activity, so the Java side never reads them from the config file. */

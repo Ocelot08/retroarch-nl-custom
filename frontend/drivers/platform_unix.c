@@ -4084,6 +4084,8 @@ static void frontend_unix_init(void *data)
          "isScreenReaderEnabled", "()Z");
    GET_METHOD_ID(env, android_app->accessibilitySpeak, class,
          "accessibilitySpeak", "(Ljava/lang/String;)V");
+   GET_METHOD_ID(env, android_app->areAnimationsRemoved, class,
+         "areAnimationsRemoved", "()Z");
    GET_METHOD_ID(env, android_app->showKeyboard, class,
          "showKeyboard", "(Ljava/lang/String;Ljava/lang/String;)V");
    GET_METHOD_ID(env, android_app->hideKeyboard, class,
@@ -5086,6 +5088,18 @@ bool is_screen_reader_enabled(void)
    if (env != NULL)
       CALL_BOOLEAN_METHOD(env, jbool,
             g_android->activity->clazz, g_android->isScreenReaderEnabled);
+
+   return jbool == JNI_TRUE;
+}
+
+bool android_animations_removed(void)
+{
+   JNIEnv *env    = jni_thread_getenv();
+   jboolean jbool = JNI_FALSE;
+
+   if (env && g_android && g_android->areAnimationsRemoved)
+      CALL_BOOLEAN_METHOD(env, jbool,
+            g_android->activity->clazz, g_android->areAnimationsRemoved);
 
    return jbool == JNI_TRUE;
 }
