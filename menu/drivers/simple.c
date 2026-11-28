@@ -27,6 +27,7 @@
 #include <file/file_path.h>
 #include <lists/dir_list.h>
 #include <string/stdstring.h>
+#include <features/features_cpu.h>
 
 #ifdef HAVE_CONFIG_H
 #include "../../config.h"
@@ -93,6 +94,11 @@ bool android_animations_removed(void);
 #define SIMPLE_SPRING_DAMP    14.0f
 /* Small caps letter-spacing, as a share of the size */
 #define SIMPLE_TRACKING       0.08f
+/* Going into a page: how long the move takes, and how far the page left
+ * behind goes as a share of the width, fading as it does */
+#define SIMPLE_SLIDE_MS       300.0f
+#define SIMPLE_SLIDE_BEHIND   0.3f
+#define SIMPLE_CRUMB_LEN      (SIMPLE_CRUMB_PARTS * (SIMPLE_CRUMB_PART + 3) + 8)
 
 #define SIMPLE_COL_BG         0x15171CFF
 #define SIMPLE_COL_BELOW      0x0E1014FF
@@ -161,9 +167,41 @@ static const uint32_t simple_band[][2] = {
    { 0x862E9CFF, 0xD6336CFF }
 };
 
+/* What a frame drew of its page, so that it can be drawn again, moved
+ * and faded, as the next page comes in */
+enum simple_op_kind
+{
+   SIMPLE_OP_QUAD = 0,
+   SIMPLE_OP_GRAD,
+   SIMPLE_OP_TEXT,
+   SIMPLE_OP_ART
+};
+
+typedef struct
+{
+   float x, y, w, h;
+   uint32_t c[4];
+   size_t str;
+   uint8_t kind;
+   uint8_t font;
+   uint8_t align;
+} simple_op_t;
+
+typedef struct
+{
+   simple_op_t *ops;
+   char *str;
+   size_t n, cap;
+   size_t str_n, str_cap;
+} simple_rec_t;
+
 typedef struct simple_handle
 {
    menu_input_pointer_t pointer;    /* int64_t alignment */
+   retro_time_t slide_start;
+   retro_time_t last_frame;
+   simple_rec_t recs[2];
+   simple_rec_t *rec;               /* being written, or NULL */
    gfx_thumbnail_t art;             /* the last game's, on Home */
    font_data_impl_t fonts[SIMPLE_FONT_LAST];
    menu_entry_t entry;
@@ -263,7 +301,78 @@ typedef struct simple_handle
    bool log_rows;
    char log_title[NAME_MAX_LENGTH];
    char crumb[SIMPLE_CRUMB_PARTS][SIMPLE_CRUMB_PART];
+   /* The page move, drawn on the drawing thread */
+   size_t slide_depth;      /* of the last frame */
+   unsigned rec_last;       /* the last frame's record */
+   unsigned rec_out;        /* the page moving away */
+   int slide_dir;           /* 1 in, -1 back */
+   float slide_t;           /* 0 to 1 */
+   bool slide_on;
+   bool rec_have;
+   char crumb_now[SIMPLE_CRUMB_LEN];
+   char crumb_old[SIMPLE_CRUMB_LEN];
 } simple_handle_t;
+
+/* Adds to @r, as far as memory allows */
+static void simple_rec_add(simple_rec_t *r, enum simple_op_kind kind,
+      float x, float y, float w, float h, const uint32_t *c, unsigned n_c,
+      unsigned font, unsigned align, const char *s)
+{
+   simple_op_t *op;
+   unsigned i;
+   if (r->n == r->cap)
+   {
+      size_t cap      = r->cap ? r->cap * 2 : 256;
+      simple_op_t *p  = (simple_op_t*)realloc(r->ops, cap * sizeof(*p));
+      if (!p)
+         return;
+      r->ops = p;
+      r->cap = cap;
+   }
+   op        = &r->ops[r->n];
+   op->kind  = (uint8_t)kind;
+   op->x     = x;
+   op->y     = y;
+   op->w     = w;
+   op->h     = h;
+   op->font  = (uint8_t)font;
+   op->align = (uint8_t)align;
+   op->str   = 0;
+   for (i = 0; i < 4; i++)
+      op->c[i] = c ? c[i < n_c ? i : 0] : 0xFFFFFFFF;
+   if (s)
+   {
+      size_t len = strlen(s) + 1;
+      if (r->str_n + len > r->str_cap)
+      {
+         size_t cap = r->str_cap ? r->str_cap : 4096;
+         char *p;
+         while (cap < r->str_n + len)
+            cap *= 2;
+         if (!(p = (char*)realloc(r->str, cap)))
+            return;
+         r->str     = p;
+         r->str_cap = cap;
+      }
+      memcpy(r->str + r->str_n, s, len);
+      op->str   = r->str_n;
+      r->str_n += len;
+   }
+   r->n++;
+}
+
+static void simple_rec_free(simple_rec_t *r)
+{
+   free(r->ops);
+   free(r->str);
+   memset(r, 0, sizeof(*r));
+}
+
+/* @c with its alpha times @a */
+static uint32_t simple_fade(uint32_t c, float a)
+{
+   return (c & ~0xFFu) | (uint32_t)((float)(c & 0xFF) * a + 0.5f);
+}
 
 static void simple_color(float *c, int vert, uint32_t rgba)
 {
@@ -460,9 +569,13 @@ static void simple_text(simple_handle_t *sm, enum simple_font fi,
    font_data_impl_t *f = &sm->fonts[fi];
    if (!f->font || !s || !*s)
       return;
+   if (sm->rec)
+      simple_rec_add(sm->rec, SIMPLE_OP_TEXT, x, y_centre, 0.0f, 0.0f,
+            &color, 1, fi, align, s);
+   /* Drawn when it begins off the screen too, as a moving page's can */
    gfx_display_draw_text(f->font, s, x + sm->left,
          y_centre + (float)f->line_centre_offset, dims,
-         color, align, 1.0f, false, 0.0f, false);
+         color, align, 1.0f, false, 0.0f, true);
 }
 
 static size_t simple_utf8_len(unsigned char c)
@@ -634,6 +747,9 @@ static void simple_quad(const simple_handle_t *sm, gfx_display_t *p_disp,
 {
    float c[16];
    int i;
+   if (sm->rec)
+      simple_rec_add(sm->rec, SIMPLE_OP_QUAD, x, y, w, h, &rgba, 1, 0, 0,
+            NULL);
    for (i = 0; i < 4; i++)
       simple_color(c, i, rgba);
    gfx_display_draw_quad(p_disp, userdata, dims,
@@ -661,6 +777,16 @@ static void simple_grad_rect(const simple_handle_t *sm,
       uint32_t top_l, uint32_t top_r, uint32_t bot_l, uint32_t bot_r)
 {
    float c[16];
+   if (sm->rec)
+   {
+      uint32_t cs[4];
+      cs[0] = top_l;
+      cs[1] = top_r;
+      cs[2] = bot_l;
+      cs[3] = bot_r;
+      simple_rec_add(sm->rec, SIMPLE_OP_GRAD, x, y, w, h, cs, 4, 0, 0,
+            NULL);
+   }
    simple_color(c, 0, bot_l);
    simple_color(c, 1, bot_r);
    simple_color(c, 2, top_l);
@@ -728,6 +854,9 @@ static void simple_art_draw(simple_handle_t *sm, gfx_display_t *p_disp,
          || retro_atomic_load_acquire_int(&sm->art.status)
             != GFX_THUMBNAIL_STATUS_AVAILABLE)
       return;
+   if (sm->rec)
+      simple_rec_add(sm->rec, SIMPLE_OP_ART, x, 0.0f, 0.0f, h, NULL, 0, 0,
+            0, NULL);
    if (dispctx->get_default_tex_coords)
       def = dispctx->get_default_tex_coords();
    if (!def)
@@ -765,6 +894,49 @@ static void simple_art_draw(simple_handle_t *sm, gfx_display_t *p_disp,
       gfx_display_rotate_z(p_disp, &mymat, 1.0f, 0.0f, userdata);
    gfx_display_draw(dispctx, &draw, userdata, dims);
    gfx_display_blend_end(dispctx, userdata);
+}
+
+/* Draws @r again @dx to the right, its alpha times @a */
+static void simple_replay(simple_handle_t *sm, gfx_display_t *p_disp,
+      void *userdata, unsigned dims, const simple_rec_t *r, float dx,
+      float a)
+{
+   size_t i;
+   float left = sm->left;
+   sm->left  += dx;
+   sm->rec    = NULL;
+   for (i = 0; i < r->n; i++)
+   {
+      const simple_op_t *op = &r->ops[i];
+      switch (op->kind)
+      {
+         case SIMPLE_OP_QUAD:
+            simple_quad(sm, p_disp, userdata, dims, op->x, op->y, op->w,
+                  op->h, simple_fade(op->c[0], a));
+            break;
+         case SIMPLE_OP_GRAD:
+            simple_grad_rect(sm, p_disp, userdata, dims, op->x, op->y,
+                  op->w, op->h, simple_fade(op->c[0], a),
+                  simple_fade(op->c[1], a), simple_fade(op->c[2], a),
+                  simple_fade(op->c[3], a));
+            break;
+         case SIMPLE_OP_TEXT:
+            if (r->str)
+               simple_text(sm, (enum simple_font)op->font, r->str + op->str,
+                     op->x, op->y, dims, simple_fade(op->c[0], a),
+                     (enum text_alignment)op->align);
+            break;
+         case SIMPLE_OP_ART:
+            {
+               float art_a    = sm->art.alpha;
+               sm->art.alpha *= a;
+               simple_art_draw(sm, p_disp, userdata, dims, op->x, op->h);
+               sm->art.alpha  = art_a;
+            }
+            break;
+      }
+   }
+   sm->left = left;
 }
 
 /* The page's grey over whatever is behind, clear at the top and solid
@@ -1449,10 +1621,16 @@ static void simple_free(void *data)
    gfx_thumbnail_reset(&sm->art);
    for (i = 0; i < SIMPLE_FONT_LAST; i++)
       video_coord_array_free(&sm->fonts[i].raster_block.carr);
+   simple_rec_free(&sm->recs[0]);
+   simple_rec_free(&sm->recs[1]);
 }
 
 static void simple_toggle(void *data, bool menu_on)
 {
+   simple_handle_t *sm = (simple_handle_t*)data;
+   /* The menu opens without a move */
+   if (sm)
+      sm->rec_have = false;
 #ifdef HAVE_CONFIGFILE
    if (!menu_on && config_home_active())
    {
@@ -2327,30 +2505,91 @@ static void simple_crumb(simple_handle_t *sm, char *s, size_t len,
    }
 }
 
+/* Bytes of the levels @a and @b begin with alike, each ending at a " / " */
+static size_t simple_crumb_common(const char *a, const char *b)
+{
+   size_t i    = 0;
+   size_t same = 0;
+   for (;;)
+   {
+      const char *ea = strstr(a + i, " / ");
+      const char *eb = strstr(b + i, " / ");
+      size_t la      = ea ? (size_t)(ea - a) : strlen(a);
+      size_t lb      = eb ? (size_t)(eb - b) : strlen(b);
+      if (la != lb || memcmp(a + i, b + i, la - i))
+         return same;
+      same = la;
+      if (!ea || !eb)
+         return same;
+      i = la + 3;
+   }
+}
+
+/* While a page moves: the levels both breadcrumbs have stay, the ones
+ * going fade out and the new ones come in after them. HOME moves over
+ * as the arrow comes. */
+static void simple_draw_crumb_moving(simple_handle_t *sm, unsigned dims,
+      const char *was, const char *now, float x, float y, uint32_t color)
+{
+   static const char arrow[] = "\xE2\x86\x90 ";
+   char part[SIMPLE_CRUMB_LEN];
+   float s     = sm->scale;
+   float track = sm->m->font[SIMPLE_FONT_NOTE] * s * SIMPLE_TRACKING;
+   float t     = sm->slide_t;
+   float e     = 1.0f - (1.0f - t) * (1.0f - t) * (1.0f - t);
+   float f     = (t - 0.25f) / 0.75f;
+   float d     = (float)sm->slide_dir;
+   bool ao     = !strncmp(was, arrow, 4);
+   bool an     = !strncmp(now, arrow, 4);
+   float shift = simple_note_width(sm, arrow) + track;
+   float xr    = x + (ao ? shift : 0.0f) * (1.0f - e)
+      + (an ? shift : 0.0f) * e;
+   size_t same;
+   float pw;
+
+   f = f < 0.0f ? 0.0f : f;
+   f = 1.0f - (1.0f - f) * (1.0f - f) * (1.0f - f);
+   if (ao || an)
+      simple_note(sm, arrow, x, y, dims, simple_fade(color,
+            (ao && an) ? 1.0f : (an ? e : 1.0f - e)), TEXT_ALIGN_LEFT);
+   was += ao ? 4 : 0;
+   now += an ? 4 : 0;
+   same = simple_crumb_common(was, now);
+   strlcpy(part, now, MIN(same + 1, sizeof(part)));
+   simple_note(sm, part, xr, y, dims, color, TEXT_ALIGN_LEFT);
+   pw   = same ? simple_note_width(sm, part) + track : 0.0f;
+   if (was[same])
+      simple_note(sm, was + same, xr + pw + 8.0f * s * d * -e, y, dims,
+            simple_fade(color, e > 0.5f ? 0.0f : 1.0f - 2.0f * e),
+            TEXT_ALIGN_LEFT);
+   if (now[same])
+      simple_note(sm, now + same, xr + pw + 12.0f * s * d * (1.0f - f),
+            y, dims, simple_fade(color, f), TEXT_ALIGN_LEFT);
+}
+
 static void simple_draw_header(simple_handle_t *sm, unsigned dims)
 {
-   char crumb[SIMPLE_CRUMB_PARTS * (SIMPLE_CRUMB_PART + 3) + 8];
-   float s   = sm->scale;
-   float w   = sm->box_w;
-   float x   = SIMPLE_GUTTER * s;
-   float y   = sm->m->header_y * s;
+   char crumb[SIMPLE_CRUMB_LEN];
+   float s        = sm->scale;
+   float w        = sm->box_w;
+   float x        = SIMPLE_GUTTER * s;
+   float y        = sm->m->header_y * s;
+   bool art       = sm->is_home && sm->has_continue;
+   uint32_t color = art ? SIMPLE_COL_FG : SIMPLE_COL_MUTED;
 
    if (sm->is_home)
-   {
-      bool art = sm->has_continue;
-      simple_note(sm, "HOME", x, y, dims,
-            art ? SIMPLE_COL_FG : SIMPLE_COL_MUTED, TEXT_ALIGN_LEFT);
-      simple_note(sm, "RETROARCH", w - x, y, dims,
-            art ? SIMPLE_COL_FG : SIMPLE_COL_DIM, TEXT_ALIGN_RIGHT);
-      return;
-   }
-
-   /* Room left of RETROARCH, with a gap */
-   simple_crumb(sm, crumb, sizeof(crumb),
-         w - 2.0f * x - simple_note_width(sm, "RETROARCH") - 16.0f * s);
-   simple_note(sm, crumb, x, y, dims, SIMPLE_COL_MUTED, TEXT_ALIGN_LEFT);
-   simple_note(sm, "RETROARCH", w - x, y, dims, SIMPLE_COL_DIM,
-         TEXT_ALIGN_RIGHT);
+      strlcpy(crumb, "HOME", sizeof(crumb));
+   else
+      /* Room left of RETROARCH, with a gap */
+      simple_crumb(sm, crumb, sizeof(crumb),
+            w - 2.0f * x - simple_note_width(sm, "RETROARCH") - 16.0f * s);
+   if (sm->slide_on)
+      simple_draw_crumb_moving(sm, dims, sm->crumb_old, crumb, x, y, color);
+   else
+      simple_note(sm, crumb, x, y, dims, color, TEXT_ALIGN_LEFT);
+   strlcpy(sm->crumb_now, crumb, sizeof(sm->crumb_now));
+   simple_note(sm, "RETROARCH", w - x, y, dims,
+         art ? SIMPLE_COL_FG : SIMPLE_COL_DIM, TEXT_ALIGN_RIGHT);
 }
 
 static void simple_draw_desc(simple_handle_t *sm, unsigned dims)
@@ -2870,6 +3109,8 @@ static void simple_frame(void *data, video_frame_info_t *video_info)
    float w;
    float h                        = (float)VIDEO_SCALE_H(dims);
    float box_b;
+   float slide_in                 = 0.0f;
+   unsigned rec_cur;
 
    if (!sm || !sm->fonts[SIMPLE_FONT_WORD].font)
       return;
@@ -2898,6 +3139,57 @@ static void simple_frame(void *data, video_frame_info_t *video_info)
             (float)VIDEO_SCALE_W(dims) - sm->left - w, h, SIMPLE_COL_BELOW);
    }
 
+   /* A deeper or shallower page: the last frame's moves away, faded,
+    * and this one comes in over it */
+   {
+      menu_list_t *ml  = menu_st->entries.list;
+      file_list_t *stk = ml ? MENU_LIST_GET(ml, 0) : NULL;
+      size_t depth     = stk ? stk->size : 0;
+      retro_time_t now = cpu_features_get_time_usec();
+      if (     sm->rec_have && sm->slide_depth && depth
+            && depth != sm->slide_depth && !sm->cycle_still
+            && now - sm->last_frame < 250000)
+      {
+         sm->slide_on    = true;
+         sm->slide_dir   = depth > sm->slide_depth ? 1 : -1;
+         sm->slide_start = now;
+         sm->rec_out     = sm->rec_last;
+         strlcpy(sm->crumb_old, sm->crumb_now, sizeof(sm->crumb_old));
+      }
+      sm->slide_depth = depth;
+      sm->last_frame  = now;
+      if (sm->slide_on)
+      {
+         sm->slide_t = (float)(now - sm->slide_start)
+            / (SIMPLE_SLIDE_MS * 1000.0f);
+         if (sm->slide_t >= 1.0f)
+            sm->slide_on = false;
+      }
+   }
+   rec_cur = 1 - (sm->slide_on ? sm->rec_out : sm->rec_last);
+   sm->recs[rec_cur].n     = 0;
+   sm->recs[rec_cur].str_n = 0;
+   if (sm->slide_on)
+   {
+      float t     = sm->slide_t;
+      float e     = 1.0f - (1.0f - t) * (1.0f - t) * (1.0f - t);
+      float d     = (float)sm->slide_dir;
+      slide_in    = d * w * (1.0f - e);
+      simple_replay(sm, p_disp, userdata, dims, &sm->recs[sm->rec_out],
+            -d * w * SIMPLE_SLIDE_BEHIND * e, 1.0f - e);
+      for (i = 0; i < SIMPLE_FONT_LAST; i++)
+         font_flush(dims, &sm->fonts[i]);
+      /* The page coming in has its own ground */
+      if (slide_in > 0.0f)
+         simple_quad(sm, p_disp, userdata, dims, slide_in, 0.0f,
+               w - slide_in, box_b, SIMPLE_COL_BG);
+      else
+         simple_quad(sm, p_disp, userdata, dims, 0.0f, 0.0f,
+               w + slide_in, box_b, SIMPLE_COL_BG);
+      sm->left += slide_in;
+   }
+   sm->rec = &sm->recs[rec_cur];
+
    if (sm->has_continue && list && list->size)
    {
       const char *name = list->list[0].path;
@@ -2921,6 +3213,22 @@ static void simple_frame(void *data, video_frame_info_t *video_info)
             menu_st->selection_ptr);
    for (i = 0; i < SIMPLE_FONT_LAST; i++)
       font_flush(dims, &sm->fonts[i]);
+   sm->rec      = NULL;
+   sm->rec_last = rec_cur;
+   sm->rec_have = true;
+   if (sm->slide_on)
+   {
+      sm->left -= slide_in;
+      /* Beside a narrow box, what moved out of it is covered again */
+      if (sm->left > 0.0f)
+      {
+         simple_quad(sm, p_disp, userdata, dims, -sm->left, 0.0f, sm->left,
+               h, SIMPLE_COL_BELOW);
+         simple_quad(sm, p_disp, userdata, dims, w, 0.0f,
+               (float)VIDEO_SCALE_W(dims) - sm->left - w, h,
+               SIMPLE_COL_BELOW);
+      }
+   }
 
    /* Rows scrolled out of view go under the header and the hints */
    if (!sm->is_home)
